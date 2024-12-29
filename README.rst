@@ -18,6 +18,11 @@ cd mydata
 
 reduce_kcwi -lr -l target.txt
 
+Where the target.txt has all files to be reduced. Bias and object files. 
+
+The output will be saved in a new directiry called 'redux'
+
+
 
 
 
