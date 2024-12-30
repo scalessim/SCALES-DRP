@@ -51,6 +51,12 @@ Configuration Parameters
 A number of reduction parameters can be changed using entries in the configuration file.
 
 
+Low and Medium sections of the configuration file
+.................................................
+Now that the Low-Resolution (LR) channel has been installed, there is a need to specify different default parameters for each channel. 
+These are delineated in the config file with [LR] and [MR] section headers. 
+
+
 
 
 
