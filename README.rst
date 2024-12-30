@@ -3,7 +3,8 @@ SCALES-DRP: the SCALES data reduction pipeline
 
 Install
 .......
-git clone git@github.com:Keck-DataReductionPipelines/KCWI_DRP.git
+
+git clone https://github.com/scalessim/SCALES-DRP.git
 
 cd SCALES-DRP
 
