@@ -25,7 +25,15 @@ The assumption is that you have a directory containing SCALES data, and that the
 
 Next, go to the data directory and run the startup script:
 
-Give a quick look at the configuration parameters for the pipeline, contained in the file kcwidrp/config/kcwi.cfg
+Give a quick look at the configuration parameters for the pipeline, contained in the file SCALES-DRP/KCWI_DRP-master/kcwidrp/config/kcwi.cfg
+
+For the time being nothing to change.
+
+
+...........................................................
+
+
+Next, go to the data directory (mydata) and run the startup script:
 
 cd mydata
 
