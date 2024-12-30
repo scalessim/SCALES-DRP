@@ -41,7 +41,14 @@ reduce_kcwi -lr -l target.txt
 
 Where the target.txt has all files to be reduced. Bias and object files. 
 
-The output will be saved in a new directiry called 'redux'
+
+Three directories will be created: a redux directory with the results of the reduction, a logs directory with separate logs for the framework itself and for the DRP, and a plots directory containing diagnostic plots. Currently nothing is added to 'logs' and 'plots'.
+
+
+Configuration Parameters
+.......................
+
+A number of reduction parameters can be changed using entries in the configuration file.
 
 
 
