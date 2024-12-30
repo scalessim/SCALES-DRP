@@ -56,6 +56,29 @@ Low and Medium sections of the configuration file
 Now that the Low-Resolution (LR) channel has been installed, there is a need to specify different default parameters for each channel. 
 These are delineated in the config file with [LR] and [MR] section headers. 
 
+Processing parameters
+
+bias_min_nframes = 7
+flat_min_nframes = 6
+dome_min_nframes = 3
+twiflat_min_nframes = 1
+dark_min_nframes = 3
+arc_min_nframes = 1        # = 3 for [MR]
+contbars_min_nframes = 1   # = 3 for [MR]
+minoscanpix = 75           # = 20 for [MR]
+oscanbuf = 20              # = 5 for [MR]
+
+
+These parameters control the minimum number of bias, internal/dome/twilight flats and darks that the DRP expects before producing a master calibration. 
+This minimum numbers are different for the MR and LR channels.
+
+
+Running the pipeline
+....................
+
+
+
+
 
 
 
