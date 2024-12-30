@@ -4,16 +4,28 @@ SCALES-DRP: the SCALES data reduction pipeline
 Install
 .......
 
+The following will create a conda environment called scalesdrp, and activate it.
+
+    conda create --name scalesdrp python=3.7
+
+    conda activate scalesdrp
+
+
 git clone https://github.com/scalessim/SCALES-DRP.git
 
 cd SCALES-DRP
 
 pip install -e .
 
+
 Quick start
 ...........
 
+The assumption is that you have a directory containing SCALES data, and that the names of the files are those assigned at the telescope, lr*.fits and mr*.fits.
+
 Next, go to the data directory and run the startup script:
+
+Give a quick look at the configuration parameters for the pipeline, contained in the file kcwidrp/config/kcwi.cfg
 
 cd mydata
 
