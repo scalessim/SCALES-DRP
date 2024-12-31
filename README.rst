@@ -76,6 +76,18 @@ This minimum numbers are different for the MR and LR channels.
 Running the pipeline
 ....................
 
+User must specify which channel to process with the -lr for lowres mode or -mr for medres mode.
+
+reduce_kcwi -lr -f lr_file.fits
+
+To reduce a lowres file. Here -lr for lowres and -f for file followed by the filename.
+
+reduce_kcwi -lr -l lr_file.txt
+
+To reduce a list of files together. Here -lr for lowres mode, -l for list followed by the text files with the names of the fits file to reduce. 
+
+
+
 
 
 
