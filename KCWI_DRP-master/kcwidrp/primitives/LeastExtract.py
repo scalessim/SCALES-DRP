@@ -118,16 +118,18 @@ class LeastExtract(BasePrimitive):
         y = np.linspace(ly, uy,data.shape[0])
         X, Y = np.meshgrid(x, y)
 
+#        result = minimize(
+#            total_residual,
+#            initial_amplitudes,
+#            args=(X, Y, data, x_centroids, y_centroids, sigma_x, sigma_y),
+#            method='L-BFGS-B',
+#            bounds=[(0, None)] * n_gaussians  # Amplitudes should be non-negative)
 
+#        fitted_amplitudes = result.x
 
+#        model_flux = np.sum([gaussian_2d(X, Y, x_centroids[j], y_centroids[j], sigma_x[j], sigma_y[j], fitted_amplitudes[j]) for j in range(n_gaussians)],axis=0)
 
-
-
-
-
-
-
-
+#        residual_flux = data - model_flux
 
 
 
