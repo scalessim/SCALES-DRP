@@ -61,12 +61,9 @@ Processing parameters
 bias_min_nframes = 7
 flat_min_nframes = 6
 dome_min_nframes = 3
-twiflat_min_nframes = 1
 dark_min_nframes = 3
-arc_min_nframes = 1        # = 3 for [MR]
-contbars_min_nframes = 1   # = 3 for [MR]
-minoscanpix = 75           # = 20 for [MR]
-oscanbuf = 20              # = 5 for [MR]
+arc_min_nframes = 3        
+
 
 
 These parameters control the minimum number of bias, internal/dome/twilight flats and darks that the DRP expects before producing a master calibration. 
