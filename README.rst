@@ -13,7 +13,7 @@ The following will create a conda environment called scalesdrp, and activate it.
 
 git clone https://github.com/scalessim/SCALES-DRP.git
 
-cd SCALES-DRP
+cd SCALES-DRP/KCWI_DRP-master
 
 pip install -e .
 
