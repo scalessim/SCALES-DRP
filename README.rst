@@ -35,7 +35,7 @@ For the time being nothing to change.
 
 Next, go to the data directory (mydata) and run the startup script:
 
-cd mydata
+cd data_scales_drp
 
 reduce_kcwi -lr -l target.txt
 
