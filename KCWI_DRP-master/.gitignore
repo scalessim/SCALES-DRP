@@ -1,9 +1,0 @@
-.idea
-*.log
-*.egg-info
-*.pyc
-*__pycache__*
-/build
-*.egg
-/dist
-*.DS_STORE
