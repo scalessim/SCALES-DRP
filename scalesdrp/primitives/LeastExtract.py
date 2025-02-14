@@ -92,7 +92,7 @@ class LeastExtract(BasePrimitive):
                 data_y1[k] = 1.0
 
             amp1 = data_crop[int(np.round(data_y1[k]))-1:int(np.round(data_y1[k]))+1,int(np.round(data_x1[k]))-1:int(np.round(data_x1[k]))+1]
-            print(amp1)
+            #print(amp1)
 #            amp.append(np.max(amp1))
            
 

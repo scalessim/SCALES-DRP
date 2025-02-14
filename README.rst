@@ -17,7 +17,7 @@ git clone https://github.com/scalessim/SCALES-DRP.git
 =======
 cd SCALES-DRP
 
-pip install -e .
+pip install .
 
 
 Quick start
@@ -27,7 +27,7 @@ The assumption is that you have a directory containing SCALES data, and that the
 
 Next, go to the data directory and run the startup script:
 
-Give a quick look at the configuration parameters for the pipeline, contained in the file SCALES-DRP/SCALES_DRP-master/scalesdrp/config/kcwi.cfg
+Give a quick look at the configuration parameters for the pipeline, contained in the file SCALES-DRP/scalesdrp/config/kcwi.cfg
 
 For the time being nothing to change.
 
