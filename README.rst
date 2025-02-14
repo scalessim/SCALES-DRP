@@ -6,7 +6,7 @@ Install
 
 The following will create a conda environment called scalesdrp, and activate it.
 
-    conda create --name scalesdrp python=3.7
+    conda create --name scalesdrp python=3.12
 
     conda activate scalesdrp
 
