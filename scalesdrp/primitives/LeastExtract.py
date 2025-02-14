@@ -52,7 +52,7 @@ class LeastExtract(BasePrimitive):
 
 
 
-        calib_path = pkg_resources.resource_filename('kcwidrp','calib/')
+        calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
         
         x_new = pd.read_pickle(calib_path+'psf_x.pickle')
         y_new = pd.read_pickle(calib_path+'psf_y.pickle')

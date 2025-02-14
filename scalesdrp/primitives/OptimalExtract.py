@@ -38,7 +38,7 @@ class OptimalExtract(BasePrimitive):
                 os.path.join(self.config.instrument.cwd, 'redux',
                              mdname))[0]
         
-        calib_path = pkg_resources.resource_filename('kcwidrp','calib/')
+        calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
 
         x_new = pd.read_pickle(calib_path+'psf_x.pickle')
         y_new = pd.read_pickle(calib_path+'psf_y.pickle')

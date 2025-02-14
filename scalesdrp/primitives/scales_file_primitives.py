@@ -818,7 +818,7 @@ class ingest_file(BasePrimitive):
         self.name = self.action.args.name
         out_args = Arguments()
 
-        ccddata, table = kcwi_fits_reader(self.name)
+        ccddata, table = scales_fits_reader(self.name)
 
         # Are we already in proctab?
         out_args.in_proctab = self.context.proctab.in_proctab(frame=ccddata)
@@ -1194,13 +1194,13 @@ def scales_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
     # Determine if the version info is already in the header
     contains_version = False
     for h in ccddata.header["HISTORY"]:
-        if "kcwidrp version" in h:
+        if "scalesdrp version" in h:
             contains_version = True
 
     if not contains_version:
         # Add setup.py version number to header
-        version = pkg_resources.get_distribution('kcwidrp').version
-        ccddata.header.add_history(f"kcwidrp version={version}")
+        version = pkg_resources.get_distribution('scalesdrp').version
+        ccddata.header.add_history(f"scalesdrp version={version}")
 
         # Get string filepath to .git dir, relative to this primitive
         primitive_loc = os.path.dirname(os.path.abspath(__file__))

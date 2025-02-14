@@ -193,14 +193,14 @@ def main():
 
     # add kcwi specific config files # make changes here to allow this file
     # to be loaded from the command line
-    if args.scales_config_file is None:
+    if args.SCALES_config_file is None:
         scales_config_file = 'configs/scales.cfg'
         scales_config_fullpath = pkg_resources.resource_filename(
             pkg, scales_config_file)
         scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
     else:
         # scales_config_fullpath = os.path.abspath(args.scales_config_file)
-        scales_config = ConfigClass(args.scales_config_file, default_section='SCALES')
+        scales_config = ConfigClass(args.SCALES_config_file, default_section='SCALES')
 
     # END HANDLING OF CONFIGURATION FILES ##########
 
