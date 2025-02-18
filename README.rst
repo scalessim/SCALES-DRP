@@ -27,7 +27,7 @@ The assumption is that you have a directory containing SCALES data, and that the
 
 Next, go to the data directory and run the startup script:
 
-Give a quick look at the configuration parameters for the pipeline, contained in the file SCALES-DRP/scalesdrp/config/kcwi.cfg
+Give a quick look at the configuration parameters for the pipeline, contained in the file SCALES-DRP/scalesdrp/config/scales.cfg
 
 For the time being nothing to change.
 
