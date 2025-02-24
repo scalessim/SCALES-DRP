@@ -2,8 +2,9 @@ from keckdrpframework.models.arguments import Arguments
 from keckdrpframework.primitives.base_img import BaseImg
 from scalesdrp.primitives.scales_file_primitives import scales_fits_reader, \
     scales_fits_writer, parse_imsec, strip_fname
+from scalesdrp.core.scales_plotting import save_plot
 
-
+from bokeh.plotting import figure
 import ccdproc
 import numpy as np
 from scipy.stats import sigmaclip
