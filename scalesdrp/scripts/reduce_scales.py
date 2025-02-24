@@ -9,8 +9,7 @@ from keckdrpframework.config.framework_config import ConfigClass
 from keckdrpframework.models.arguments import Arguments
 from keckdrpframework.utils.drpf_logger import getLogger
 
-from scalesdrp.core.bokeh_plotting import check_running_process
-from scalesdrp.core.scales_get_std import is_file_scales_std
+
 
 import subprocess
 import time

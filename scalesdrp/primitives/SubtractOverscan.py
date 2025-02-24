@@ -1,10 +1,4 @@
 from keckdrpframework.primitives.base_primitive import BasePrimitive
-from scalesdrp.core.bokeh_plotting import bokeh_plot
-from scalesdrp.core.scales_plotting import save_plot
-from scalesdrp.core.bokeh_plotting import bokeh_clear
-
-from bokeh.plotting import figure
-from bokeh.layouts import gridplot
 import numpy as np
 import math
 import time
@@ -97,50 +91,6 @@ class SubtractOverscan(BasePrimitive):
                     (sdrs, "amp%d RN in e- from oscan" % ia)
                 self.action.args.ccddata.header['OSCNVAL%d' % ia] = \
                     (osval, "amp%d oscan counts (DN)" % ia)
-
-                if self.config.instrument.plot_level >= 2:
-                    x = np.arange(len(osvec))
-                    p = figure(title='Img # %05d OSCAN [%d:%d, %d:%d] '
-                                     'amp %d, noise: %.3f e-/px' %
-                                     (frameno, x0, x1, y0, y1, ia, sdrs),
-                               x_axis_label='overscan px',
-                               y_axis_label='counts',
-                               plot_width=self.config.instrument.plot_width,
-                               plot_height=self.config.instrument.plot_height)
-                    p.circle(x, osvec, legend_label="Data")
-                    p.line(x, osfit, line_color='red', line_width=3,
-                           legend_label="Fit")
-                    bokeh_plot(p, self.context.bokeh_session)
-                    plts.append(p)
-                    if self.config.instrument.plot_level >= 3:
-                        input("Next? <cr>: ")
-                    else:
-                        time.sleep(self.config.instrument.plot_pause)
-                # subtract osval
-                xx0 = dsec[iac][2]
-                xx1 = dsec[iac][3] + 1
-                self.action.args.ccddata.data[y0:y1, xx0:xx1] -= osval
-                # for ix in range(dsec[iac][2], dsec[iac][3] + 1):
-                #     self.action.args.ccddata.data[y0:y1, ix] = \
-                #         self.action.args.ccddata.data[y0:y1, ix] - osfit
-                performed = True
-            else:
-                self.logger.info("not enough overscan px to fit amp %d" % ia)
-                performed = False
-        if self.config.instrument.plot_level >= 3 and len(plts) > 0:
-            bokeh_plot(gridplot(plts, ncols=(2 if namps > 2 else 1),
-                                plot_width=500, plot_height=300,
-                                toolbar_location=None),
-                       self.context.bokeh_session)
-            save_plot(gridplot(plts, ncols=(2 if namps > 2 else 1),
-                               plot_width=500, plot_height=300,
-                               toolbar_location=None),
-                      filename="oscan_%05d.png" % frameno)
-            if self.config.instrument.plot_level >= 2:
-                input("Next? <cr>: ")
-            else:
-                time.sleep(self.config.instrument.plot_pause)
-            bokeh_clear(self.context.bokeh_session)
 
         self.action.args.ccddata.header[key] = (performed, keycom)
 

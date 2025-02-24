@@ -90,20 +90,6 @@ def parse_imsec(section=None):
 
     return sec, stride
 
-
-def plotlabel(args):
-    """Return label string for plot titles as (str)."""
-    lab = "[ Img # %d " % args.ccddata.header['FRAMENO']
-    lab += "(%s) " % args.illum
-    lab += "Slicer: %s, " % args.ifuname
-    lab += "Grating: %s, " % args.grating
-    lab += "CWave: %d" % int(args.cwave)
-    if 'BLUE' in args.ccddata.header['CAMERA'].upper():
-        lab += ", Filter: %s " % args.filter
-    lab += "] "
-    return lab
-
-
 class KCCDData(CCDData):
     """
     A container for SCALES images based on the CCDData object that adds
@@ -547,27 +533,6 @@ class ingest_file(BasePrimitive):
         """Return Y part of `BINNING` keyword value as (int)."""
         return int(self.get_keyword('BINNING').split(',')[-1])
 
-    def plotlabel(self):
-        """Return label string for plot titles as (str)."""
-        lab = "[ Img # %d " % self.get_keyword('FRAMENO')
-        lab += "(%s) " % self.illum()
-        lab += "Slicer: %s, " % self.ifuname()
-        lab += "Grating: %s, " % self.grating()
-        lab += "CWave: %d, " % int(self.cwave())
-        lab += "Filter: %s " % self.filter()
-        lab += "] "
-        return lab
-
-    def stdlabel(self):
-        """Return label string for standard star plot titles as (str)."""
-        lab = "[ Img # %d " % self.get_keyword('FRAMENO')
-        lab += "(%s) " % self.get_keyword('TARGNAME')
-        lab += "Slicer: %s, " % self.ifuname()
-        lab += "Grating: %s, " % self.grating()
-        lab += "CWave: %d, " % int(self.cwave())
-        lab += "Filter: %s " % self.filter()
-        lab += "] "
-        return lab
 
     def ifuname(self):
         """Return the value of the `IFUNAM` FITS header keyword."""
@@ -919,9 +884,9 @@ class ingest_file(BasePrimitive):
         # IFUNAM
         out_args.ifuname = self.get_keyword('IFUNAM')
         # PLOTLABEL
-        out_args.plotlabel = self.plotlabel()
+        #out_args.plotlabel = self.plotlabel()
         # STDLABEL
-        out_args.stdlabel = self.stdlabel()
+       # out_args.stdlabel = self.stdlabel()
         # ILUM
         out_args.illum = self.illum()
         # MAPCCD

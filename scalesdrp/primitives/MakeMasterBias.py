@@ -1,10 +1,8 @@
 from keckdrpframework.models.arguments import Arguments
 from keckdrpframework.primitives.base_img import BaseImg
-
 from scalesdrp.primitives.scales_file_primitives import scales_fits_reader, \
     scales_fits_writer, parse_imsec, strip_fname
-from scalesdrp.core.bokeh_plotting import bokeh_plot
-from scalesdrp.core.kcwi_plotting import save_plot
+from scalesdrp.core.scales_plotting import save_plot
 
 from bokeh.plotting import figure
 import ccdproc
@@ -76,7 +74,7 @@ class MakeMasterBias(BaseImg):
             inbias = bias.split('.fits')[0] + '_intb.fits'
             stackf.append(inbias)
             # using [0] drops the table and leaves just the image
-            stack.append(kcwi_fits_reader(
+            stack.append(scales_fits_reader(
                 os.path.join(self.context.config.instrument.cwd, 'redux',
                              inbias))[0])
 
@@ -117,42 +115,6 @@ class MakeMasterBias(BaseImg):
                              (ia, bias_rn))
             stacked.header['BIASRN%d' % ia] = \
                 (float("%.3f" % bias_rn), "RN in e- from bias")
-            if self.config.instrument.plot_level >= 1:
-                # output filename stub
-                biasfnam = "bias_%05d_amp%d_rdnoise" % \
-                          (stacked.header['FRAMENO'], ia)
-                plabel = '[ Img # %d' % stacked.header['FRAMENO']
-                plabel += ' (Bias)'
-                plabel += ' %s' % self.action.args.ccddata.header['BINNING']
-                plabel += ' %s' % self.action.args.ccddata.header['AMPMODE']
-                plabel += ' %d' % self.action.args.ccddata.header['GAINMUL']
-                plabel += ' %s' % ('fast' if
-                                   self.action.args.ccddata.header['CCDMODE']
-                                   else 'slow')
-                plabel += ' ] '
-                hist, edges = np.histogram(noise, range=(low, upp),
-                                           density=False, bins=50)
-                x = np.linspace(low, upp, 500)
-                pdf = np.max(hist)*np.exp(-x**2/(2.*bias_rn**2))
-#                p = figure(title=plabel+'BIAS NOISE amp %d = %.3f' %
-#                           (ia, bias_rn),
-#                           x_axis_label='e-', y_axis_label='N',
-#                           plot_width=self.config.instrument.plot_width,
-#                           plot_height=self.config.instrument.plot_height)
-#                p.quad(top=hist, bottom=0, left=edges[:-1], right=edges[1:],
-#                       fill_color="navy", line_color="white", alpha=0.5)
-#                p.line(x, pdf, line_color="#ff8888", line_width=4, alpha=0.7,
-#                       legend_label="PDF")
-#                p.line([-bias_rn, -bias_rn], [0, np.max(hist)], color='red',
-#                       legend_label="Sigma")
-#                p.line([bias_rn, bias_rn], [0, np.max(hist)], color='red')
-#                p.y_range.start = 0
-#                bokeh_plot(p, self.context.bokeh_session)
-#                if self.config.instrument.plot_level >= 2:
-#                    input("Next? <cr>: ")
-#                else:
-#                    time.sleep(self.config.instrument.plot_pause)
-#                save_plot(p, filename=biasfnam+".png")
 
         log_string = MakeMasterBias.__module__
         stacked.header['HISTORY'] = log_string
