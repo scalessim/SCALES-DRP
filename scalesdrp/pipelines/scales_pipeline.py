@@ -26,8 +26,7 @@ class Scales_pipeline(BasePipeline):
         # to ingest the data without triggering any processing.
         # it is defined lower in this file
         "add_only":                  ("add_to_dataframe_only", None, None),
-        #
-        "start_bokeh":               ("StartBokeh", None, None),
+
         # For every file do this
         "next_file":                 ("ingest_file",
                                       "ingest_file_started",

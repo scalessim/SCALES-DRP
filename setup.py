@@ -30,8 +30,9 @@ scripts = []
 # Define entry points for command-line scripts
 entry_points = {
     'console_scripts': [
-        "reduce_scales = scalesdrp.scripts.reduce_scales:main",
-        "start_scales_quicklook = scalesdrp.scripts.scales_quicklook:main"
+        "start_reduce_scales = scalesdrp.scripts.reduce_scales:main",
+        "start_scales_quicklook = scalesdrp.scripts.scales_quicklook:main",
+        "start_scales_calib = scalesdrp.scripts.scales_calib:main"
     ]}
 
 setup(name=NAME,
@@ -54,7 +55,6 @@ setup(name=NAME,
                         'numpy==1.26.4',
                         'scipy~=1.14.1',
                         'pyerfa',
-                        'bokeh~=2.4.3',
                         'jinja2~=3.0.3',
                         'psutil~=5.7.0',
                         'pytest~=5.4.1',

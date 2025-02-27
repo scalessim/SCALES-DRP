@@ -27,19 +27,8 @@ class CentroidEstimate(BasePrimitive):
     def _perform(self):
 
         self.logger.info("Centroid Estimation")
-        tab = self.context.proctab.search_proctab(
-            frame=self.action.args.ccddata, target_type='OBJECT',
-            nearest=True)
-        self.logger.info("%d object frames found" % len(tab))
 
-#        is_obj = ('OBJECT' in self.action.args.ccddata.header['IMTYPE'])
-	
-        if len(tab) > 0:
-            mdname = get_master_name(tab, target_type)
-            print("*************** READING IMAGE: %s" % mdname)
-            obj = scales_fits_reader(
-                os.path.join(self.config.instrument.cwd, 'redux',
-                             mdname))[0]
+#        is_obj = ('CALIB' in self.action.args.ccddata.header['IMTYPE'])
         
         calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
 
@@ -198,6 +187,6 @@ class CentroidEstimate(BasePrimitive):
             pickle.dump(yerr, file4)
 
         log_string = CentroidEstimate.__module__
-
+        self.logger.info(log_string)
         return self.action.args
     # END: class CentroidEstimate()

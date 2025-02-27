@@ -13,7 +13,7 @@ import pkg_resources
 import subprocess
 from pathlib import Path
 
-logger = logging.getLogger('KCWI')
+logger = logging.getLogger('SCALES')
 
 red_amp_dict = {'L1': 0, 'L2': 1, 'U1': 2, 'U2': 3}
 # gains for slow readout, high gain
