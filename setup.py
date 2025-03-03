@@ -30,7 +30,7 @@ scripts = []
 # Define entry points for command-line scripts
 entry_points = {
     'console_scripts': [
-        "start_reduce_scales = scalesdrp.scripts.reduce_scales:main",
+        "start_scales_reduce = scalesdrp.scripts.reduce_scales:main",
         "start_scales_quicklook = scalesdrp.scripts.scales_quicklook:main",
         "start_scales_calib = scalesdrp.scripts.scales_calib:main"
     ]}

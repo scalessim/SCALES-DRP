@@ -16,7 +16,10 @@ import os
 
 class CentroidEstimate(BasePrimitive):
     """
-	Estimate the psf centroid of the calib images 
+    Estimate the psf centroid of all the calib images images and save
+    in two pickle file one for x and one for y centroid values. Currently 
+    assumes wavelengths will be in filenames. Need to replace that with 
+    header keywords instead. Also the location of the calib filesneed to fix. 
     """
 
     def __init__(self, action, context):
@@ -33,6 +36,11 @@ class CentroidEstimate(BasePrimitive):
         calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
 
         def parse_files(indir,filebase):
+            """
+            Read wavelngth from the filename. Ned to replace and
+            read it from header
+            """
+
             files = os.listdir(indir)
             lams = []
             for ff in files:
@@ -43,14 +51,18 @@ class CentroidEstimate(BasePrimitive):
             return lams_fs
 
         def load_calim(indir,filebase,lam):
+            """
+            Read calib file
+            """
             calim = pyfits.getdata(indir+filebase+str(lam)+'.fits')[0]
             return calim
 
-        def read_fits(indir,file):
-            calim = pyfits.getdata(indir+file)[0]
-            return calim
-
         def get_init_centroid_region(lensx,lensy,xstart,ystart):
+            """
+            Function to get initial cropped image around expected
+            lenslet PSF region.
+            """
+
             spaxsize=19
             subf=8
             x = xstart + spaxsize*lensx
@@ -62,17 +74,32 @@ class CentroidEstimate(BasePrimitive):
             return xs,ys,xe,ye
 
         def crop_cube(cube,xs,ys,xe,ye):
+            """
+            Function to crop a 3D cube in x and y to desired coords.
+            """
             return cube[:,ys:ye,xs:xe]
 
         def crop_image(image,xs,ys,xe,ye):
+            """
+            Function to crop a 2D image in x and y to desired coords.
+            """
             return image[ys:ye,xs:xe]
 
         def pixel_centroid(image):
+            """
+            Function to centroid based on brightest pixel in image.
+            """
             peak = np.where(image==np.max(image))
             x,y = peak[1][0],peak[0][0]
             return x,y
 
         def replace_edge_centroids(xc,yc):
+            """
+            Function to replace centroids that are on edge of frame
+            with nan values. Helps with figuring out whether lenslet
+            PSFs have fallen off (or started off) the detector.
+            """
+
             if 2048-xc < 2:
                 return np.nan,np.nan
             if 2048-yc < 2:
@@ -80,98 +107,141 @@ class CentroidEstimate(BasePrimitive):
             else:
                 return xc,yc
 
-        def get_init_centers_lowres(indir,filebase,lams_fs,calim):
-            xstart = 3
-            ystart = 3
-            xcen=[]
-            ycen=[]
+        def get_init_centers_lowres(indir,filebase,lams_fs):
+            """
+            Function to get the starting point lenslet PSF position
+            for the first wavelength in the set of cal-unit images.
+            This just centroids based on brightest pixels, and then
+            replaces edge PSF centroids with nans.
+            """
+            xstart = 0
+            ystart = 0
             cents = np.zeros([108,108,2])
+            calim = load_calim(indir,filebase,lams_fs[0])
             for lensx in range(108):
                 for lensy in range(108):
-                    xs,ys,xe,ye = get_init_centroid_region(lensx,lensy,xstart,ystart)
+                    xs,ys,xe,ye = get_init_centroid_region(lensx,lensy,xstart=xstart,ystart=ystart)
                     calcrop = crop_image(calim,xs,ys,xe,ye)
                     cx,cy = pixel_centroid(calcrop)
-                    if (lensx==0 and lensy==0):
-                        xstart,ystart=cx+xs,cy+ys
                     cx,cy = replace_edge_centroids(cx,cy)
                     cents[lensy,lensx] = [cy+ys,cx+xs]
-
-                    xcen.append(cents[0])
-                    ycen.append(cents[1])
-
-            return xcen,ycen
+            return cents 
 
 
-        def gaussian2d(xy, A, x0, y0, sigma_x, sigma_y):
-            x, y = xy
-            return A * np.exp(-((x - x0) ** 2 / (2 * sigma_x ** 2) + (y - y0) ** 2 / (2 * sigma_y ** 2)))
+        def gen_linear_trace_lowres(lls,lmin,lmax,tilt=18,length=54,x0=0,y0=0):
+            """
+            Returns rough coordinates of linear trace for given set of
+            wavelengths and with a given starting point
+            """
+            dlam = lmax-lmin
+            xoffs = (lls-lmin)/dlam*length*np.sin(np.radians(tilt))
+            yoffs = (lls-lmin)/dlam*length*np.cos(np.radians(tilt))
+            return xoffs+x0,yoffs+y0
+
+        def ingest_calims_cube(indir,filebase,lams_fs):
+            """
+            Ingests cube of cal unit images according to list of wavelengths.
+            Need to replace this with something that actually follows file naming
+            scheme at Keck!
+            """
+            calims = np.array([fits.getdata(indir+filebase+str(lams_fs[x])+'.fits')[0] for x in range(len(lams_fs))])
+            return calims    
 
 
-        def get_best_centers_lowres(indir,filebase,lams_fs,calim,xstart,ystart):
-            cents = np.zeros([108,108,2])
-            xcen=[]
-            ycen=[]
-            amp=[]
-            xcen_err=[]
-            ycen_err=[]
-            for lensy in range(0,108):
-                for lensx in range(0,108):
-                    xs,ys,xe,ye = get_init_centroid_region(lensx,lensy,xstart,ystart)
-                    xs,ys = replace_edge_centroids(xs,ys)
-                    if not np.isnan(xs) or not np.isnan(ys):
-                        calcrop = crop_image(calim,xs,ys,xe,ye)
-                        cx,cy = pixel_centroid(calcrop)
-                        calcrop = calcrop / np.max(calcrop)
-                        try:
-                            amp = np.max(calcrop)
-                            x0 = cx
-                            y0 = cy
-                            rows, cols = calcrop.shape
-                            y = np.arange(rows)
-                            x = np.arange(cols)
-                            X, Y = np.meshgrid(x, y)
-                            popt, pcov = curve_fit(gaussian2d, (X.ravel(),Y.ravel()),calcrop.ravel(), p0=(amp, cx, cy, 1.0, 1.1),maxfev = 2000,bounds = ([0, 0, 0, 0.1, 0.1], [2, 15, 15, 3, 3]))
-                            A_fit, x0_fit, y0_fit, sigma_x_fit, sigma_y_fit = popt
-                            perr = np.sqrt(np.diag(pcov))
-                            xcen.append(x0_fit+xs)
-                            ycen.append(y0_fit+ys)
-                            xcen_err.append(sigma_x_fit)
-                            ycen_err.append(sigma_y_fit)
-                        except (RuntimeError, ValueError) as e:
-                            xcen.append(cx+xs)
-                            ycen.append(cy+ys)
-                            xcen_err.append(0.95)
-                            ycen_err.append(0.95)
-                    else:
-                        xcen.append(np.nan)
-                        ycen.append(np.nan)
-                        xcen_err.append(np.nan)
-                        ycen_err.append(np.nan)
-            return xcen,ycen,xcen_err,ycen_err
+        def get_trace_centroid_region(xx,yy,imsize=2048,subf=8):
+            """
+            Returns starting and ending coordinates of trace.
+            """
+            xs = np.max([int(np.round(xx-subf)),0])
+            ys = np.max([int(np.round(yy-subf)),0])
+            xe = np.min([int(np.round(xx+subf)),2048])
+            ye = np.min([int(np.round(yy+subf)),2048])
+            return xs,ys,xe,ye
+
+
+        def get_pixcoords(image):
+            """
+            Returns pixel coordinates of cropped image. These will get used
+            to fill specific indices in a sparse matrix array.
+            """
+            xys = np.array([[[y,x] for x in range(len(image[0]))] for y in range(len(image))])
+            return xys
+
+
+        def check_allnans_centroid(image):
+            """
+            check for nans in images to flag bad centroid values.
+            """
+            imsize = len(image)
+            if len(np.where(np.isnan(image)==False)[0])==0:
+                cx,cy = np.nan,np.nan
+            else:
+                peak = np.where(image==np.nanmax(image))
+                cx,cy = peak[1][0],peak[0][0]
+            if (cx == imsize or cy == imsize):
+                cx,cy = np.nan,np.nan
+            return cx,cy
+
+        def get_pixel_trace(lams_fs,calcube,lensx,lensy,lmin,lmax,x0,y0,subf=10):
+            """
+            Function that returns wavelength-dependent centroid values for cube of
+            cal unit images taken at a range of wavelengths, for one lenslet.
+            """
+            cents = []
+            for ll in range(len(lams_fs)):
+                xx,yy = gen_linear_trace_lowres(lams_fs[ll],lmin,lmax,x0=x0,y0=y0)
+                xs,ys,xe,ye = get_trace_centroid_region(xx,yy)
+                calcrop = crop_image(calcube[ll],xs,ys,xe,ye).copy()
+                xys = get_pixcoords(calcrop)
+                if np.prod(xys.shape)!=0:
+                    dists = get_dists(xys,xx,yy,xs,ys)
+                    calcrop[np.where(dists > subf)] = np.nan
+                    cx,cy = check_allnans_centroid(calcrop)
+                    centx,centy = cx+xs,cy+ys
+                else:
+                    centx,centy = np.nan,np.nan
+                cents.append([centx,centy])
+            return np.array(cents)  
+
+
+        def get_dists(xys,xx,yy,xs,ys):
+            """
+            Function to calculate distances between xy coordinates
+            """
+            diffs = np.array(xys - np.array([yy-ys,xx-xs]))
+            dists = np.sqrt(diffs[:,:,0]**2 + diffs[:,:,1]**2)   
+            return dists
+
+        def get_calunit_centroids(indir,filebase,lams_fs,lmin,lmax,init_cents):
+            """
+            Function that returns all 108 x 108 pixel traces measured from cube of
+            cal-unit images.
+            """
+            calims = ingest_calims_cube(indir,filebase,lams_fs)
+            centsarr = np.empty([len(lams_fs),108,108,2])
+            for lensx in range(108):
+                for lensy in range(108):
+                    x0,y0 = init_cents[lensy,lensx]
+                    pixtrace = get_pixel_trace(lams_fs,calims,lensx,lensy,lmin,lmax,x0,y0)
+                    centsarr[:,lensy,lensx] = pixtrace
+            return centsarr
 
 
         filebase = 'calibration_2.0_5.2_'
         lams_fs = parse_files(calib_path,filebase)
+        intial = get_init_centers_lowres(calib_path,filebase,lams_fs)
+        cents = get_calunit_centroids(calib_path,filebase,lams_fs,2.0,5.0,intial)
+
         x=[]
         y=[]
-        xerr=[]
-        yerr=[]
-        xstart=[0,0,0,0,0,1,1,1,1,2,2,2,3,3,3,4,4,4,4,5,5,5,5,6,6,6,7,7,7,8,8,9,9,9,10,10,10,11,11,11,12,13,13,13,14,14,15,15,16,16,17,17,18,18]
-
-        ystart=[0,0,1,2,2,3,4,4,5,6,7,7,8,9,10,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,31,32,33,34,36,37,38,39,41,42,43,45,46,48,49,51,52,54,55]
-
-        for files in range(0,len(lams_fs)):
-            calim = load_calim(calib_path,filebase,lams_fs[files])
-            xcen,ycen,x_sig,y_sig = get_best_centers_lowres(calib_path,filebase,lams_fs,calim,xstart[files],ystart[files])
-            x.append(xcen)
-            y.append(ycen)
-            xerr.append(x_sig)
-            yerr.append(y_sig)
+        for i in range(0,len(lams_fs)):
+            x1 = cents[i,:,:,0]
+            y1 = cents[i,:,:,1]
+            x.append(x1)
+            y.append(y1)
 
         file1_path = os.path.join(calib_path,'lowres_psf_x.pickle')
         file2_path = os.path.join(calib_path,'lowres_psf_y.pickle')
-        file3_path = os.path.join(calib_path,'lowres_psf_xerr.pickle')
-        file4_path = os.path.join(calib_path,'lowres_psf_yerr.pickle')
 
 
         with open(file1_path, 'wb') as file1:
@@ -179,12 +249,6 @@ class CentroidEstimate(BasePrimitive):
 
         with open(file2_path, 'wb') as file2:
             pickle.dump(y, file2)
-
-        with open(file3_path, 'wb') as file3:
-            pickle.dump(xerr, file3)
-
-        with open(file4_path, 'wb') as file4:
-            pickle.dump(yerr, file4)
 
         log_string = CentroidEstimate.__module__
         self.logger.info(log_string)

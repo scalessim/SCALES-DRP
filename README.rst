@@ -17,7 +17,7 @@ git clone https://github.com/scalessim/SCALES-DRP.git
 =======
 cd SCALES-DRP
 
-pip install .
+pip install -e.
 
 
 Quick start
@@ -39,7 +39,9 @@ Next, go to the data directory (mydata) and run the startup script:
 
 cd data_scales_drp
 
-reduce_scales -lr -l target.txt
+start_reduce_scales -lr -l target.txt # science grade pipeline
+start_scales_quicklook -lr -l target.txt  # quicklook pipeline
+start_scales_calib -lr -l target.txt      # For daytime calibration process
 
 Where the target.txt has all files to be reduced. Bias and object files. 
 
