@@ -39,7 +39,7 @@ Next, go to the data directory (mydata) and run the startup script:
 
 cd data_scales_drp
 
-start_reduce_scales -lr -l target.txt # science grade pipeline
+start_scales_reduce -lr -l target.txt # science grade pipeline
 start_scales_quicklook -lr -l target.txt  # quicklook pipeline
 start_scales_calib -lr -l target.txt      # For daytime calibration process
 

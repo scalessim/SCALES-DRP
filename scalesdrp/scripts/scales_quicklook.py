@@ -22,7 +22,7 @@ import pkg_resources
 import psutil
 import shutil
 
-from scalesdrp.pipelines.scales_pipeline import Scales_pipeline
+from scalesdrp.pipelines.scales_quicklook_pipeline import Scales_Quicklook_Pipeline
 from scalesdrp.core.scales_proctab import Proctab
 import logging.config
 
@@ -126,15 +126,15 @@ def main():
     args = _parse_arguments(sys.argv)
 
     if args.write_config:
-        dest = os.path.join(os.getcwd(), 'scales.cfg')
+        dest = os.path.join(os.getcwd(), 'scales_quicklook.cfg')
         if os.path.exists(dest):
             print("Config file scales.cfg already exists in current dir")
         else:
-            scales_config_file = 'configs/scales.cfg'
+            scales_config_file = 'configs/scales_quicklook.cfg'
             scales_config_fullpath = pkg_resources.resource_filename(
                 pkg, scales_config_file)
             shutil.copy(scales_config_fullpath, os.getcwd())
-            print("Copied scales.cfg into current dir.  Edit and use with -c")
+            print("Copied scales_quicklook.cfg into current dir.  Edit and use with -c")
         sys.exit(0)
 
     # This check can be removed once reduce_scales processes are
@@ -142,7 +142,7 @@ def main():
     plist = []
     for p in psutil.process_iter():
         try:
-            if "reduce_scales" in p.name():
+            if "scales_quicklook" in p.name():
                 plist.append(p)
         except psutil.NoSuchProcess:
             continue
@@ -190,10 +190,10 @@ def main():
     framework_logcfg_fullpath = \
         pkg_resources.resource_filename(pkg, framework_logcfg_file)
 
-    # add kcwi specific config files # make changes here to allow this file
+    # add scales specific config files # make changes here to allow this file
     # to be loaded from the command line
     if args.SCALES_config_file is None:
-        scales_config_file = 'configs/scales.cfg'
+        scales_config_file = 'configs/scales_quicklook.cfg'
         scales_config_fullpath = pkg_resources.resource_filename(
             pkg, scales_config_file)
         scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
@@ -210,7 +210,7 @@ def main():
     check_directory(scales_config.output_directory)
 
     try:
-        framework = Framework(Scales_pipeline, framework_config_fullpath)
+        framework = Framework(Scales_Quicklook_Pipeline, framework_config_fullpath)
         # add this line ONLY if you are using a local logging config file
         logging.config.fileConfig(framework_logcfg_fullpath)
         framework.config.instrument = scales_config

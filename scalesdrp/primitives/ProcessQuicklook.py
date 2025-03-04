@@ -1,9 +1,9 @@
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 
 
-class ProcessCalib(BasePrimitive):
+class ProcessQuicklook(BasePrimitive):
     """
-    Processing  daytime calibration images.
+    Preliminary processing of bias images.
     """
 
     def __init__(self, action, context):
