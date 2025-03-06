@@ -79,14 +79,14 @@ class Scales_Calib_Pipeline(BasePipeline):
             return False
 
         groupid = action.args.groupid
-        camera = action.args.ccddata.header['CAMERA'].upper()
+        camera = action.args.ccddata.header['MODE'].upper()
         self.context.pipeline_logger.info("******* GROUPID is %s " %
                                           action.args.groupid)
         self.context.pipeline_logger.info(
             "******* STATEID is %s (%s) " %
             (action.args.ccddata.header["STATENAM"],
              action.args.ccddata.header["STATEID"]))
-        self.context.pipeline_logger.info("******* CAMERA is %s " % camera)
+        self.context.pipeline_logger.info("******* Observing mode is %s " % camera)
         
         if "BIAS" in action.args.imtype:
             if action.args.ttime > 0:

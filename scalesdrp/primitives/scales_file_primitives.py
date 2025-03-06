@@ -160,325 +160,13 @@ class ingest_file(BasePrimitive):
         Returns:
             0 for Blue channel, 1 for Red, and -1 for Unknown.
         """
-        camera = self.get_keyword('CAMERA').upper()
-        if 'BLUE' in camera:
+        camera = self.get_keyword('MODE').upper()
+        if 'LOWRES' in camera:
             return 0
-        elif 'RED' in camera:
+        elif 'MEDRES' in camera:
             return 1
         else:
             return -1
-
-    def camang(self):
-        """
-        Return the articulation stage camera angle.
-
-        Determines which channel to use based on camera() call, then
-        uses keyword `BARTANG` for Blue channel and `RARTANG` for Red.
-
-        Raises:
-            ValueError: if the camera ID is Unknown.
-
-        Returns:
-            (float): Camera angle in degrees for the given channel.
-
-        """
-        if self.camera() == 0:  # Blue
-            key = 'BARTANG'
-        elif self.camera() == 1:  # Red
-            key = 'RARTANG'
-        else:
-            raise ValueError("unable to determine camera angle: "
-                             "CAMERA undefined")
-        return self.get_keyword(key)
-
-    def filter(self):
-        """
-        Return the filter name.
-
-        Determines which channel to use based on camera() call, then
-        uses keyword `BFILTNAM` for Blue channel and returns `None` for Red.
-
-        Raises:
-            ValueError: if the camera ID is Unknown.
-
-        Returns:
-            (str): Filter name for the given channel.
-
-        """
-        if self.camera() == 0:  # Blue
-            filt = self.get_keyword('BFILTNAM')
-        elif self.camera() == 1:  # Red
-            filt = 'None'
-        else:
-            raise ValueError("unable to determine filter: "
-                             "CAMERA undefined")
-        return filt
-
-    def grangle(self):
-        """
-        Return the grating angle.
-
-        Determines which channel to use based on camera() call, then
-        uses keyword `BGRANGLE` for Blue channel and `RGRANGLE` for Red.
-
-        Raises:
-            ValueError: if the camera ID is Unknown.
-
-        Returns:
-            (float): Grating angle in degrees for the given channel.
-
-        """
-        if self.camera() == 0:  # Blue
-            key = 'BGRANGLE'
-        elif self.camera() == 1:  # Red
-            key = 'RGRANGLE'
-        else:
-            raise ValueError("unable to determine grating angle: "
-                             "CAMERA undefined")
-        return self.get_keyword(key)
-
-    def grating(self):
-        """
-        Return the grating name.
-
-        Determines which channel to use based on camera() call, then
-        uses keyword `BGRATNAM` for Blue channel and `RGRATNAM` for Red.
-
-        Raises:
-            ValueError: if the camera ID is Unknown.
-
-        Returns:
-            (str): Grating name for the given channel.
-
-        """
-        if self.camera() == 0:  # Blue
-            key = 'BGRATNAM'
-        elif self.camera() == 1:  # Red
-            key = 'RGRATNAM'
-        else:
-            raise ValueError("unable to determine grating: CAMERA undefined")
-        return self.get_keyword(key)
-
-    def adjang(self):
-        """
-        Return the adjustment angle in degrees for the current grating.
-
-        Returns:
-            (float): 180.0 for high-resolution gratings, otherwise 0.0
-
-        """
-        if 'BH' in self.grating() or 'RH' in self.grating():
-            return 180.0
-        if 'BM' in self.grating() or 'RM' in self.grating():
-            return 0.0
-        if 'BL' in self.grating() or 'RL' in self.grating():
-            return 0.0
-
-    def atsig(self):
-        """
-        Return the Gaussian sigma to use for convolving the Atlas spectrum.
-
-        Uses grating() and ifunum() to select a Gaussian sigma that when
-        convolved with the Atlas spectrum will match the resolution of the
-        observed spectrum.
-
-        Raises:
-            ValueError: if grating or ifunum canoot be determined.
-
-        Returns:
-            (float): sigma in pixels ranging from 0.75 to 14.0, or 0.0 if
-            imtype() is `BIAS`.
-
-        """
-        if 'H' in self.grating():
-            if self.ifunum() > 2:
-                return 0.75
-            else:
-                return 2.5
-        elif 'M' in self.grating():
-            if self.ifunum() >= 2:
-                return 4.0
-            else:
-                return 8.0
-        elif 'L' in self.grating():
-            if self.ifunum() == 2:
-                return 10.0
-            elif self.ifunum() == 3:
-                return 5.0
-            else:
-                return 14.0
-        else:
-            if 'BIAS' in self.imtype():
-                return 0.
-            else:
-                raise ValueError(
-                    "unable to determine atlas sigma: GRATING undefined")
-
-    def rho(self):
-        """
-        Return the `rho` value (lines/mm divided by 1000) for the given grating.
-
-        Uses grating() to determine ingested grating.
-
-        Returns:
-            (float, or ``None``): `rho` value or ``None`` if grating unknown.
-
-        """
-        if 'BH1' in self.grating():
-            return 3.6
-        elif 'BH2' in self.grating():
-            return 3.2805
-        elif 'BH3' in self.grating():
-            return 2.8017
-        elif 'RH1' in self.grating():
-            return 2.360
-        elif 'RH2' in self.grating():
-            return 2.020
-        elif 'RH3' in self.grating():
-            return 1.735
-        elif 'RH4' in self.grating():
-            return 1.490
-        elif 'BM' in self.grating():
-            return 1.901
-        elif 'RM1' in self.grating():
-            return 1.300
-        elif 'RM2' in self.grating():
-            return 0.945
-        elif 'BL' in self.grating():
-            return 0.870
-        elif 'RL' in self.grating():
-            return 0.530
-        else:
-            return None
-
-    def cwave(self):
-        """
-        Return the central wavelength in Angstroms.
-
-        Determines which channel to use based on camera() call, then
-        uses keyword `BCWAVE` for Blue channel and `RCWAVE` for Red.
-
-        Raises:
-            ValueError: if the camera ID is Unknown.
-
-        Returns:
-            (float): Central wavelength in Angstroms for the given channel.
-
-        """
-        if self.camera() == 0:  # Blue
-            key = 'BCWAVE'
-        elif self.camera() == 1:  # Red
-            key = 'RCWAVE'
-        else:
-            raise ValueError("unable to determine central wavelength: "
-                             "CAMERA undefined")
-        return self.get_keyword(key)
-
-    def dich(self):
-        """
-        Query if dichroic present for image.
-
-        Returns ``True`` for all Red channel data, but checks for the presence
-        of Red keywords in the Blue channel header to determine status of
-        dichroic.
-
-        Returns:
-            (bool): ``True`` if dichroic present, ``False`` if not.
-
-        """
-        if self.camera() == 0:  # Blue
-            if self.get_keyword('RCWAVE'):
-                return True
-            else:
-                return False
-        elif self.camera() == 1:    # Red
-            return True
-
-    def resolution(self):
-        """
-        Return FWHM resolution in Angstroms for the given grating.
-
-        Calls cwave(), grating(), and ifunum() to calculate resolution.
-
-        Raises:
-            ValueError: if the grating is unknown.
-
-        Returns:
-            (float): FWHM in Angstroms, or 0. if imtype() is `BIAS`.
-
-        """
-        # get reference wavelength
-        refwave = self.cwave()
-        if refwave:
-            rw = refwave
-        else:
-            if 'B' in self.grating():
-                rw = 4500.
-            else:
-                rw = 7500.
-        # Calc rez from grating resolution (d-lambda = lambda/R)
-        # First, assume large slicer IFU
-        if 'BH' in self.grating():
-            rez = rw / 5000.
-        elif 'RH' in self.grating():
-            rez = rw / 4600.
-        elif 'BM' in self.grating():
-            rez = rw / 2500.
-        elif 'RM' in self.grating():
-            rez = rw / 1900.
-        elif 'BL' in self.grating():
-            rez = rw / 1250.
-        elif 'RL' in self.grating():
-            rez = rw / 800.
-        else:
-            # Resolution not needed for biases
-            if 'BIAS' in self.imtype():
-                rez = 0.
-            else:
-                raise ValueError("unable to compute atlas resolution: "
-                                 "grating undefined")
-        # Adjust for slicer
-        if self.ifunum() == 2:  # Medium slicer
-            rez /= 2.
-        elif self.ifunum() == 3:  # Small slicer
-            rez /= 4.
-
-        return rez
-
-    def delta_wave_out(self):
-        """
-        Return output delta lambda in Angstroms for the given grating
-
-        Calls grating(), and ybinsize() to calculate output delta lambda.
-
-        Raises:
-            ValueError: if the grating is unknown.
-
-        Returns:
-            (float): delta lambda in Angstroms, or 0. if imtype() is `BIAS`.
-
-        """
-        # Calc delta wave out from grating
-        if 'BH' in self.grating():
-            dw = 0.125 * float(self.ybinsize())
-        elif 'RH' in self.grating():
-            dw = 0.125 * float(self.ybinsize())
-        elif 'BM' in self.grating():
-            dw = 0.25 * float(self.ybinsize())
-        elif 'RM' in self.grating():
-            dw = 0.25 * float(self.ybinsize())
-        elif 'BL' in self.grating():
-            dw = 0.5 * float(self.ybinsize())
-        elif 'RL' in self.grating():
-            dw = 0.5 * float(self.ybinsize())
-        else:
-            # Delta wave not needed for biases
-            if 'BIAS' in self.imtype():
-                dw = 0.
-            else:
-                raise ValueError("unable to compute output delta lambda: "
-                                 "grating undefined")
-        return dw
 
     def namps(self):
         """
@@ -500,12 +188,12 @@ class ingest_file(BasePrimitive):
             (bool): ``True`` if 'Mask' in, ``False`` if not.
 
         """
-        if self.camera() == 0:  # Blue
+        if self.camera() == 0:  # lowres
             if 'Mask' in self.get_keyword('BNASNAM'):
                 return True
             else:
                 return False
-        elif self.camera() == 1:  # Red
+        elif self.camera() == 1:  # medres
             if 'Mask' in self.get_keyword('RNASNAM'):
                 return True
             else:
@@ -681,7 +369,7 @@ class ingest_file(BasePrimitive):
 
         namps = self.namps()    # int(self.get_keyword('NVIDINP'))
         # TODO: check namps
-        camera = self.get_keyword('CAMERA').upper()
+        camera = self.get_keyword('MODE').upper()
         ampmode = self.get_keyword('AMPMODE')
         # section lists
         bsec = []
@@ -689,7 +377,7 @@ class ingest_file(BasePrimitive):
         tsec = []
         strides = []
         amps = []
-        if 'BLUE' in camera:
+        if 'LOWRES' in camera:
             nb = 1    # numbering bias (0 or 1)
             # loop over amps
             for i in range(namps):
@@ -733,7 +421,7 @@ class ingest_file(BasePrimitive):
                     x1 = -1
                     # self.log.info("ERROR - bad amp number: %d" % i)
                 tsec.append((y0, y1, x0, x1))
-        elif 'RED' in camera:
+        elif 'MEDRES' in camera:
             nb = 0    # numbering bias (0 or 1)
             amp_count = 0
             for amp in red_amp_dict.keys():
@@ -764,7 +452,7 @@ class ingest_file(BasePrimitive):
             if amp_count != namps:
                 self.logger.warning("Didn't get all the amps: %d", amp_count)
         else:
-            self.logger.warning("Unknown CAMERA: %s" % camera)
+            self.logger.warning("Unknown observing mode: %s" % camera)
             nb = 0
 
         return bsec, dsec, tsec, strides, amps, nb
@@ -845,33 +533,33 @@ class ingest_file(BasePrimitive):
         # CAMERA
         out_args.camera = self.camera()
         # DICH
-        out_args.dich = self.dich()
+#        out_args.dich = self.dich()
         # CAMANGLE
-        out_args.camangle = self.camang()
+#        out_args.camangle = self.camang()
         # FILTER
-        out_args.filter = self.filter()
+#        out_args.filter = self.filter()
         # GRANGLE
-        out_args.grangle = self.grangle()
+#        out_args.grangle = self.grangle()
         # GRATING
-        out_args.grating = self.grating()
+#        out_args.grating = self.grating()
         # ADJANGLE
-        out_args.adjang = self.adjang()
+#        out_args.adjang = self.adjang()
         # RHO
-        out_args.rho = self.rho()
+#        out_args.rho = self.rho()
         # CWAVE
-        out_args.cwave = self.cwave()
+#        out_args.cwave = self.cwave()
         # RESOLUTION
-        out_args.resolution = self.resolution()
+#        out_args.resolution = self.resolution()
         # ATSIG
-        out_args.atsig = self.atsig()
+#        out_args.atsig = self.atsig()
         # DELTA WAVE OUT
-        out_args.dwout = self.delta_wave_out()
+#        out_args.dwout = self.delta_wave_out()
         # NAMPS
-        out_args.namps = self.namps()
+#        out_args.namps = self.namps()
         # NASMASK
-        out_args.nasmask = self.nasmask()
+#        out_args.nasmask = self.nasmask()
         # SHUFROWS
-        out_args.shufrows = self.shufrows()
+ #       out_args.shufrows = self.shufrows()
         # NUMOPEN
         out_args.numopen = self.numopen()
         # AMPMODE
@@ -1289,16 +977,16 @@ def fix_header(ccddata):
     * GAINn - from red_amp_gain dictionary
 
     """
-    # are we blue?
-    if 'BLUE' in ccddata.header['CAMERA'].upper():
+    # are we lowres?
+    if 'LOWRES' in ccddata.header['MODE'].upper():
         gainmul = ccddata.header['GAINMUL']
         namps = ccddata.header['NVIDINP']
         for ia in range(namps):
             ampid = ccddata.header['AMPID%d' % (ia+1)]
             gain = blue_amp_gain[gainmul][ampid]
             ccddata.header['GAIN%d' % (ia+1)] = gain
-    # are we red?
-    elif 'RED' in ccddata.header['CAMERA'].upper():
+    # are we medres?
+    elif 'MEDRES' in ccddata.header['MODE'].upper():
         # Fix red headers during Caltech AIT
         if 'TELESCOP' not in ccddata.header:
             # Add DCS keywords

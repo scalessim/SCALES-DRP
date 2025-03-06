@@ -10,11 +10,11 @@ class Proctab:
         self.proctab = None
 
     def new_proctab(self):
-        cnames = ('FRAMENO', 'CID', 'DID', 'TYPE', 'GRPID', 'TTIME', 'CAM',
-                  'IFU', 'GRAT', 'GANG', 'CWAVE', 'BIN', 'FILT', 'MJD',
+        cnames = ('FRAMENO', 'CID', 'DID', 'TYPE', 'GRPID', 'TTIME', 'MODE',
+                  'IFU','GRAT','GANG','CWAVE','BIN','FILT','MJD',
                   'STAGE', 'SUFF', 'OFNAME', 'TARGNAME', 'filename')
         dtypes = ('int32', 'S24', 'int64', 'S9', 'S12', 'float64', 'S4',
-                  'S6', 'S5', 'float64', 'float64', 'S4', 'S5', 'float64',
+                  'S6','S5','float64','float64','S4','S5','float64',
                   'int32', 'S5', 'S25', 'S25', 'S25')
         meta = {'SCALES DRP PROC TABLE': 'new table'}
         self.proctab = Table(names=cnames, dtype=dtypes, meta=meta)
@@ -28,8 +28,8 @@ class Proctab:
             self.log.info("reading proc table file: %s" % tfil)
             self.proctab = Table.read(tfil, format='ascii.fixed_width')
             self.proctab.dtypes = ('int32', 'S24', 'int64', 'S9', 'S12',
-                                   'float64', 'S4', 'S6', 'S5', 'float64',
-                                   'float64', 'S4', 'S5', 'float64', 'int32',
+                                   'float64', 'S4','S6','S5','float64',
+                                   'float64','S4','S5','float64','int32',
                                    'S5', 'S25', 'S25', 'S25')
         else:
             self.log.info("proc table file not found: %s" % tfil)
@@ -37,8 +37,8 @@ class Proctab:
         if len(self.proctab) == 0:
             self.new_proctab()
         # format columns
-        self.proctab['GANG'].format = '7.2f'
-        self.proctab['CWAVE'].format = '8.2f'
+        #self.proctab['GANG'].format = '7.2f'
+        #self.proctab['CWAVE'].format = '8.2f'
         self.proctab['MJD'].format = '15.6f'
         # prevent string column truncation
         for col in self.proctab.itercols():
@@ -95,13 +95,13 @@ class Proctab:
             #    dto = frame.header['DATE-OBS']
             #    fno = frame.header['FRAMENO']
             #    frame.header['GROUPID'] = "%s-%s" % (dto, fno)
-            cam = frame.header['CAMERA'].upper()
-            if 'BLUE' in cam:
+            cam = frame.header['MODE'].upper()
+            if 'LOWRES' in cam:
                 grnam = frame.header['BGRATNAM']
                 grang = frame.header['BGRANGLE']
                 cwave = frame.header['BCWAVE']
                 fltnm = frame.header['BFILTNAM']
-            elif 'RED' in cam:
+            elif 'MEDRES' in cam:
                 grnam = frame.header['RGRATNAM']
                 grang = frame.header['RGRANGLE']
                 cwave = frame.header['RCWAVE']
@@ -146,10 +146,10 @@ class Proctab:
                        nearest=False):
         if target_type is not None and self.proctab is not None:
             self.log.info('Looking for %s frames' % target_type)
-            # get relevant camera (blue or red)
-            self.log.info('Camera is %s' % frame.header['CAMERA'])
-            tab = self.proctab[(self.proctab['CAM'] ==
-                                frame.header['CAMERA'].upper().strip())]
+            # get relevant mode (lowres or medres)
+            self.log.info('Observing Mode is %s' % frame.header['MODE'])
+            tab = self.proctab[(self.proctab['MODE'] ==
+                                frame.header['MODE'].upper().strip())]
             # get target type images
             tab = tab[(self.proctab['TYPE'] == target_type)]
             self.log.info('Target type is %s' % target_type)
@@ -208,9 +208,9 @@ class Proctab:
         return tab
 
     def in_proctab(self, frame):
-        # get relevant camera (blue or red)
-        tab = self.proctab[(self.proctab['CAM'] ==
-                            frame.header['CAMERA'].upper().strip())]
+        # get relevant mode (lowres or medres)
+        tab = self.proctab[(self.proctab['MODE'] ==
+                            frame.header['MODE'].upper().strip())]
         imno_list = tab['MJD']
         if frame.header['MJD'] in imno_list:
             return True

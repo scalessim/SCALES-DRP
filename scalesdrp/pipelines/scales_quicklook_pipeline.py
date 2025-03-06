@@ -98,14 +98,14 @@ class Scales_Quicklook_Pipeline(BasePipeline):
             return False
 
         groupid = action.args.groupid
-        camera = action.args.ccddata.header['CAMERA'].upper()
+        camera = action.args.ccddata.header['MODE'].upper()
         self.context.pipeline_logger.info("******* GROUPID is %s " %
                                           action.args.groupid)
         self.context.pipeline_logger.info(
             "******* STATEID is %s (%s) " %
             (action.args.ccddata.header["STATENAM"],
              action.args.ccddata.header["STATEID"]))
-        self.context.pipeline_logger.info("******* CAMERA is %s " % camera)
+        self.context.pipeline_logger.info("******* Observing mode is %s " % camera)
         if action.args.in_proctab:
             if len(action.args.last_suffix) > 0:
                 self.context.pipeline_logger.warn(

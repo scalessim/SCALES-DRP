@@ -32,7 +32,7 @@ class CorrectGain(BasePrimitive):
         key = 'GAINCOR'
         keycom = 'Gain corrected?'
         # print(self.action.args.ccddata.header)
-        number_of_amplifiers = self.action.args.namps
+        number_of_amplifiers = 2.0
         bsec, dsec, tsec, direc, amps, aoff = self.action.args.map_ccd
         namps = len(amps)
         if namps != number_of_amplifiers:
