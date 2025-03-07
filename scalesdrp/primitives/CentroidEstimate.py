@@ -227,10 +227,88 @@ class CentroidEstimate(BasePrimitive):
             return centsarr
 
 
+        def parse_centers(centsarr,ll,lensy,lensx):
+            """
+            Function to pull lenslet PSF centers from 3D array.
+            """
+            centx,centy = centsarr[ll,lensy,lensx]
+            return centx,centy
+
+
+        def gen_sparse_inds(xs,ys,xe,ye):
+            """
+            Function to take 2d x,y pixel coordinates and turn them into flattened
+            coordinates for sparse matrix construction.
+            """
+
+            indsx = np.array([xval for xval in range(xs,xe) for yval in range(ys,ye)])
+            indsy = np.array([yval for xval in range(xs,xe) for yval in range(ys,ye)])
+
+            flatinds = np.ravel_multi_index((indsy,indsx),(2048,2048))
+            return flatinds
+
+
+        def crop_sparse_vals(image,xs,xe,ys,ye):
+            """
+            Function to crop lenslet PSFs down and then only select pixels above
+            a certain flux threshold (currently set to 5% of max).
+            """
+            cropped = image[ys:ye,xs:xe]
+            cropped[np.where(cropped < 0.05*np.max(cropped))]=0
+            cropped/=np.sum(cropped)
+            vals = np.array([cropped[yind,xind] for xind in range(0,xe-xs) for yind in range(0,ye-ys)])
+            return vals
+
+            
+
+
+        def gen_rectmat_inds(calims,centsarr,apsize=8):
+
+            """
+            Function to generate row and column indices for sparse matrix
+            for all 108 x 108 lenslets and wavelengths.
+            """
+
+            matrowinds = []
+            matcolinds = []
+            matvals = []
+            count=0
+
+            for ll in range(len(calims)):
+                for lensy in range(108):
+                    for lensx in range(108):
+                        centx,centy = parse_centers(centsarr,ll,lensy,lensx)
+
+                        if np.isnan(centx)==False:
+                            centx = int(centx)
+                            centy = int(centy)
+                            xs,ys,xe,ye = get_trace_centroid_region(centx,centy,subf=apsize//2)
+                            flatinds = gen_sparse_inds(xs,ys,xe,ye)
+                            vals = crop_sparse_vals(calims[ll],xs,xe,ys,ye)
+                            for i in range(len(vals)):
+                                matvals.append(vals[i])
+                                matcolinds.append(flatinds[i])
+                                matrowinds.append(count)
+                        count+=1
+            return matrowinds, matcolinds, matvals
+
+
+        def gen_rectmat(indir,filebase,lams_fs,centsarr,apsize=8):
+            """
+            Function to generate rectmat from cube of cal unit images.
+            """
+
+            calims = ingest_calims_cube(indir,filebase,lams_fs)
+            matrowinds,matcolinds,matvals = gen_rectmat_inds(calims,centsarr,apsize=apsize)
+            rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(54*108*108,2048*2048))
+            return rmat
+
+
         filebase = 'calibration_2.0_5.2_'
         lams_fs = parse_files(calib_path,filebase)
         intial = get_init_centers_lowres(calib_path,filebase,lams_fs)
         cents = get_calunit_centroids(calib_path,filebase,lams_fs,2.0,5.0,intial)
+        rmat = gen_rectmat(calib_path,filebase,lams_fs,cents)
 
         x=[]
         y=[]
@@ -242,13 +320,15 @@ class CentroidEstimate(BasePrimitive):
 
         file1_path = os.path.join(calib_path,'lowres_psf_x.pickle')
         file2_path = os.path.join(calib_path,'lowres_psf_y.pickle')
-
+        file3_path = os.path.join(calib_path,'QL_rectmat.npz')
 
         with open(file1_path, 'wb') as file1:
             pickle.dump(x, file1)
 
         with open(file2_path, 'wb') as file2:
             pickle.dump(y, file2)
+
+        sparse.save_npz(file3_path,rmat)
 
         log_string = CentroidEstimate.__module__
         self.logger.info(log_string)
