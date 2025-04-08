@@ -7,76 +7,64 @@ This document guide explains how to install the **SCALES-DRP** pipeline.
    :local:
    :depth: 2
 
-Requirements
-------------
+Environment and Dependencies
+----------------------------
 
-Before installing, ensure you have the following installed:
+This section explain how to create a ``conda`` environment called ‘scalesdrp’ for for SCALES pipeline and required extern dependencies.
 
-- Python 3.12
-- pip
-- Git
-- (Optional) Anaconda or virtualenv for managing environments
+We highly recommend using `Anaconda <https://www.anaconda.com>`_ for the installation, especially with a ``conda`` environment.
 
-Dependencies
-------------
+**Creating the Conda environment**
 
-The required Python packages can be installed from a `requirements.txt` file.
+   Here we are creating a conda environment called ``scalesdrp``.
+
+.. code-block:: bash
+
+   conda create --name scalesdrp python=3.12
+   conda activate scalesdrp
+
+.. note::
+
+   If you have previously installed the DRP from source,
+   we advise you to delete the ``scalesdrp`` environment and create a new one.
+   To remove the conda environment, use the following command
+
+   .. code-block:: bash
+
+      conda remove --name scalesdrp --all
+
 
 Installation Steps
 ------------------
 
-**1. Clone the Repository**
+This section explain the installation process directly from the source and using ``pip``.
+
+Install from the source (`SCALES-DRP <https://github.com/scalessim/SCALES-DRP.git>`_)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
    git clone https://github.com/scalessim/SCALES-DRP.git
    cd SCALES-DRP
+   pip install .
 
-**2. (Optional) Create a Virtual Environment**
+.. note::
 
-.. code-block:: bash
+   If you want to make the install editable, you can 
+   follow the below command.
 
-   python3 -m venv venv
-   source venv/bin/activate
+   .. code-block:: bash
 
-**3. Install Dependencies**
+      git clone https://github.com/scalessim/SCALES-DRP.git
+      cd SCALES-DRP
+      pip install -e.
 
-.. code-block:: bash
+Installing with ``pip``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   pip install -r requirements.txt
-
-**4. Build the Documentation (Optional)**
-
-.. code-block:: bash
-
-   cd docs
-   make html
-
-**5. Run a Test (Optional)**
-
-To verify the installation:
+   Working on
 
 .. code-block:: bash
 
-   python -m scalessim  # Or replace with actual test command
+   pip install scalesdrp
 
-Advanced Installation
----------------------
-
-If you need to install system-level libraries or external dependencies:
-
-.. code-block:: bash
-
-   sudo apt install gcc gfortran
-   # or for MacOS:
-   brew install gcc
-
-Troubleshooting
----------------
-
-- If you encounter an error like `ModuleNotFoundError`, ensure all dependencies are installed.
-- Use `pip list` to confirm that required packages like `sphinx`, `numpy`, or `scipy` are available.
-
----
-
-Let me know if you'd like this customized for **molecfit**, **your tel_pipeline**, or **SCALES-DRP** specifically—I can help tailor the instructions!
