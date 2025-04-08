@@ -1,19 +1,20 @@
 Welcome to the SCALES-DRP!
-===================================
+===========================
 
-The SCALES-DRP takes raw SCALES images and turns them into spectrally-dispersed datacubes. 
+The SCALES-DRP takes raw SCALES images and turns them into spectrally-dispersed datacubes.
 
-Check out the :doc:`usage` section for further information, including
-how to :ref:`installation` the project.
+A detailed installation process can be found in the :doc:`installing` section.
 
 .. note::
 
-   This project is under active development.
+   This project is under active development!
 
 Contents
 --------
 
 .. toctree::
+   :maxdepth: 2
+   :caption: Contents:
 
-   usage
-   api
+   installing
+   quick_start
