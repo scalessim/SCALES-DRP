@@ -1,4 +1,4 @@
-name: 🛠 Installation Issue
+name: Installation Issue
 description: Report a problem encountered while installing SCALES-DRP
 title: "[Install Issue] "
 labels: ["installation", "bug"]
@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## 📦 Installation Issue Report
+        ## Installation Issue Report
         Thanks for using SCALES-DRP! Please help us debug your installation issue by providing the following information.
 
   - type: input

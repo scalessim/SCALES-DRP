@@ -1,9 +1,13 @@
 Versions
 ===========
 
-A quick start is inside the scales-drp nevironment:
+The **SCALES-DRP** is currently under development.
 
-For example:
+Version 1.0
+-----------
 
->>> reduce-scales -lr -l list.txt
+The version 1.0 includes the following features:-
+
+-	simplified installation via ``pip`` and ``conda`` environment.
+-	Seperate channels for low-resolution, medium-resolution, and imaging channel.
 
