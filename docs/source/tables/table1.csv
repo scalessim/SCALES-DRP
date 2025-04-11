@@ -1,0 +1,11 @@
+intb,DN/px,overscan subtracted and trimmed bias
+int,e-/px,reduced output intensity
+intd,e-/px,dark current/scattered light removed
+intf,e-/px,instrumental variations removed
+intk,e-/px,sky subtracted
+obj,e-/px,un-sky subtracted object panel (Nod & Shuffle)
+sky,e-/px,sky model image or sky panel (Nod & Shuffle)
+opt_cube,e-/px,data cube from OptimalExtract
+chi_cube,e-/px,data cube from ChisquareExtract
+final_cube_opt,flux/px,Wavelength corrected data cube (OptimalExtract)
+final_cube_chi,flux/px,Wavelength corrected data cube (ChisquareExtract)

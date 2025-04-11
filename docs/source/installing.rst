@@ -23,7 +23,7 @@ We highly recommend using `Anaconda <https://www.anaconda.com>`_ for the install
    conda create --name scalesdrp python=3.12
    conda activate scalesdrp
 
-.. note::
+.. Note::
 
    If you have previously installed the DRP from source,
    we advise you to delete the ``scalesdrp`` environment and create a new one.
@@ -48,7 +48,7 @@ Install from the source (`SCALES-DRP <https://github.com/scalessim/SCALES-DRP.gi
    cd SCALES-DRP
    pip install .
 
-.. note::
+.. Note::
 
    If you want to make the install editable, you can 
    follow the below command.
@@ -62,7 +62,7 @@ Install from the source (`SCALES-DRP <https://github.com/scalessim/SCALES-DRP.gi
 Installing with ``pip``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   Working on
+   Working on ...
 
 .. code-block:: bash
 

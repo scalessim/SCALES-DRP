@@ -1,0 +1,59 @@
+name: 🛠 Installation Issue
+description: Report a problem encountered while installing SCALES-DRP
+title: "[Install Issue] "
+labels: ["installation", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 📦 Installation Issue Report
+        Thanks for using SCALES-DRP! Please help us debug your installation issue by providing the following information.
+
+  - type: input
+    id: os-version
+    attributes:
+      label: Operating System
+      description: What OS are you using?
+      placeholder: e.g., Ubuntu 22.04, macOS 13.5, Windows 10
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: What version of Python are you using?
+      placeholder: e.g., Python 3.10
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Install
+      description: What steps did you follow for installation? Did you use pip, conda, or build from source?
+      placeholder: |
+        1. Cloned the repo
+        2. Created conda environment
+        3. Ran pip install -e .
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-message
+    attributes:
+      label: Error Messages / Logs
+      description: Paste any error messages or logs you received during installation.
+      placeholder: |
+        ```
+        ERROR: Could not find a version that satisfies the requirement scales-drp
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra-info
+    attributes:
+      label: Additional Information (Optional)
+      description: Any other details you think might be helpful?
+      placeholder: e.g., Installed on HPC, behind proxy, custom dependencies, etc.

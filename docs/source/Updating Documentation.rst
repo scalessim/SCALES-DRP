@@ -1,0 +1,9 @@
+Updating Documentation
+======================
+
+A quick start is inside the scales-drp nevironment:
+
+For example:
+
+>>> reduce-scales -lr -l list.txt
+
