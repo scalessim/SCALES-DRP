@@ -274,8 +274,8 @@ class CentroidEstimate(BasePrimitive):
             count=0
 
             for ll in range(len(calims)):
-                for lensy in range(108):
-                    for lensx in range(108):
+                for lensx in range(108):
+                    for lensy in range(108):
                         centx,centy = parse_centers(centsarr,ll,lensy,lensx)
 
                         if np.isnan(centx)==False:
@@ -316,8 +316,8 @@ class CentroidEstimate(BasePrimitive):
             count=0
 
             for ll in range(len(calims)):
-                for lensy in range(108):
-                    for lensx in range(108):
+                for lensx in range(108):
+                    for lensy in range(108):
                         #print('lenslet:',lensy,lensx)
                         centx,centy = parse_centers(centsarr,ll,lensy,lensx)
 
