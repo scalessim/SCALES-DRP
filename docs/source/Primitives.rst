@@ -7,6 +7,17 @@ This section gives a brief idea about all the primitives used for **SCALES-DRP**
    :local:
    :depth: 2
 
+
+RampFit
+------------
+  **Generate an exposure from a 'N' number of user defined ramps or group of ramps.**
+
+  Uses a cube of ramps to identify the jumps like cosmic ray hit, bad pixel, and non-linearity to do
+  a ramp fit for each exposure.
+
+
+
+
 SubtractOverscan
 ----------------
 
@@ -44,7 +55,7 @@ MakeMasterBias
    frames (\*_intb.fits) based on the instrument config parameter
    bias_min_nframes, which defaults to 7.  The combine method for biases is
    'average' and so cosmic rays may be present, especially in RED channel data.
-   A high sigma clipping of 2.0 is used to help with the CRs. 
+   A high sigma clipping of 2.0 is used to help with the CRs.
    Uses the ccdproc.combine routine to perform the stacking.
 
    Writes out a \*_mbias.fits file and records a master bias frame in the proc table.
@@ -64,15 +75,9 @@ FlagSaturation
    Updates the flag extension of the image in the returned arguments.
 
 
-BadPixel
---------
-   
-   Working on
-
-
 FlatFielding
 ------------
-   
+
    Working on
 
 
@@ -100,6 +105,7 @@ CorrectGain
       * BUNIT: sets to `electron`.
       * HISTORY: records the operation.
 
+.. _optimalextract:
 
 OptimalExtract
 --------------
@@ -107,13 +113,14 @@ OptimalExtract
    **Generate a 3D datacube with wavelength as third axis.**
 
    Read the bias and flat corrected raw data and perform an 'optimal' extract
-   to generate the datacube. 
+   to generate the datacube using the weighted rectification matrix generated during daytime calibration.
 
-   User can choose to perform ``optimalExtract`` or ``LeastExtract`` based on the requirments. 
-
-
+   User can choose to perform ``optimalExtract`` or ``LeastExtract`` based on the requirements.
 
 
+
+
+.. _leastextract:
 
 LeastExtract
 ------------
@@ -122,21 +129,17 @@ LeastExtract
 
    Read the bias and flat corrected raw data and perform a 'chi-square' extract
    to generate the datacube with the help of a rectification matrix created using the
-   daytime wavelength calibration. 
+   daytime wavelength calibration.
 
-   User can choose to perform ``optimalExtract`` or  ``LeastExtract`` based on the requirments. 
+   User can choose to perform ``optimalExtract`` or  ``LeastExtract`` based on the requirements.
 
 
 SkySubtraction
 --------------
 Working on
 
+.. _wavecalib:
 
-
-
-
-
-
-
-
-
+Wavecalib
+----------------------
+Working on

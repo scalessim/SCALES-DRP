@@ -41,8 +41,8 @@ Contents
    Configuration Parameters
    Running the SCALES-DRP Pipeline
    Primitives
-   Sky Subtraction
    Data Products
+   Mode of Pipelines
    Support
    Versions
    Updating Documentation
