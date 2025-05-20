@@ -10,10 +10,12 @@ This section gives a brief idea about all the primitives used for **SCALES-DRP**
 
 RampFit
 ------------
-  **Generate an exposure from a 'N' number of user defined ramps or group of ramps.**
+   **Generate an exposure from a 'N' number of user defined reads or group of ramps.**
 
-  Uses a cube of ramps to identify the jumps like cosmic ray hit, bad pixel, and non-linearity to do
-  a ramp fit for each exposure.
+   We adopt the ramp fitting method of  `Brandt et. al. 2024 <https://github.com/t-brandt/fitramp/tree/main>`_ for reads greater than 5. This method perform an optimal fit to a pixel’s count rate nondestructively in the presence of both read and photon noise. The method construct a covarience matrix by estimating the difference in the read in a ramp, propagation of the read noise, photon noise and their corelation. And Performs a generalized least squares fit to the differences, using the inverse of the covariance matrix as weights. This gives optimal weight to each difference. The readnoise per pixel is estimated from the ``drak frames``. The jumps are detected iteratively checking the goodness of fit at each possible jump location. More details are presented in the `papers <https://iopscience.iop.org/article/10.1088/1538-3873/ad38d9/pdf>`_. 
+
+   In the case of reads less than 5, we do an iterative stright line fit to the data after correcting the read noise to estimate the slope image. 
+ 
 
 
 
@@ -72,7 +74,7 @@ FlagSaturation
       * SATFLAG: set to ``True`` if operation is performed.
       * NSATFLAG: set to the count of saturated pixels.
 
-   Updates the flag extension of the image in the returned arguments.
+   Updates the flag extension of the image in the returned arguments. Similarly ``hot pixels`` and ``cold pixels``  are identified and masked by searching the pixels brighter/dimmer than the local median value. The ``noisy pixels`` are identified by calculating the standard deviation over time for each pixel. Pixels with unusually high temporal standard deviation are flagged.
 
 
 FlatFielding
