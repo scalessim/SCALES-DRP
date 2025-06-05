@@ -30,7 +30,8 @@ import logging.config
 def _parse_arguments(in_args: list) -> argparse.Namespace:
     description = "SCALES pipeline CLI"
 
-    # this is a simple case where we provide a frame and a configuration file
+    
+    #defining arguments for execution
     parser = argparse.ArgumentParser(prog=f"{in_args[0]}",
                                      description=description)
     parser.add_argument('-c', '--config', dest="SCALES_config_file", type=str,
@@ -44,30 +45,6 @@ def _parse_arguments(in_args: list) -> argparse.Namespace:
     parser.add_argument('-l', '--list', dest='file_list',
                         help='File containing a list of files to be processed',
                         default=None)
-    parser.add_argument('-g', '--groups', dest='group_mode',
-                        help='Use group mode: separate files by image type and '
-                             'reduce in the correct order',
-                        default=False, action='store_true')
-    parser.add_argument('-t', '--taperfrac', dest='taperfrac', type=float,
-                        help='Taper fraction for wavelength fitting',
-                        default=None)
-    parser.add_argument('-a', '--atlas_line_list', dest='atlas_line_list',
-                        type=str, help="Atlas line list file", default=None)
-    parser.add_argument('-M', '--middle_fraction', dest='middle_fraction',
-                        type=float, help="Fraction of middle to use",
-                        default=None)
-    parser.add_argument('-o', '--atlas_offset', dest='atlas_offset',
-                        type=int, help="Atlas offset (px)", default=None)
-    parser.add_argument('-e', '--line_thresh', dest='line_thresh',
-                        type=float, help="Line Cleaning Threshold (e-)",
-                        default=None)
-    parser.add_argument('-u', '--tukey_alpha', dest='tukey_alpha',
-                        type=float, help="Tukey Window Alpha (0.0 - 1.0)",
-                        default=None)
-    parser.add_argument('-F', '--max_frac', dest='max_frac',
-                        type=float, default=None,
-                        help="Fraction of line max for fitting window "
-                             "(default: 0.5)")
 
     # in this case, we are loading an entire directory,
     # and ingesting all the files in that directory
@@ -225,44 +202,12 @@ def main():
     if args.infiles is not None:
         framework.config.file_type = args.infiles
 
-    # check for line_thresh argument
-    if args.line_thresh:
-        def_lt = getattr(framework.config.instrument, 'LINETHRESH', None)
-        if def_lt is not None:
-            framework.context.pipeline_logger.info(
-                "Setting new line thresh = %.2f" % args.line_thresh)
-            framework.config.instrument.LINETHRESH = args.line_thresh
-    else:
-        if args.lowres:
-            framework.config.instrument.LINETHRESH = float(
-                scales_config.LOWRES['linethresh'])
-        elif args.medres:
-            framework.config.instrument.LINETHRESH = float(
-                scales_config.MEDRES['linethresh'])
-
-    # check for tukey_alpha argument
-    if args.tukey_alpha:
-        def_ta = getattr(framework.config.instrument, 'TUKEYALPHA', None)
-        if def_ta is not None:
-            framework.context.pipeline_logger.info(
-                "Setting new tukey alpha = %.2f" % args.tukey_alpha)
-            framework.config.instrument.TUKEYALPHA = args.tukey_alpha
-    else:
-        if args.lowres:
-            framework.config.instrument.TUKEYALPHA = float(
-                scales_config.LOWRES['tukeyalpha'])
-        elif args.medres:
-            framework.config.instrument.TUKEYALPHA = float(
-                scales_config.MEDRES['tukeyalpha'])
-
-    # check for atlas line list argument
-    if args.atlas_line_list:
-        def_ll = getattr(framework.config.instrument, 'LINELIST', None)
-        if def_ll is not None:
-            framework.context.pipeline_logger.info(
-                "Using line list %s instead of generated list" %
-                args.atlas_line_list)
-            framework.config.instrument.LINELIST = args.atlas_line_list
+    if args.lowres:
+        framework.config.instrument.LINETHRESH = float(
+            scales_config.LOWRES['linethresh'])
+    elif args.medres:
+        framework.config.instrument.LINETHRESH = float(
+            scales_config.MEDRES['linethresh'])
 
     # update proc table argument
     if args.proctab:
@@ -337,14 +282,6 @@ def main():
 #    if framework.config.instrument.enable_bokeh:
 #        framework.append_event('start_bokeh', None)
 
-    # important: to be able to use the grouping mode, we need to reset
-    # the default ingestion action to no-event,
-    # otherwise the system will automatically trigger the next_file event
-    # which initiates the processing
-    if args.group_mode is True:
-        # set the default ingestion event to None
-        framework.config.default_ingestion_event = "add_only"
-
     # start queue manager only (useful for RPC)
     if args.queue_manager_only:
         # The queue manager runs forever.
@@ -411,38 +348,6 @@ def main():
     elif args.dirname is not None:
 
         framework.ingest_data(args.dirname, None, args.monitor)
-
-    # implement the group mode
-    if args.group_mode is True:
-        data_set = framework.context.data_set
-
-        # remove focus images and ccd clearing images from the dataset
-        focus_frames = data_set.data_table[data_set.data_table.OBJECT ==
-                                           "focus"].index
-        ccdclear_frames = data_set.data_table[data_set.data_table.OBJECT ==
-                                              "Clearing ccd"].index
-        data_set.data_table.drop(focus_frames, inplace=True)
-        data_set.data_table.drop(ccdclear_frames, inplace=True)
-
-        # processing
-        imtypes = ['BIAS', 'CONTBARS', 'ARCLAMP', 'FLATLAMP', 'DOMEFLAT',
-                   'TWIFLAT', 'OBJECT']
-
-        for imtype in imtypes:
-            subset = data_set.data_table[
-                framework.context.data_set.data_table.IMTYPE == imtype]
-            if 'OBJECT' in imtype:  # Ensure that standards are processed first
-                object_order = []
-                standard_order = []
-                for frame in subset.index:
-                    if is_file_scales_std(frame, logger=framework.context.logger):
-                        standard_order.append(frame)
-                    else:
-                        object_order.append(frame)
-                order = standard_order + object_order  # Standards first
-                process_list(order)
-            else:
-                process_subset(subset)
 
     framework.config.instrument.wait_for_event = args.wait_for_event
     framework.config.instrument.continuous = args.continuous
