@@ -11,8 +11,8 @@ queue in the KeckDRPFramework gets started.
 
 from keckdrpframework.pipelines.base_pipeline import BasePipeline
 from keckdrpframework.models.processing_context import ProcessingContext
-from scalesdrp.primitives.scales_file_primitives import *
-
+from scalesdrp.primitives.CalibFilePrimitives import *
+#from scalesdrp.primitives import CentroidEstimate
 
 class Scales_Calib_Pipeline(BasePipeline):
     """
@@ -23,8 +23,16 @@ class Scales_Calib_Pipeline(BasePipeline):
 
     event_table = {
 
+        "add_only":                 ("add_to_dataframe_only", None, None),
+
+        #"add_only":                 ("AddToCalDataFrame", None, None),
+
         # CALIB PROCESSING
         
+        #"next_file":                ("ingest_file",
+        #                              "ingest_file_started",
+        #                              "file_ingested"),
+
         "centroid_estimate":         ("CentroidEstimate",
                                       None,
                                       None),
@@ -40,3 +48,23 @@ class Scales_Calib_Pipeline(BasePipeline):
         self.cnt = 0
 
 
+    def add_to_dataframe_only(self, action, context):
+        self.context.pipeline_logger.info("******* ADD to DATAFRAME ONLY: %s" %
+                                          action.args.name)
+        return action.args
+
+
+    def action_planner(self, action, context):
+        try:
+            self.context.pipeline_logger.info(
+                "******* FILE TYPE DETERMINED AS %s" % action.args.imtype)
+        except (AttributeError, TypeError, ValueError):
+            self.context.pipeline_logger.warn(
+                "******* FILE TYPE is NOT determined. "
+                "No processing is possible.")
+            return False
+        
+       # if action.args.imtype=='CALUNIT':
+       #     context.push_event("
+
+        return action.args

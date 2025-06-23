@@ -1,17 +1,18 @@
 from keckdrpframework.primitives.base_primitive import BasePrimitive
-from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
+#from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
 
 import pandas as pd
 import numpy as np
 import pickle
 from astropy.io import fits
 import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning)
+#warnings.filterwarnings("ignore", category=RuntimeWarning)
 import pkg_resources
 from scipy import sparse
 import astropy.io.fits as pyfits
 from scipy.optimize import curve_fit
 import os
+import matplotlib.pyplot as plt
 
 
 class CentroidEstimate(BasePrimitive):
@@ -23,12 +24,24 @@ class CentroidEstimate(BasePrimitive):
     """
 
     def __init__(self, action, context):
-        print('initializing centroid estimate')
         BasePrimitive.__init__(self, action, context)
-        #self.logger = context.pipeline_logger
-        #stop
+        self.logger = context.pipeline_logger
+        #print('action arguments in primitive',self.action.args.dirname)
 
-    def parse_files(self,indir,filebase):
+    def parse_files(self,dt,scmode):
+        """
+        """
+
+        dt = dt[dt['IMTYPE'] == 'CALUNIT']
+        dt = dt[dt['SCMODE'] == scmode]
+
+        lams = dt['CAL-LAM']
+        names = dt.index[np.argsort(lams)]
+        lams = np.sort(lams)
+        return names, lams 
+    
+
+    def parse_files_old(self,indir,filebase):
         """
         Read wavelngth from the filename. Ned to replace and
         read it from header
@@ -43,13 +56,6 @@ class CentroidEstimate(BasePrimitive):
         lams_f = np.array(lams,dtype='float')
         lams_fs = np.sort(lams_f)
         return lams_fs
-    
-    def load_calim(self,indir,filebase,lam):
-        """
-        Read calib file
-        """
-        calim = pyfits.getdata(indir+filebase+str(lam)+'.fits')[0]
-        return calim
     
     def get_init_centroid_region(self,lensx,lensy,xstart,ystart):
         """
@@ -95,7 +101,7 @@ class CentroidEstimate(BasePrimitive):
         else:
             return xc,yc
 
-    def get_init_centers_lowres(self,indir,filebase,lams_fs):
+    def get_init_centers_lowres(self,names,lams):
         """
         Function to get the starting point lenslet PSF position
         for the first wavelength in the set of cal-unit images.
@@ -105,7 +111,8 @@ class CentroidEstimate(BasePrimitive):
         xstart = 0
         ystart = 0
         cents = np.zeros([108,108,2])
-        calim = self.load_calim(indir,filebase,lams_fs[0])
+        calim = fits.getdata(names[0]) 
+        #calim = fits.getdata(names[0])[0] 
         for lensx in range(108):
             for lensy in range(108):
                 xs,ys,xe,ye = self.get_init_centroid_region(lensx,lensy,xstart=xstart,ystart=ystart)
@@ -125,13 +132,15 @@ class CentroidEstimate(BasePrimitive):
         yoffs = (lls-lmin)/dlam*length*np.cos(np.radians(tilt))
         return xoffs+x0,yoffs+y0
         
-    def ingest_calims_cube(self,indir,filebase,lams_fs):
+    def ingest_calims_cube(self,names):
         """
         Ingests cube of cal unit images according to list of wavelengths.
         Need to replace this with something that actually follows file naming
         scheme at Keck!
         """
-        calims = np.array([fits.getdata(indir+filebase+str(lams_fs[x])+'.fits')[0] for x in range(len(lams_fs))])
+        calims = np.array([fits.getdata(name) for name in names])
+        print(calims.shape)
+        #calims = np.array([fits.getdata(name)[0] for name in names])
         return calims    
     
     def get_trace_centroid_region(self,xx,yy,imsize=2048,subf=8):
@@ -166,14 +175,14 @@ class CentroidEstimate(BasePrimitive):
             cx,cy = np.nan,np.nan
         return cx,cy
         
-    def get_pixel_trace(self,lams_fs,calcube,lensx,lensy,lmin,lmax,x0,y0,subf=10):
+    def get_pixel_trace(self,lams,calcube,lensx,lensy,x0,y0,subf=10):
         """
         Function that returns wavelength-dependent centroid values for cube of
         cal unit images taken at a range of wavelengths, for one lenslet.
         """
         cents = []
-        for ll in range(len(lams_fs)):
-            xx,yy = self.gen_linear_trace_lowres(lams_fs[ll],lmin,lmax,x0=x0,y0=y0)
+        for ll in range(len(lams)):
+            xx,yy = self.gen_linear_trace_lowres(lams[ll],self.lmin,self.lmax,x0=x0,y0=y0)
             xs,ys,xe,ye = self.get_trace_centroid_region(xx,yy)
             calcrop = self.crop_image(calcube[ll],xs,ys,xe,ye).copy()
             xys = self.get_pixcoords(calcrop)
@@ -195,17 +204,16 @@ class CentroidEstimate(BasePrimitive):
         dists = np.sqrt(diffs[:,:,0]**2 + diffs[:,:,1]**2)   
         return dists
 
-    def get_calunit_centroids(self,indir,filebase,lams_fs,lmin,lmax,init_cents):
+    def get_calunit_centroids(self,names,lams,calims,init_cents):
         """
         Function that returns all 108 x 108 pixel traces measured from cube of
         cal-unit images.
         """
-        calims = self.ingest_calims_cube(indir,filebase,lams_fs)
-        centsarr = np.empty([len(lams_fs),108,108,2])
+        centsarr = np.empty([len(names),108,108,2])
         for lensx in range(108):
             for lensy in range(108):
                 x0,y0 = init_cents[lensy,lensx]
-                pixtrace = self.get_pixel_trace(lams_fs,calims,lensx,lensy,lmin,lmax,x0,y0)
+                pixtrace = self.get_pixel_trace(lams,calims,lensx,lensy,x0,y0)
                 centsarr[:,lensy,lensx] = pixtrace
         return centsarr
 
@@ -271,12 +279,11 @@ class CentroidEstimate(BasePrimitive):
         return matrowinds, matcolinds, matvals
 
 
-    def gen_QL_rectmat(self,indir,filebase,lams_fs,centsarr,apsize=8):
+    def gen_QL_rectmat(self,calims,centsarr,apsize=8):
         """
         Function to generate rectmat from cube of cal unit images.
         """
 
-        calims = self.ingest_calims_cube(indir,filebase,lams_fs)
         matrowinds,matcolinds,matvals = self.gen_rectmat_inds(calims,centsarr,apsize=apsize)
         rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(54*108*108,2048*2048))
         return rmat
@@ -318,54 +325,99 @@ class CentroidEstimate(BasePrimitive):
 
 
 
-    def gen_C2_rectmat(self,indir,filebase,lams_fs,centsarr,apsize=8):
+    def gen_C2_rectmat(self,calims,centsarr,apsize=8):
         """
         Function to generate rectmat from cube of cal unit images.
         """
 
-        calims = self.ingest_calims_cube(indir,filebase,lams_fs)
         matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds(calims,centsarr,apsize=apsize)
         print(len(matrowinds),len(matcolinds),len(matvals))
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(2048*2048,len(lams_fs)*108*108))
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(2048*2048,len(calims)*108*108))
         return rmat
+
+    
+    def set_lamlimits(self,scmode):
+        if scmode == "LowRes-SED":
+            self.lmin = 2.0
+            self.lmax = 5.2
+        if scmode == 'LowRes-K':
+            self.lmin = 1.95
+            self.lmax = 2.45
+        if scmode == 'MedRes-K':
+            self.lmin = 1.95
+            self.lmax = 2.45
+        if scmode == 'LowRes-L':
+            self.lmin = 2.9
+            self.lmax = 4.15
+        if scmode == 'MedRes-L':
+            self.lmin = 2.9
+            self.lmax = 4.15
+        if scmode == 'LowRes-M':
+            self.lmin = 4.5
+            self.lmax = 5.2
+        if scmode == 'MedRes-M':
+            self.lmin = 4.5
+            self.lmax = 5.2
+        if scmode == 'LowRes-H2O':
+            self.lmin = 2.0
+            self.lmax = 4.0
+        if scmode == 'LowRes-PAH':
+            self.lmin = 3.1
+            self.lmax = 3.5
+
+        return
+
 
     def _perform(self):
 
-        #self.logger.info("Centroid Estimation")
+        print('trying to do centroids')
+        self.logger.info("Centroid Estimation")
+        dt = self.context.data_set.data_table
 
-        calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-        print(calib_path)
+        for scmode in ['LowRes-SED','LowRes-K','LowRes-L','LowRes-M','LowRes-H2O']:
+            self.set_lamlimits(scmode)
+            names, lams_fs = self.parse_files(dt,scmode)
+            print(names,lams_fs)
+            icents = self.get_init_centers_lowres(names, lams_fs)
+            calims = self.ingest_calims_cube(names)
+            cents = self.get_calunit_centroids(names, lams_fs, calims, icents)
 
-        filebase = 'calibration_2.0_5.2_'
-        lams_fs = self.parse_files(calib_path,filebase)
-        intial = self.get_init_centers_lowres(calib_path,filebase,lams_fs)
-        cents = self.get_calunit_centroids(calib_path,filebase,lams_fs,2.0,5.0,intial)
-        QL_rmat = self.gen_QL_rectmat(calib_path,filebase,lams_fs,cents)
-        C2_rmat = self.gen_C2_rectmat(calib_path,filebase,lams_fs,cents)
-    
 
-        x=[]
-        y=[]
-        for i in range(0,len(lams_fs)):
-            x1 = cents[i,:,:,0]
-            y1 = cents[i,:,:,1]
-            x.append(x1)
-            y.append(y1)
+            QL_rmat = self.gen_QL_rectmat(calims,cents)
+            C2_rmat = self.gen_C2_rectmat(calims,cents)
+       
+            sparse.save_npz(self.action.args.dirname+'/'+
+                            scmode+'_QL_rectmat.npz',QL_rmat)
+            sparse.save_npz(self.action.args.dirname+'/'+
+                            scmode+'_C2_rectmat.npz',C2_rmat)
 
-        file1_path = os.path.join(calib_path,'lowres_psf_x.pickle')
-        file2_path = os.path.join(calib_path,'lowres_psf_y.pickle')
-        file3_path = os.path.join(calib_path,'QL_rectmat.npz')
-        file4_path = os.path.join(calib_path,'C2_rectmat.npz')
 
-        with open(file1_path, 'wb') as file1:
-            pickle.dump(x, file1)
 
-        with open(file2_path, 'wb') as file2:
-            pickle.dump(y, file2)
+            """
+            x=[]
+            y=[]
+            for i in range(0,len(lams_fs)):
+                x1 = cents[i,:,:,0]
+                y1 = cents[i,:,:,1]
+                x.append(x1)
+                y.append(y1)
 
-        sparse.save_npz(file3_path,QL_rmat)
-        sparse.save_npz(file4_path,C2_rmat)
+            file1_path = os.path.join(calib_path,'lowres_psf_x.pickle')
+            file2_path = os.path.join(calib_path,'lowres_psf_y.pickle')
+            file3_path = os.path.join(calib_path,'QL_rectmat.npz')
+            file4_path = os.path.join(calib_path,'C2_rectmat.npz')
 
-        log_string = CentroidEstimate.__module__
-        #self.logger.info(log_string)
+            with open(file1_path, 'wb') as file1:
+                pickle.dump(x, file1)
+
+            with open(file2_path, 'wb') as file2:
+                pickle.dump(y, file2)
+
+            sparse.save_npz(file3_path,QL_rmat)
+            sparse.save_npz(file4_path,C2_rmat)
+            """
+
+
+            log_string = CentroidEstimate.__module__
+            self.logger.info(log_string)
         return self.action.args
