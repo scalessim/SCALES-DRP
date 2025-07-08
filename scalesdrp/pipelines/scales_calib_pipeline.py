@@ -54,15 +54,6 @@ class Scales_Calib_Pipeline(BasePipeline):
         return action.args
 
 
-    def action_planner(self, action, context):
-        try:
-            self.context.pipeline_logger.info(
-                "******* FILE TYPE DETERMINED AS %s" % action.args.imtype)
-        except (AttributeError, TypeError, ValueError):
-            self.context.pipeline_logger.warn(
-                "******* FILE TYPE is NOT determined. "
-                "No processing is possible.")
-            return False
         
        # if action.args.imtype=='CALUNIT':
        #     context.push_event("
