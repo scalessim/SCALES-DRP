@@ -5,7 +5,7 @@ from astropy.table import Table
 # from astropy import units as u
 import numpy as np
 from datetime import datetime
-
+from astropy.nddata import StdDevUncertainty
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 import os
 import logging
@@ -679,17 +679,21 @@ class ingest_file(BasePrimitive):
 
 
 def scales_fits_reader(file):
-    """A reader for KCCDData objects.
+    """
 
-    Currently, this is a separate function, but should probably be
-    registered as a reader similar to fits_ccddata_reader.
+    A reader for KCCDData objects that handles both 2D images and
+    3D data cubes.
+
+    It reads the primary HDU and checks its dimensionality. It then looks for
+    standard extensions (UNCERT, FLAGS, MASK) and validates that their
+    dimensions are consistent with the primary data.
 
     Args:
-        file (str): The filename (or pathlib.Path) of the FITS file to open.
+        file (str): The filename (pathlib.Path) of the FITS file to open.
 
     Raises:
-        FileNotFoundError: if file not found or
-        OSError: if file not accessible
+        FileNotFoundError: if file not found or OSError if not accessible.
+        ValueError: if an extension has a shape inconsistent with the primary HDU.
 
     Returns:
         (KCCDData, FITS table): All relevant frames in a single KCCDData object
@@ -701,25 +705,44 @@ def scales_fits_reader(file):
     except (FileNotFoundError, OSError) as e:
         print(e)
         raise e
-    read_imgs = 0
+    try:
+        primary_hdu = hdul[0]
+    except IndexError:
+        hdul.close()
+        raise ValueError(f"FITS file '{file}' appears to be empty or corrupted.")
+
+    if primary_hdu is None or primary_hdu.data is None:
+        hdul.close()
+        raise ValueError(f"FITS file '{file}' does not have a valid PRIMARY HDU with data.")
+
+    primary_data = primary_hdu.data
+    primary_shape = primary_data.shape
+    primary_ndim = primary_data.ndim
+    
+    print(f"  Primary data found with {primary_ndim} dimensions and shape {primary_shape}.")
+
+
+    ccddata = KCCDData(primary_data, meta=primary_hdu.header, unit='adu')
+
+    read_imgs = 1
     read_tabs = 0
-    # primary image
-    ccddata = KCCDData(hdul['PRIMARY'].data, meta=hdul['PRIMARY'].header,
-                       unit='adu')
-    read_imgs += 1
+
     # check for other legal components
     if 'UNCERT' in hdul:
-        ccddata.uncertainty = hdul['UNCERT'].data
+        uncert_data = hdul['UNCERT'].data
+        ccddata.uncertainty = StdDevUncertainty(uncert_data)
         read_imgs += 1
+
     if 'FLAGS' in hdul:
         ccddata.flags = hdul['FLAGS'].data
         read_imgs += 1
     if 'MASK' in hdul:
         ccddata.mask = hdul['MASK'].data
         read_imgs += 1
-    if 'NOSKYSUB' in hdul:
-        ccddata.noskysub = hdul['NOSKYSUB'].data
-        read_imgs += 1
+    
+    #if 'NOSKYSUB' in hdul:
+    #    ccddata.noskysub = hdul['NOSKYSUB'].data
+    #    read_imgs += 1
     if 'Exposure Events' in hdul:
         table = hdul['Exposure Events']
         read_tabs += 1
@@ -746,6 +769,7 @@ def scales_fits_reader(file):
 
     logger.info("<<< read %d imgs and %d tables out of %d hdus in %s" %
                 (read_imgs, read_tabs, len(hdul), file))
+    hdul.close()
     return ccddata, table
 
 
@@ -889,16 +913,21 @@ def scales_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
         out_file = main_name + "_" + suffix + extension
     hdus_to_save = ccddata.to_hdu()
     # check for flags
-    flags = getattr(ccddata, "flags", None)
-    if flags is not None:
-        hdus_to_save.append(fits.ImageHDU(flags, name='FLAGS',
-                                          do_not_scale_image_data=True))
+    
+    #flags = getattr(ccddata, "flags", None)
+    #if flags is not None:
+    #    hdus_to_save.append(fits.ImageHDU(flags, name='MORE',
+    #                                      do_not_scale_image_data=True))
     # check for noskysub
-    nskysb = getattr(ccddata, "noskysub", None)
-    if nskysb is not None:
-        if ccddata.noskysub.dtype == np.float64:
-            ccddata.noskysub = ccddata.noskysub.astype(np.float32)
-        hdus_to_save.append(fits.ImageHDU(nskysb, name='NOSKYSUB'))
+    #nskysb = getattr(ccddata, "noskysub", None)
+
+
+    #if nskysb1 is not None:
+    #    if ccddata.noskysub.dtype == np.float64:
+    #        ccddata.noskysub = ccddata.noskysub.astype(np.float32)
+    #    hdus_to_save.append(fits.ImageHDU(nskysb, name='FLUX-LQ'))
+
+
     # something about the way the original table is written out is wrong
     # and causes problems.  Leaving it off for now.
     # if table is not None:

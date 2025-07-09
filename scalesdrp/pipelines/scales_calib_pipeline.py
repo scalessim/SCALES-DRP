@@ -25,7 +25,28 @@ class Scales_Calib_Pipeline(BasePipeline):
 
         "add_only":                 ("add_to_dataframe_only", None, None),
 
+        "next_file":                 ("ingest_file",
+                                      "ingest_file_started",
+                                      "file_ingested"),
+        "file_ingested":             ("action_planner", None, None),
+
         #"add_only":                 ("AddToCalDataFrame", None, None),
+
+        # BIAS PROCESSING
+        
+        "process_bias":              ("ProcessBias",
+                                      "bias_processing_started",
+                                      "bias_subtract_overscan"),
+        "bias_subtract_overscan":    ("SubtractOverscan",
+                                      "subtract_overscan_started",
+                                      "bias_trim_overscan"),
+        "bias_trim_overscan":        ("TrimOverscan",
+                                      "trim_overscan_started",      # intb
+                                      "bias_make_master"),
+        "bias_make_master":          ("MakeMasterBias",
+                                      "master_bias_started",        # mbias
+                                      None),
+
 
         # CALIB PROCESSING
         
