@@ -18,9 +18,9 @@ import matplotlib.pyplot as plt
 class CentroidEstimate(BasePrimitive):
     """
     Estimate the psf centroid of all the calib images images and save
-    in two pickle file one for x and one for y centroid values. Currently 
-    assumes wavelengths will be in filenames. Need to replace that with 
-    header keywords instead. Also the location of the calib filesneed to fix. 
+    in two pickle file one for x and one for y centroid values. Currently
+    assumes wavelengths will be in filenames. Need to replace that with
+    header keywords instead. Also the location of the calib filesneed to fix.
     """
 
     def __init__(self, action, context):
@@ -38,8 +38,8 @@ class CentroidEstimate(BasePrimitive):
         lams = dt['CAL-LAM']
         names = dt.index[np.argsort(lams)]
         lams = np.sort(lams)
-        return names, lams 
-    
+        return names, lams
+
 
     def parse_files_old(self,indir,filebase):
         """
@@ -56,15 +56,14 @@ class CentroidEstimate(BasePrimitive):
         lams_f = np.array(lams,dtype='float')
         lams_fs = np.sort(lams_f)
         return lams_fs
-    
-    def get_init_centroid_region(self,lensx,lensy,xstart,ystart):
+
+    def get_init_centroid_region(self,lensx,lensy,xstart,ystart,
+                                 spaxsize=19, subf=8):
         """
         Function to get initial cropped image around expected
         lenslet PSF region.
         """
 
-        spaxsize=19
-        subf=8
         x = xstart + spaxsize*lensx
         y = ystart + spaxsize*lensy
         xs = np.max([0,x-subf])
@@ -72,13 +71,55 @@ class CentroidEstimate(BasePrimitive):
         xe = np.min([x+subf,2048])
         ye = np.min([y+subf,2048])
         return xs,ys,xe,ye
-    
+
+
+    def get_medres_init_pos(self):
+        shifts = np.zeros([18,17,2]) #x spaxel, y spaxel, x and y shifts
+
+        dx = 1.5e-3/18e-6 ##x shift between supercols (pix)
+        dy = 18.0 #y shift between spaxels in each supercol (pix)
+        dy0 = 17*18 + 3 #y shift between starting spaxel in each supercol (pix)
+        #dy0 = 6.0 #y shift between starting spaxel in each supercol (pix)
+
+        scol1 = [1,17,4,13,7,10] ##spaxel cols in each supercol, indexed from 1
+        scol2 = [18,3,15,6,12,9]
+        scol3 = [2,16,5,14,8,11]
+
+
+        scols = [scol1,scol2,scol3]
+        for i in range(len(scols)):
+            for j in range(len(scols[i])):
+                sc = scols[i][j]
+                shifts[sc-1,:,0] = i*dx ###big shift between each supercolumn (there are 3)
+                shifts[sc-1,:,1] = j*dy0 + i*dy/3.0  ###shift each column so that there's an extra pixel between them (there are 6 in each supercolumn)
+                for ii in range(len(shifts[sc-1])):
+                    shifts[sc-1,ii,1] += dy*ii
+        shifts[:,:,0]+=10
+        shifts[:,:,1]+=10
+
+        return shifts
+
+
+    def get_init_centroid_region_medres(self,lensx,lensy,shifts,subf=8):
+        """
+        Function to get initial cropped image around expected
+        lenslet PSF region.
+        """
+
+        x,y = shifts[lensx,lensy]
+
+        xs = np.max([0,int(x-subf)])
+        ys = np.max([0,int(y-subf)])
+        xe = np.min([int(x+subf),2048])
+        ye = np.min([int(y+subf),2048])
+        return xs,ys,xe,ye
+
     def crop_image(self,image,xs,ys,xe,ye):
         """
         Function to crop a 2D image in x and y to desired coords.
         """
         return image[ys:ye,xs:xe]
-        
+
     def pixel_centroid(self,image):
         """
         Function to centroid based on brightest pixel in image.
@@ -86,7 +127,7 @@ class CentroidEstimate(BasePrimitive):
         peak = np.where(image==np.max(image))
         x,y = peak[1][0],peak[0][0]
         return x,y
-        
+
     def replace_edge_centroids(self,xc,yc):
         """
         Function to replace centroids that are on edge of frame
@@ -111,8 +152,7 @@ class CentroidEstimate(BasePrimitive):
         xstart = 0
         ystart = 0
         cents = np.zeros([108,108,2])
-        calim = fits.getdata(names[0]) 
-        #calim = fits.getdata(names[0])[0] 
+        calim = fits.getdata(names[0])
         for lensx in range(108):
             for lensy in range(108):
                 xs,ys,xe,ye = self.get_init_centroid_region(lensx,lensy,xstart=xstart,ystart=ystart)
@@ -120,7 +160,42 @@ class CentroidEstimate(BasePrimitive):
                 cx,cy = self.pixel_centroid(calcrop)
                 cx,cy = self.replace_edge_centroids(cx,cy)
                 cents[lensy,lensx] = [cy+ys,cx+xs]
-        return cents 
+        return cents
+
+    def get_init_centers_medres(self,names,lams):
+        """
+        Function to get the starting point lenslet PSF position
+        for the first wavelength in the set of cal-unit images.
+        This just centroids based on brightest pixels, and then
+        replaces edge PSF centroids with nans.
+        """
+        xstart = 0
+        ystart = 0
+        cents = np.zeros([17,18,2])
+        calim = fits.getdata(names[0])
+        for lensx in range(18):
+            for lensy in range(17):
+                shifts = self.get_medres_init_pos()
+                xs,ys,xe,ye = self.get_init_centroid_region_medres(lensx,lensy,shifts)
+                calcrop = self.crop_image(calim,xs,ys,xe,ye)
+                #plt.imshow(calcrop)
+                #plt.title(str(shifts[lensx,lensy])+' '+str(xs)+' '+str(xe)+' '+str(ys)+' '+str(ye))
+                #plt.savefig('test.png')
+                #stop
+                cx,cy = self.pixel_centroid(calcrop)
+                cx,cy = self.replace_edge_centroids(cx,cy)
+                cents[lensy,lensx] = [cy+ys,cx+xs]
+        return cents
+
+    def gen_linear_trace_medres(self,lls,lmin,lmax,length=1900,x0=0,y0=0):
+        """
+        Returns rough coordinates of linear trace for given set of
+        wavelengths and with a given starting point
+        """
+        dlam = lmax-lmin
+        xoffs = np.zeros(lls.shape)
+        yoffs = (lls-lmin)/dlam*length
+        return xoffs+x0,yoffs+y0
 
     def gen_linear_trace_lowres(self,lls,lmin,lmax,tilt=18,length=54,x0=0,y0=0):
         """
@@ -131,18 +206,18 @@ class CentroidEstimate(BasePrimitive):
         xoffs = (lls-lmin)/dlam*length*np.sin(np.radians(tilt))
         yoffs = (lls-lmin)/dlam*length*np.cos(np.radians(tilt))
         return xoffs+x0,yoffs+y0
-        
+
     def ingest_calims_cube(self,names):
         """
         Ingests cube of cal unit images according to list of wavelengths.
         Need to replace this with something that actually follows file naming
         scheme at Keck!
         """
-        calims = np.array([fits.getdata(name) for name in names])
+        calims = np.array([fits.getdata(name,memmap=False) for name in names])
         print(calims.shape)
         #calims = np.array([fits.getdata(name)[0] for name in names])
-        return calims    
-    
+        return calims
+
     def get_trace_centroid_region(self,xx,yy,imsize=2048,subf=8):
         """
         Returns starting and ending coordinates of trace.
@@ -152,7 +227,7 @@ class CentroidEstimate(BasePrimitive):
         xe = np.min([int(np.round(xx+subf)),2048])
         ye = np.min([int(np.round(yy+subf)),2048])
         return xs,ys,xe,ye
-        
+
     def get_pixcoords(self,image):
         """
         Returns pixel coordinates of cropped image. These will get used
@@ -174,7 +249,28 @@ class CentroidEstimate(BasePrimitive):
         if (cx == imsize or cy == imsize):
             cx,cy = np.nan,np.nan
         return cx,cy
-        
+
+    def get_pixel_trace_medres(self,lams,calcube,lensx,lensy,x0,y0,subf=10):
+        """
+        Function that returns wavelength-dependent centroid values for cube of
+        cal unit images taken at a range of wavelengths, for one lenslet.
+        """
+        cents = []
+        for ll in range(len(lams)):
+            xx,yy = self.gen_linear_trace_medres(lams[ll],self.lmin,self.lmax,x0=x0,y0=y0)
+            xs,ys,xe,ye = self.get_trace_centroid_region(xx,yy)
+            calcrop = self.crop_image(calcube[ll],xs,ys,xe,ye).copy()
+            xys = self.get_pixcoords(calcrop)
+            if np.prod(xys.shape)!=0:
+                dists = self.get_dists(xys,xx,yy,xs,ys)
+                calcrop[np.where(dists > subf)] = np.nan
+                cx,cy = self.check_allnans_centroid(calcrop)
+                centx,centy = cx+xs,cy+ys
+            else:
+                centx,centy = np.nan,np.nan
+            cents.append([centx,centy])
+        return np.array(cents)
+
     def get_pixel_trace(self,lams,calcube,lensx,lensy,x0,y0,subf=10):
         """
         Function that returns wavelength-dependent centroid values for cube of
@@ -194,15 +290,32 @@ class CentroidEstimate(BasePrimitive):
             else:
                 centx,centy = np.nan,np.nan
             cents.append([centx,centy])
-        return np.array(cents)  
-    
+        return np.array(cents)
+
     def get_dists(self,xys,xx,yy,xs,ys):
         """
         Function to calculate distances between xy coordinates
         """
         diffs = np.array(xys - np.array([yy-ys,xx-xs]))
-        dists = np.sqrt(diffs[:,:,0]**2 + diffs[:,:,1]**2)   
+        dists = np.sqrt(diffs[:,:,0]**2 + diffs[:,:,1]**2)
         return dists
+
+    def get_calunit_centroids_medres(self,names,lams,calims,init_cents):
+        """
+        Function that returns all 108 x 108 pixel traces measured from cube of
+        cal-unit images.
+        """
+        centsarr = np.empty([len(names),17,18,2])
+        for lensx in range(18):
+            for lensy in range(17):
+                x0,y0 = init_cents[lensy,lensx]
+                pixtrace = self.get_pixel_trace_medres(lams,calims,lensx,lensy,x0,y0)
+                centsarr[:,lensy,lensx] = pixtrace
+                #plt.imshow(np.sum(calims,axis=0))
+                #plt.scatter(centsarr[:,lensy,lensx,0],centsarr[:,lensy,lensx,1])
+                #plt.savefig('test.png')
+                #stop
+        return centsarr
 
     def get_calunit_centroids(self,names,lams,calims,init_cents):
         """
@@ -236,7 +349,7 @@ class CentroidEstimate(BasePrimitive):
 
         flatinds = np.ravel_multi_index((indsy,indsx),(2048,2048))
         return flatinds
-        
+
     def crop_sparse_vals(self,image,xs,xe,ys,ye,cut=0.05):
         """
         Function to crop lenslet PSFs down and then only select pixels above
@@ -247,7 +360,37 @@ class CentroidEstimate(BasePrimitive):
         cropped/=np.sum(cropped)
         vals = np.array([cropped[yind,xind] for xind in range(0,xe-xs) for yind in range(0,ye-ys)])
         return vals
-        
+
+    def gen_rectmat_inds_medres(self,calims,centsarr,apsize=8):
+
+        """
+        Function to generate row and column indices for sparse matrix
+        for all 108 x 108 lenslets and wavelengths.
+        """
+
+        matrowinds = []
+        matcolinds = []
+        matvals = []
+        count=0
+
+        for ll in range(len(calims)):
+            for lensx in range(18):
+                for lensy in range(17):
+                    centx,centy = self.parse_centers(centsarr,ll,lensy,lensx)
+
+                    if np.isnan(centx)==False:
+                        centx = int(centx)
+                        centy = int(centy)
+                        xs,ys,xe,ye = self.get_trace_centroid_region(centx,centy,subf=apsize//2)
+                        flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
+                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye)
+                        for i in range(len(vals)):
+                            matvals.append(vals[i])
+                            matcolinds.append(flatinds[i])
+                            matrowinds.append(count)
+                    count+=1
+        return matrowinds, matcolinds, matvals
+
     def gen_rectmat_inds(self,calims,centsarr,apsize=8):
 
         """
@@ -279,6 +422,16 @@ class CentroidEstimate(BasePrimitive):
         return matrowinds, matcolinds, matvals
 
 
+    def gen_QL_rectmat_medres(self,calims,centsarr,apsize=8):
+        """
+        Function to generate rectmat from cube of cal unit images.
+        """
+
+        matrowinds,matcolinds,matvals = self.gen_rectmat_inds_medres(calims,centsarr,apsize=apsize)
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(1900*17*18,2048*2048))
+        return rmat
+
+
     def gen_QL_rectmat(self,calims,centsarr,apsize=8):
         """
         Function to generate rectmat from cube of cal unit images.
@@ -289,7 +442,39 @@ class CentroidEstimate(BasePrimitive):
         return rmat
 
 
-    
+
+    def gen_c2_rectmat_inds_medres(self,calims,centsarr,apsize=8,cut=0.001):
+
+        """
+        Function to generate row and column indices for sparse matrix
+        for all 108 x 108 lenslets and wavelengths.
+        """
+
+        matrowinds = []
+        matcolinds = []
+        matvals = []
+        count=0
+
+        for ll in range(len(calims)):
+            for lensx in range(18):
+                for lensy in range(17):
+                    #print('lenslet:',lensy,lensx)
+                    centx,centy = self.parse_centers(centsarr,ll,lensy,lensx)
+
+                    if np.isnan(centx)==False:
+                        centx = int(centx)
+                        centy = int(centy)
+                        xs,ys,xe,ye = self.get_trace_centroid_region(centx,centy,subf=apsize//2)
+                        flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
+                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye,cut=cut)
+                        for i in range(len(vals)):
+                            if vals[i]>cut:
+                                matvals.append(vals[i])
+                                matrowinds.append(flatinds[i])
+                                matcolinds.append(count)
+                    count+=1
+        return matrowinds, matcolinds, matvals
+
     def gen_c2_rectmat_inds(self,calims,centsarr,apsize=8,cut=0.001):
 
         """
@@ -325,6 +510,16 @@ class CentroidEstimate(BasePrimitive):
 
 
 
+    def gen_C2_rectmat_medres(self,calims,centsarr,apsize=8):
+        """
+        Function to generate rectmat from cube of cal unit images.
+        """
+
+        matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds_medres(calims,centsarr,apsize=apsize)
+        print(len(matrowinds),len(matcolinds),len(matvals))
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(2048*2048,len(calims)*17*18))
+        return rmat
+
     def gen_C2_rectmat(self,calims,centsarr,apsize=8):
         """
         Function to generate rectmat from cube of cal unit images.
@@ -335,7 +530,7 @@ class CentroidEstimate(BasePrimitive):
         rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(2048*2048,len(calims)*108*108))
         return rmat
 
-    
+
     def set_lamlimits(self,scmode):
         if scmode == "LowRes-SED":
             self.lmin = 2.0
@@ -374,18 +569,26 @@ class CentroidEstimate(BasePrimitive):
         self.logger.info("Centroid Estimation")
         dt = self.context.data_set.data_table
 
-        for scmode in ['LowRes-SED','LowRes-K','LowRes-L','LowRes-M','LowRes-H2O']:
+        for scmode in ['MedRes-K']:
+        #for scmode in ['LowRes-SED','LowRes-K','LowRes-L','LowRes-M','LowRes-H2O']:
             self.set_lamlimits(scmode)
             names, lams_fs = self.parse_files(dt,scmode)
             print(names,lams_fs)
-            icents = self.get_init_centers_lowres(names, lams_fs)
+
             calims = self.ingest_calims_cube(names)
-            cents = self.get_calunit_centroids(names, lams_fs, calims, icents)
+            if scmode[:3]=='Low':
+                icents = self.get_init_centers_lowres(names, lams_fs)
+                cents = self.get_calunit_centroids(names, lams_fs, calims, icents)
+                QL_rmat = self.gen_QL_rectmat(calims,cents)
+                C2_rmat = self.gen_C2_rectmat(calims,cents)
+            else:
+                icents = self.get_init_centers_medres(names, lams_fs)
+                cents = self.get_calunit_centroids_medres(names, lams_fs, calims, icents)
+                QL_rmat = self.gen_QL_rectmat_medres(calims,cents)
+                C2_rmat = self.gen_C2_rectmat_medres(calims,cents)
 
 
-            QL_rmat = self.gen_QL_rectmat(calims,cents)
-            C2_rmat = self.gen_C2_rectmat(calims,cents)
-       
+
             sparse.save_npz(self.action.args.dirname+'/'+
                             scmode+'_QL_rectmat.npz',QL_rmat)
             sparse.save_npz(self.action.args.dirname+'/'+
