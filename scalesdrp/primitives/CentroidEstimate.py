@@ -595,32 +595,6 @@ class CentroidEstimate(BasePrimitive):
                             scmode+'_C2_rectmat.npz',C2_rmat)
 
 
-
-            """
-            x=[]
-            y=[]
-            for i in range(0,len(lams_fs)):
-                x1 = cents[i,:,:,0]
-                y1 = cents[i,:,:,1]
-                x.append(x1)
-                y.append(y1)
-
-            file1_path = os.path.join(calib_path,'lowres_psf_x.pickle')
-            file2_path = os.path.join(calib_path,'lowres_psf_y.pickle')
-            file3_path = os.path.join(calib_path,'QL_rectmat.npz')
-            file4_path = os.path.join(calib_path,'C2_rectmat.npz')
-
-            with open(file1_path, 'wb') as file1:
-                pickle.dump(x, file1)
-
-            with open(file2_path, 'wb') as file2:
-                pickle.dump(y, file2)
-
-            sparse.save_npz(file3_path,QL_rmat)
-            sparse.save_npz(file4_path,C2_rmat)
-            """
-
-
             log_string = CentroidEstimate.__module__
             self.logger.info(log_string)
         return self.action.args

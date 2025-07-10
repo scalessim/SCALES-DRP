@@ -30,10 +30,13 @@ import logging.config
 def _parse_arguments(in_args: list) -> argparse.Namespace:
     description = "SCALES pipeline CLI"
 
-    
-    #defining arguments for execution
     parser = argparse.ArgumentParser(prog=f"{in_args[0]}",
                                      description=description)
+
+    parser.add_argument('-ab', '--auto_calib', dest='auto_calib',
+                       action="store_true", default=False,
+                       help="Trigger automatic calibration process without file inputs.")
+    
     parser.add_argument('-c', '--config', dest="SCALES_config_file", type=str,
                         help="SCALES configuration file", default=None)
     parser.add_argument('--write_config', dest="write_config",
@@ -52,8 +55,8 @@ def _parse_arguments(in_args: list) -> argparse.Namespace:
                         help="Input files, or pattern to match", nargs="?")
     parser.add_argument('-d', '--directory', dest="dirname", type=str,
                         help="Input directory", nargs='?', default=None)
-    # after ingesting the files,
-    # do we want to continue monitoring the directory?
+     #after ingesting the files,
+     #do we want to continue monitoring the directory?
     parser.add_argument('-m', '--monitor', dest="monitor",
                         help='Continue monitoring the directory '
                              'after the initial ingestion',
@@ -85,6 +88,8 @@ def _parse_arguments(in_args: list) -> argparse.Namespace:
                         default=False, help="medium resolution mode on !")
 
     out_args = parser.parse_args(in_args[1:])
+    if not out_args.frames and not out_args.file_list and not out_args.dirname:
+        parser.error("No input method specified. Please provide an input with -f, -l, or -d.")
     return out_args
 
 
@@ -259,17 +264,6 @@ def main():
     framework.config.instrument.minoscanpix = scales_config.minoscanpix
     framework.config.instrument.oscanbuf = scales_config.oscanbuf
 
-    # start the bokeh server is requested by the configuration parameters
-#    if framework.config.instrument.enable_bokeh is True:
-#        if check_running_process(process='bokeh') is False:
-#            with open("bokeh_output.txt", "wb") as out:
-#                subprocess.Popen('bokeh serve', shell=True, stderr=out,
-#                                 stdout=out)
-#            # --session-ids=unsigned --session-token-expiration=86400',
-#            # shell=True)
-#            time.sleep(5)
-#        # subprocess.Popen('open http://localhost:5006?bokeh-session-id=scales',
-#        # shell=True)
 
     # initialize the proctab and read it
     framework.context.proctab = Proctab()
@@ -277,14 +271,17 @@ def main():
 
     framework.logger.info("Framework initialized")
 
-    # add a start_bokeh event to the processing queue,
-    # if requested by the configuration parameters
-#    if framework.config.instrument.enable_bokeh:
-#        framework.append_event('start_bokeh', None)
-
+    if args.auto_calib:
+        if not args.dirname:
+            print("ERROR: The --auto_calib (-ab) flag requires an input directory specified with -d/--directory.")
+            sys.exit(1)
+        
+        framework.logger.info("Auto-calibration flag detected. Ingesting 'auto_calib' event.")
+        arguments = Arguments(directory=args.dirname) 
+        framework.append_event('auto_calib', arguments)
+    
     # start queue manager only (useful for RPC)
-    if args.queue_manager_only:
-        # The queue manager runs forever.
+    elif args.queue_manager_only:
         framework.logger.info("Starting queue manager only, no processing")
         framework.start(args.queue_manager_only)
 
@@ -341,12 +338,19 @@ def main():
         with open(args.file_list + '_ingest', 'w') as ingest_f:
             ingest_f.write('Files ingested at: ' +
                            datetime.datetime.now().isoformat())
+    elif args.auto_calib:
+        if not args.dirname:
+            print("Please specify one with -d or --directory.")
+            sys.exit(1)
+        framework.logger.info("Auto-calibration flag activated for directory: {args.dirname}.")
+        #arguments = Arguments(directory_to_process=args.dirname)
+        framework.config.instrument.auto_calib_directory = args.dirname
+        #framework.context.auto_calib_directory = args.dirname
+        #framework.context.directory_to_process = args.dirnam 
+        framework.append_event('auto_calib', Arguments())
 
-    # ingest an entire directory, trigger "next_file" (which is an option
-    # specified in the config file) on each file,
-    # optionally continue to monitor if -m is specified
     elif args.dirname is not None:
-
+        framework.logger.info(f"Directory processing mode for: {args.dirname}")
         framework.ingest_data(args.dirname, None, args.monitor)
 
     framework.config.instrument.wait_for_event = args.wait_for_event

@@ -36,18 +36,18 @@ class Scales_pipeline(BasePipeline):
 
         # BIAS PROCESSING
         
-        "process_bias":              ("ProcessBias",
-                                      "bias_processing_started",
-                                      "bias_subtract_overscan"),
-        "bias_subtract_overscan":    ("SubtractOverscan",
-                                      "subtract_overscan_started",
-                                      "bias_trim_overscan"),
-        "bias_trim_overscan":        ("TrimOverscan",
-                                      "trim_overscan_started",      # intb
-                                      "bias_make_master"),
-        "bias_make_master":          ("MakeMasterBias",
-                                      "master_bias_started",        # mbias
-                                      None),
+        #"process_bias":              ("ProcessBias",
+        #                              "bias_processing_started",
+        #                              "bias_subtract_overscan"),
+        #"bias_subtract_overscan":    ("SubtractOverscan",
+        #                              "subtract_overscan_started",
+        #                              "bias_trim_overscan"),
+        #"bias_trim_overscan":        ("TrimOverscan",
+        #                              "trim_overscan_started",      # intb
+        #                              "bias_make_master"),
+        #"bias_make_master":          ("MakeMasterBias",
+        #                              "master_bias_started",        # mbias
+        #                              None),
         # OBJECT PROCESSING
         "process_object":            ("ProcessObject",
                                       "object_processing_started",
@@ -196,7 +196,6 @@ class Scales_pipeline(BasePipeline):
             context.push_event("process_arc", arc_args)
         elif "OBJECT" in action.args.imtype:
             object_args = action.args
-            # object_args.new_type = "SKY"
             object_args.new_type = "MOBJ"
             object_args.min_files = \
             context.config.instrument.object_min_nframes
