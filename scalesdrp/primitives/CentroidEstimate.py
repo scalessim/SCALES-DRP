@@ -587,7 +587,7 @@ class CentroidEstimate(BasePrimitive):
                 QL_rmat = self.gen_QL_rectmat_medres(calims,cents)
                 C2_rmat = self.gen_C2_rectmat_medres(calims,cents)
 
-
+            print("started saving the files")
 
             sparse.save_npz(self.action.args.dirname+'/'+
                             scmode+'_QL_rectmat.npz',QL_rmat)

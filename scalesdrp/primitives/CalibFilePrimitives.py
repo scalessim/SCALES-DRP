@@ -245,6 +245,13 @@ class ingest_file(BasePrimitive):
         """
         if imtype == 'CALUNIT':
             return True 
+        if imtype == 'FLATLAMP':
+            return True 
+        if imtype == 'BIAS':
+            return True 
+        if imtype == 'DARK':
+            return True 
+
         return True
 
 

@@ -11,8 +11,9 @@ queue in the KeckDRPFramework gets started.
 
 from keckdrpframework.pipelines.base_pipeline import BasePipeline
 from keckdrpframework.models.processing_context import ProcessingContext
-from scalesdrp.primitives.CalibFilePrimitives import *
+#from scalesdrp.primitives.CalibFilePrimitives import *
 #from scalesdrp.primitives import CentroidEstimate
+#import scalesdrp.primitives 
 
 class Scales_Calib_Pipeline(BasePipeline):
     """
@@ -25,17 +26,13 @@ class Scales_Calib_Pipeline(BasePipeline):
 
         "add_only":                 ("add_to_dataframe_only", None, None),
 
-        #"add_only":                 ("AddToCalDataFrame", None, None),
-
-        # CALIB PROCESSING
-
-        #"next_file":                ("ingest_file",
-        #                              "ingest_file_started",
-        #                              "file_ingested"),
-
         "centroid_estimate":         ("CentroidEstimate",
                                       None,
-                                      None),
+                                      "calib_process_started"),
+
+        "calib_process_started":    ("StartCalib",None,None),
+
+
     }
 
 

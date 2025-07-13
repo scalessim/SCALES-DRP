@@ -62,7 +62,7 @@ class Proctab:
         if filename == "":
             self.log.error(f"No filename given for {frame.header['OFNAME']}")
         if frame is not None and self.proctab is not None:
-            stages = {'RAW': 0,
+            stages = {'ramp': 0,
                       'mbias': 1,
                       'int': 1,
                       'intd': 2,
