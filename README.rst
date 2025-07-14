@@ -42,11 +42,11 @@ cd data_scales_drp
 start_scales_reduce -lr -l target.txt     # science grade pipeline
 start_scales_quicklook -lr -l target.txt  # quicklook pipeline
 
+Where the target.txt has all files to be reduced. Bias and object files.
+
 The daytime calibration will takes place automatically finding the files from a folder. '-d' for directory, followed by the path ot the directory, then mention the mode of obseravation. 
 
 start_scales_calib -d path-to-folder -lr  # For daytime calibration process
-
-Where the target.txt has all files to be reduced. Bias and object files. 
 
 
 Three directories will be created: a redux directory with the results of the reduction, a logs directory with separate logs for the framework itself and for the DRP, and a plots directory containing diagnostic plots. Currently nothing is added to 'logs' and 'plots'.
