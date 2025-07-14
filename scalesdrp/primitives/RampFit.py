@@ -70,7 +70,7 @@ class RampFit(BasePrimitive):
         sci_im_full_original = self.action.args.ccddata.data
         nim_sci_file = sci_im_full_original.shape[0]
         nim_s = min(NUM_FRAMES_FROM_SCIENCE, nim_sci_file)
-        if nim_s < 2:
+        if nim_s < 5:
             print('will do a 2nd order fit here')
         else:
             sci_im_original_units = sci_im_full_original[:nim_s, :, :]
