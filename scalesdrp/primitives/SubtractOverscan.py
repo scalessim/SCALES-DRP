@@ -22,31 +22,31 @@ class SubtractOverscan(BasePrimitive):
 
     def _perform(self):
         # image sections for each amp
-        bsec, dsec, tsec, direc, amps, aoff = self.action.args.map_ccd
+        bsec, dsec, tsec, direc, amps, aoff = self.action.args.map_ccd #overscan, science,
         namps = len(amps)
         # polynomial fit order
         if namps == 4:
             porder = 2
         else:
             porder = 7
-        minoscanpix = self.config.instrument.minoscanpix
-        oscanbuf = self.config.instrument.oscanbuf
+        minoscanpix = self.config.instrument.minoscanpix # The minimum number of overscan pixels required to even attempt a fit.
+        oscanbuf = self.config.instrument.oscanbuf #A buffer to exclude pixels at the very edge of the overscan region
         frameno = self.action.args.ccddata.header['FRAMENO']
         # header keyword to update
-        key = 'OSCANSUB'
+        key = 'OSCANSUB' #FITS header keyword to document that this step has been performed.
         keycom = 'Overscan subtracted?'
         # is it performed?
-        performed = False
+        performed = True
         # loop over amps
         plts = []   # plots for each amp
 
         for ia in amps:
-            # bias correct amp number for indexing python arrays
-            iac = ia - aoff
+            
+            iac = ia - aoff #convert amp number to python index
             # get gain
-            gain = self.action.args.ccddata.header['GAIN%d' % ia]
-            # check if we have enough data to fit
-            if (bsec[iac][3] - bsec[iac][2]) > minoscanpix:
+            gain = self.action.args.ccddata.header['GAIN%d' % ia] #gain for the current amplifier
+            #  A check to ensure the overscan region is large enough to be processed.
+            if (bsec[iac][3] - bsec[iac][2]) > minoscanpix: 
                 # pull out an overscan vector
                 x0 = bsec[iac][2] + oscanbuf
                 x1 = bsec[iac][3] - oscanbuf
@@ -55,12 +55,12 @@ class SubtractOverscan(BasePrimitive):
                 # get overscan value to subtract
                 osval = int(np.nanmedian(
                     self.action.args.ccddata.data[y0:y1, x0:x1]))
-                # vector to fit for determining read noise
+                # vector to fit for determining read noise along each row
                 osvec = np.nanmedian(
-                    self.action.args.ccddata.data[y0:y1, x0:x1], axis=1)
+                    self.action.args.ccddata.data[y0:y1, x0:x1], axis=1) #calculates the median along the rows
                 nsam = x1 - x0
                 xx = np.arange(len(osvec), dtype=np.float)
-                # fit it, avoiding first 50 px
+                # fit it, avoiding first 50 px to avoid electronic settling artifacts
                 if direc[iac][0]:
                     # forward read skips first 50 px
                     oscoef = np.polyfit(xx[50:], osvec[50:], porder)
@@ -73,10 +73,11 @@ class SubtractOverscan(BasePrimitive):
                     # reverse read skips last 50 px
                     oscoef = np.polyfit(xx[:-50], osvec[:-50], porder)
                     # generate fitted overscan vector for full range
-                    osfit = np.polyval(oscoef, xx)
+                    osfit = np.polyval(oscoef, xx) # overscan structure across its entire length.
                     # calculate residuals
                     resid = (osvec[:-50] - osfit[:-50]) * math.sqrt(nsam) * \
                         gain / 1.414
+
 
                 sdrs = float("%.3f" % np.std(resid))
                 self.logger.info("Img # %05d, Amp %d [%d:%d, %d:%d]" % (frameno,
@@ -91,6 +92,15 @@ class SubtractOverscan(BasePrimitive):
                     (sdrs, "amp%d RN in e- from oscan" % ia)
                 self.action.args.ccddata.header['OSCNVAL%d' % ia] = \
                     (osval, "amp%d oscan counts (DN)" % ia)
+
+
+                dy0, dy1 = dsec[iac][0], dsec[iac][1] + 1
+                dx0, dx1 = dsec[iac][2], dsec[iac][3] + 1
+
+                science_data_slice = self.action.args.ccddata.data[dy0:dy1, dx0:dx1]
+                osfit_column = osfit[:, np.newaxis]
+                science_data_slice -= osfit_column
+
 
         self.action.args.ccddata.header[key] = (performed, keycom)
 

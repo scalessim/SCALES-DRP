@@ -82,7 +82,9 @@ class RampFit(BasePrimitive):
 
             for i_r in range(2048):
                 for j_c in range(2048):
-                    a_g=sci_im_with_jumps_scaled[0,i_r,j_c]; b_g=(sci_im_with_jumps_scaled[1,i_r,j_c]-sci_im_with_jumps_scaled[0,i_r,j_c]) if nim_s>1 else 1.0; c_g=0.0
+                    a_g=sci_im_with_jumps_scaled[0,i_r,j_c]; b_g=(sci_im_with_jumps_scaled[1,i_r,j_c]-sci_im_with_jumps_scaled[0,i_r,j_c]) \
+                        if nim_s>1 else 1.0; c_g=0.0
+                    
                     sp=ols_pack_parms(a_g,b_g,c_g); imdat_p=sci_im_with_jumps_scaled[:,i_r,j_c]
                     w_idx=np.where(imdat_p < SATURATION_SCIENCE_OLS)[0]
                     if len(w_idx)<3: B_ols_sci[i_r,j_c]=np.nan; continue

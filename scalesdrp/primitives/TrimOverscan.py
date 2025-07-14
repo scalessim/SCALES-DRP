@@ -40,7 +40,7 @@ class TrimOverscan(BasePrimitive):
         key = 'OSCANTRM'
         keycom = 'Overscan trimmed?'
         # get output image dimensions
-        max_sec = max(tsec)
+        max_sec = max(tsec) #size of the final image
         # do we have flags?
         have_flags = (self.action.args.ccddata.flags is not None)
         # create new blank image
@@ -53,12 +53,12 @@ class TrimOverscan(BasePrimitive):
         for ia in amps:
             # bias correct amp number for indexing python arrays
             iac = ia - aoff
-            # input range indices
+            # input slice coordiante
             yi0 = dsec[iac][0]
             yi1 = dsec[iac][1] + 1
             xi0 = dsec[iac][2]
             xi1 = dsec[iac][3] + 1
-            # output range indices
+            # output slice coordinate
             yo0 = tsec[iac][0]
             yo1 = tsec[iac][1] + 1
             xo0 = tsec[iac][2]
