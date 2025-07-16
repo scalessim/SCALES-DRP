@@ -55,6 +55,44 @@ class RampFit(BasePrimitive):
                 raise ValueError("Global time array 'ols_t_global' for OLS model_fn is not set.")
             return a_m + b_m * ols_t_global + c_m * ols_t_global**2
 
+        def apply_linearity_correction(raw_ramp_frames,num_sample_pix=5000):
+            """
+            Loads the raw ramp data, derives a non-linearity correction.
+            Args:
+                raw_ramp_frames: the 3D ramp data cube.
+                num_sample_pix (int, optional):
+                Number of random pixels to use for characterization. Defaults to 5000.
+            Returns:
+                tuple: two arrays for the correction curve:median_fluence and median_correction.
+            """
+            
+            num_frames, height, width = raw_ramp_frames.shape
+            pixel_max_value = 65536
+            sample_y = np.random.randint(0, height, size=num_sample_pix)
+            sample_x = np.random.randint(0, width, size=num_sample_pix)
+            sample_ramps = raw_ramp_frames[:, sample_y, sample_x].T
+            linear_slope_est = sample_ramps[:, 1] - sample_ramps[:, 0]
+            frame_times = np.arange(1, num_frames + 1)
+            biases = sample_ramps[:, 0] - (linear_slope_est * frame_times[0])
+            measured_fluence = sample_ramps - biases[:, np.newaxis]
+            ideal_ramps = linear_slope_est[:, np.newaxis] * frame_times
+            corrections = ideal_ramps - measured_fluence
+            fluence_flat = measured_fluence.flatten()
+            corr_flat = corrections.flatten()
+            bins = np.linspace(0, pixel_max_value, num=200)
+            bin_indices = np.digitize(fluence_flat, bins)
+            median_fluence=[]
+            median_corr=[]
+            for i in range(1, len(bins)):
+                in_bin = (bin_indices == i)
+                if np.any(in_bin):
+                    median_fluence.append(np.median(fluence_flat[in_bin]))
+                    median_corr.append(np.median(corr_flat[in_bin]))
+            median_fluence = np.array(median_fluence)
+            median_corr = np.array(median_corr)
+            return median_fluence, median_corr
+
+
         NUM_FRAMES_FROM_SCIENCE = self.action.args.ccddata.header['NREADS']
         FLUX_SCALING_FACTOR = 1.0
         SATURATION_DARK_OLS = 50000.0 / FLUX_SCALING_FACTOR
@@ -135,11 +173,22 @@ class RampFit(BasePrimitive):
 
             self.logger.info(f"  fitramp on the data took {end_time - start_time:.2f} seconds.")
 
-        self.action.args.ccddata.data = output_fitramp_final
+        median_fluence, median_correction = apply_linearity_correction(
+            raw_ramp_frames=self.action.args.ccddata.data,
+            num_sample_pix=15000)
+
+        correction_amount = np.interp(
+            output_fitramp_final,  
+            median_fluence,      
+            median_correction,   
+            left=0, right=0)
+
+        final_corrected_image = output_fitramp_final + correction_amount
+        
+        self.action.args.ccddata.data = final_corrected_image
         log_string = RampFit.__module__
         self.action.args.ccddata.header['HISTORY'] = log_string
         self.logger.info(log_string)
-
 
         scales_fits_writer(self.action.args.ccddata,
             table=self.action.args.table,
