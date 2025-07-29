@@ -1,0 +1,24 @@
+2025-07-10 10:18:55:DRPF:INFO: Framework initialized
+2025-07-10 10:18:55:DRPF:INFO: Directory processing mode for: /Users/athira/Desktop/scales_drp/star_extraction/
+2025-07-10 10:18:55:DRPF:INFO: Framework main loop started
+2025-07-10 10:18:55:DRPF:ERROR: Exception "Keyword 'MODE' not found." while invoking ingest_file
+2025-07-10 10:18:55:DRPF:INFO: Event failed: name next_file, action ingest_file, arg name /Users/athira/Desktop/scales_drp/star_extraction/kb220601_00043.fits, recurr True
+2025-07-10 10:18:56:DRPF:INFO: Event completed: name next_file, action ingest_file, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0002.fits, recurr False
+2025-07-10 10:18:56:DRPF:INFO: Event completed: name file_ingested, action action_planner, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0002.fits, recurr False
+2025-07-10 10:18:56:DRPF:INFO: Event completed: name process_object, action noop, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0002.fits, recurr False
+2025-07-10 10:18:56:DRPF:INFO: Event completed: name next_file, action ingest_file, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0010.fits, recurr False
+2025-07-10 10:18:56:DRPF:INFO: Event completed: name file_ingested, action action_planner, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0010.fits, recurr False
+2025-07-10 10:18:56:DRPF:INFO: Event completed: name process_dark, action noop, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0010.fits, recurr False
+2025-07-10 10:18:58:DRPF:INFO: Event completed: name next_file, action ingest_file, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0011.fits, recurr False
+2025-07-10 10:18:58:DRPF:INFO: Event completed: name file_ingested, action action_planner, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0011.fits, recurr False
+2025-07-10 10:18:58:DRPF:INFO: Event completed: name process_dark, action noop, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0011.fits, recurr False
+2025-07-10 10:18:58:DRPF:INFO: Event completed: name next_file, action ingest_file, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0012.fits, recurr False
+2025-07-10 10:18:58:DRPF:INFO: Event completed: name file_ingested, action action_planner, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0012.fits, recurr False
+2025-07-10 10:18:58:DRPF:INFO: Event completed: name process_dark, action noop, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0012.fits, recurr False
+2025-07-10 10:19:00:DRPF:INFO: Event completed: name next_file, action ingest_file, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0013.fits, recurr False
+2025-07-10 10:19:00:DRPF:INFO: Event completed: name file_ingested, action action_planner, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0013.fits, recurr False
+2025-07-10 10:19:00:DRPF:INFO: Event completed: name process_dark, action noop, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0013.fits, recurr False
+2025-07-10 10:19:00:DRPF:INFO: Event completed: name next_file, action ingest_file, arg name /Users/athira/Desktop/scales_drp/star_extraction/lr20250708_0014.fits, recurr False
+2025-07-10 10:19:00:DRPF:ERROR: Signal 2 received
+2025-07-10 10:19:00:DRPF:ERROR: Exception occured while in _action_completed, [Errno 54] Connection reset by peer
+2025-07-10 10:19:00:DRPF:INFO: Exiting main loop

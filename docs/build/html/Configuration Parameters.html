@@ -1,0 +1,165 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Configuration Parameters &mdash; SCALES-DRP 0.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=2709fde1"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Running the SCALES-DRP Pipeline" href="Running%20the%20SCALES-DRP%20Pipeline.html" />
+    <link rel="prev" title="Quick Start" href="Quick%20Start.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            SCALES-DRP
+              <img src="_static/logo1.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="Installing.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Quick%20Start.html">Quick Start</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Configuration Parameters</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#lowres-and-medres-sections-of-the-configuration-file">LOWRES and MEDRES sections of the configuration file</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#wavelength-correction-parameters">Wavelength correction parameters</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="Running%20the%20SCALES-DRP%20Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Data%20Products.html">Data Products</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Mode%20of%20Pipelines.html">Modes of Pipeline Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html">Updating Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html#updating-text">Updating text</a></li>
+<li class="toctree-l1"><a class="reference internal" href="FAQ.html">FAQ</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">SCALES-DRP</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Configuration Parameters</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/Configuration Parameters.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="configuration-parameters">
+<h1>Configuration Parameters<a class="headerlink" href="#configuration-parameters" title="Link to this heading"></a></h1>
+<p>A number of reduction parameters can be changed using entries in the configuration file.</p>
+<p>If you installed the pipeline with <code class="docutils literal notranslate"><span class="pre">pip</span></code>, the configuration file will not be easy to find, since it will be stored with installed <code class="docutils literal notranslate"><span class="pre">pip</span></code> packages. We recommend editing a copy of the config instead. You can create a copy of the config file by invoking the pipeline with the <code class="docutils literal notranslate"><span class="pre">--write_config</span></code> option:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>start_scales_reduce<span class="w"> </span>--write_config
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>If a parameter in the <code class="docutils literal notranslate"><span class="pre">scales.cfg</span></code> file is not described here, then you can assume that it should not be modified.</p>
+</div>
+<section id="lowres-and-medres-sections-of-the-configuration-file">
+<h2>LOWRES and MEDRES sections of the configuration file<a class="headerlink" href="#lowres-and-medres-sections-of-the-configuration-file" title="Link to this heading"></a></h2>
+<p>We have specific different default parameters for each observation mode. These are defined in the config file with <code class="docutils literal notranslate"><span class="pre">[LOWRES]</span></code> and <code class="docutils literal notranslate"><span class="pre">[MEDRES]</span></code> section headers. For example:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">bias_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">7</span>
+<span class="nv">flat_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">6</span>
+<span class="nv">dome_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3</span>
+<span class="nv">twiflat_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span>
+<span class="nv">dark_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3</span>
+<span class="nv">arc_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="w">        </span><span class="c1"># = 3 for [MEDRES]</span>
+<span class="nv">contbars_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="w">   </span><span class="c1"># = 3 for [MEDRES]</span>
+<span class="nv">minoscanpix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">75</span><span class="w">           </span><span class="c1"># = 20 for [MEDRES]</span>
+<span class="nv">oscanbuf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">20</span><span class="w">              </span><span class="c1"># = 5 for [MEDRES]</span>
+</pre></div>
+</div>
+<p>These parameters control the minimum number of bias, internal/dome/twilight flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations.</p>
+</section>
+<section id="wavelength-correction-parameters">
+<h2>Wavelength correction parameters<a class="headerlink" href="#wavelength-correction-parameters" title="Link to this heading"></a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">radial_velocity_correction</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;heliocentric&quot;</span>
+<span class="nv">air_to_vacuum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>True<span class="w">   </span><span class="c1"># Defaults to vacuum wavelengths</span>
+</pre></div>
+</div>
+<dl class="simple">
+<dt>These control the refinement of the wavelength solution. You can specify if you want air wavelengths by setting air_to_vacuum to False. You can specify the type of radial velocity correct as one of:</dt><dd><ul class="simple">
+<li><p>heliocentric</p></li>
+<li><p>barycentric</p></li>
+<li><p>none</p></li>
+</ul>
+</dd>
+</dl>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="Quick%20Start.html" class="btn btn-neutral float-left" title="Quick Start" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="Running%20the%20SCALES-DRP%20Pipeline.html" class="btn btn-neutral float-right" title="Running the SCALES-DRP Pipeline" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, The SCALES Team.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
