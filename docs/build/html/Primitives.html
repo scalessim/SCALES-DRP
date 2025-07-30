@@ -50,8 +50,11 @@
 <li class="toctree-l1"><a class="reference internal" href="Configuration%20Parameters.html">Configuration Parameters</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Running%20the%20SCALES-DRP%20Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Primitives</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#data-quality-dq-flaging">Data Quality (DQ) Flaging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#reference-pixel-correction">Reference Pixel Correction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#f-noise-correction">1/f Noise Correction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#linearity-correction">Linearity Correction</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#rampfit">RampFit</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#subtractoverscan">SubtractOverscan</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#trimoverscan">TrimOverscan</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#makemasterbias">MakeMasterBias</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#flagsaturation">FlagSaturation</a></li>
@@ -102,41 +105,60 @@
 <p>This section gives a brief idea about all the primitives used for <strong>SCALES-DRP</strong> pipeline.</p>
 <nav class="contents local" id="contents">
 <ul class="simple">
-<li><p><a class="reference internal" href="#rampfit" id="id4">RampFit</a></p></li>
-<li><p><a class="reference internal" href="#subtractoverscan" id="id5">SubtractOverscan</a></p></li>
-<li><p><a class="reference internal" href="#trimoverscan" id="id6">TrimOverscan</a></p></li>
-<li><p><a class="reference internal" href="#makemasterbias" id="id7">MakeMasterBias</a></p></li>
-<li><p><a class="reference internal" href="#flagsaturation" id="id8">FlagSaturation</a></p></li>
-<li><p><a class="reference internal" href="#flatfielding" id="id9">FlatFielding</a></p></li>
-<li><p><a class="reference internal" href="#subtractbias" id="id10">SubtractBias</a></p></li>
-<li><p><a class="reference internal" href="#correctgain" id="id11">CorrectGain</a></p></li>
-<li><p><a class="reference internal" href="#optimalextract" id="id12">OptimalExtract</a></p></li>
-<li><p><a class="reference internal" href="#leastextract" id="id13">LeastExtract</a></p></li>
-<li><p><a class="reference internal" href="#skysubtraction" id="id14">SkySubtraction</a></p></li>
-<li><p><a class="reference internal" href="#wavecalib" id="id15">Wavecalib</a></p></li>
+<li><p><a class="reference internal" href="#data-quality-dq-flaging" id="id4">Data Quality (DQ) Flaging</a></p></li>
+<li><p><a class="reference internal" href="#reference-pixel-correction" id="id5">Reference Pixel Correction</a></p></li>
+<li><p><a class="reference internal" href="#f-noise-correction" id="id6">1/f Noise Correction</a></p></li>
+<li><p><a class="reference internal" href="#linearity-correction" id="id7">Linearity Correction</a></p></li>
+<li><p><a class="reference internal" href="#rampfit" id="id8">RampFit</a></p></li>
+<li><p><a class="reference internal" href="#trimoverscan" id="id9">TrimOverscan</a></p></li>
+<li><p><a class="reference internal" href="#makemasterbias" id="id10">MakeMasterBias</a></p></li>
+<li><p><a class="reference internal" href="#flagsaturation" id="id11">FlagSaturation</a></p></li>
+<li><p><a class="reference internal" href="#flatfielding" id="id12">FlatFielding</a></p></li>
+<li><p><a class="reference internal" href="#subtractbias" id="id13">SubtractBias</a></p></li>
+<li><p><a class="reference internal" href="#correctgain" id="id14">CorrectGain</a></p></li>
+<li><p><a class="reference internal" href="#optimalextract" id="id15">OptimalExtract</a></p></li>
+<li><p><a class="reference internal" href="#leastextract" id="id16">LeastExtract</a></p></li>
+<li><p><a class="reference internal" href="#skysubtraction" id="id17">SkySubtraction</a></p></li>
+<li><p><a class="reference internal" href="#wavecalib" id="id18">Wavecalib</a></p></li>
 </ul>
 </nav>
+<section id="data-quality-dq-flaging">
+<h2><a class="toc-backref" href="#id4" role="doc-backlink">Data Quality (DQ) Flaging</a><a class="headerlink" href="#data-quality-dq-flaging" title="Link to this heading"></a></h2>
+<blockquote>
+<div><dl class="simple">
+<dt><strong>Flag the saturated and non physical pixels values for each read.</strong></dt><dd><p>working on</p>
+</dd>
+</dl>
+</div></blockquote>
+</section>
+<section id="reference-pixel-correction">
+<h2><a class="toc-backref" href="#id5" role="doc-backlink">Reference Pixel Correction</a><a class="headerlink" href="#reference-pixel-correction" title="Link to this heading"></a></h2>
+<blockquote>
+<div><p><strong>Determines overscan offset and subtracts it from the image.</strong></p>
+<p>The primitive do the reference pixel correction using the top and bottom four reference pixel rows. Calculate the sigma clipped mean value of these reference pixels and subtract it from the each amplifier channel for odd and even column separately.  There is an option to turn the odd/even step off, and replace with a single sigma-clipped mean value for all horizontal reference pixels in each amplifier.</p>
+</div></blockquote>
+</section>
+<section id="f-noise-correction">
+<h2><a class="toc-backref" href="#id6" role="doc-backlink">1/f Noise Correction</a><a class="headerlink" href="#f-noise-correction" title="Link to this heading"></a></h2>
+<blockquote>
+<div><p><strong>Determines 1/f noise and and subtracts it from the image.</strong></p>
+<p>The primitive do the 1/f correction using the left and right four reference pixel columns. Performs an optimal filtering of the vertical reference pixel to reduce 1/f noise (horizontal stripes). A sigma clipped mean value of the reference pixels smooths
+using FFT by removing the random white noise. FFT method adapted from Kosarev &amp; Pantos algorithm. This assumes that the data to be filtered/smoothed has been sampled evenly. M. Robberto <a class="reference external" href="http://www.stsci.edu/~robberto/Main/Software/IDL4pipeline/">IDL code</a>. Majority of the python version of the code is adopted from <a class="reference external" href="https://github.com/JarronL/hxrg_ref_pixels/tree/main">Jarron Leisenring</a>.</p>
+</div></blockquote>
+</section>
+<section id="linearity-correction">
+<h2><a class="toc-backref" href="#id7" role="doc-backlink">Linearity Correction</a><a class="headerlink" href="#linearity-correction" title="Link to this heading"></a></h2>
+</section>
 <section id="rampfit">
-<h2><a class="toc-backref" href="#id4" role="doc-backlink">RampFit</a><a class="headerlink" href="#rampfit" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id8" role="doc-backlink">RampFit</a><a class="headerlink" href="#rampfit" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p><strong>Generate an exposure from a ‘N’ number of user defined reads or group of ramps.</strong></p>
 <p>We adopt the ramp fitting method of  <a class="reference external" href="https://github.com/t-brandt/fitramp/tree/main">Brandt et. al. 2024</a> for reads greater than 5. This method perform an optimal fit to a pixel’s count rate nondestructively in the presence of both read and photon noise. The method construct a covarience matrix by estimating the difference in the read in a ramp, propagation of the read noise, photon noise and their corelation. And Performs a generalized least squares fit to the differences, using the inverse of the covariance matrix as weights. This gives optimal weight to each difference. The readnoise per pixel is estimated from the <code class="docutils literal notranslate"><span class="pre">drak</span> <span class="pre">frames</span></code>. The jumps are detected iteratively checking the goodness of fit at each possible jump location. More details are presented in the <a class="reference external" href="https://iopscience.iop.org/article/10.1088/1538-3873/ad38d9/pdf">papers</a>.</p>
 <p>In the case of reads less than 5, we do an iterative stright line fit to the data after correcting the read noise to estimate the slope image.</p>
 </div></blockquote>
 </section>
-<section id="subtractoverscan">
-<h2><a class="toc-backref" href="#id5" role="doc-backlink">SubtractOverscan</a><a class="headerlink" href="#subtractoverscan" title="Link to this heading"></a></h2>
-<blockquote>
-<div><p><strong>Determines overscan offset and subtracts it from the image.</strong></p>
-<p>Uses the BIASSEC header keyword to determine where to calculate the overscan
-offset.  Subtracts the overscan offset and records the value in the header.
-In addition, performs a polynomial fit and uses the residuals to determine
-the read noise in the overscan.  Records the overscan readnoise in the
-header as well.</p>
-</div></blockquote>
-</section>
 <section id="trimoverscan">
-<h2><a class="toc-backref" href="#id6" role="doc-backlink">TrimOverscan</a><a class="headerlink" href="#trimoverscan" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id9" role="doc-backlink">TrimOverscan</a><a class="headerlink" href="#trimoverscan" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p><strong>Trim overscan region from image.</strong></p>
 <p>Uses the data section (DSECn header keyword) to determine how to trim the
@@ -149,7 +171,7 @@ otherwise, just updates the image in the returned arguments.</p>
 </div></blockquote>
 </section>
 <section id="makemasterbias">
-<h2><a class="toc-backref" href="#id7" role="doc-backlink">MakeMasterBias</a><a class="headerlink" href="#makemasterbias" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id10" role="doc-backlink">MakeMasterBias</a><a class="headerlink" href="#makemasterbias" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p><strong>Stack bias frames into a master bias frame.</strong></p>
 <p>Generate a master bias image from overscan-subtracted and trimmed bias
@@ -162,7 +184,7 @@ Uses the ccdproc.combine routine to perform the stacking.</p>
 </div></blockquote>
 </section>
 <section id="flagsaturation">
-<h2><a class="toc-backref" href="#id8" role="doc-backlink">FlagSaturation</a><a class="headerlink" href="#flagsaturation" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id11" role="doc-backlink">FlagSaturation</a><a class="headerlink" href="#flagsaturation" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p><strong>Flag saturated pixels.</strong></p>
 <p>Currently flags pixels with values &gt; 60,000 counts with a value of 8
@@ -177,13 +199,13 @@ in the flags FITS extension and updates the following FITS header keywords:</p>
 </div></blockquote>
 </section>
 <section id="flatfielding">
-<h2><a class="toc-backref" href="#id9" role="doc-backlink">FlatFielding</a><a class="headerlink" href="#flatfielding" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id12" role="doc-backlink">FlatFielding</a><a class="headerlink" href="#flatfielding" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p>Working on</p>
 </div></blockquote>
 </section>
 <section id="subtractbias">
-<h2><a class="toc-backref" href="#id10" role="doc-backlink">SubtractBias</a><a class="headerlink" href="#subtractbias" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id13" role="doc-backlink">SubtractBias</a><a class="headerlink" href="#subtractbias" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p><strong>Subtract the master bias frame.</strong></p>
 <p>Reads in the master bias created by <code class="docutils literal notranslate"><span class="pre">MakeMasterBias</span></code> and performs the
@@ -192,7 +214,7 @@ the processing in the header.</p>
 </div></blockquote>
 </section>
 <section id="correctgain">
-<h2><a class="toc-backref" href="#id11" role="doc-backlink">CorrectGain</a><a class="headerlink" href="#correctgain" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id14" role="doc-backlink">CorrectGain</a><a class="headerlink" href="#correctgain" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p><strong>Convert raw data numbers to electrons.</strong></p>
 <p>Uses the ATSECn FITS header keywords to divide image into amp regions and
@@ -208,7 +230,7 @@ following FITS header keywords:</p>
 </div></blockquote>
 </section>
 <section id="optimalextract">
-<span id="id1"></span><h2><a class="toc-backref" href="#id12" role="doc-backlink">OptimalExtract</a><a class="headerlink" href="#optimalextract" title="Link to this heading"></a></h2>
+<span id="id1"></span><h2><a class="toc-backref" href="#id15" role="doc-backlink">OptimalExtract</a><a class="headerlink" href="#optimalextract" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p><strong>Generate a 3D datacube with wavelength as third axis.</strong></p>
 <p>Read the bias and flat corrected raw data and perform an ‘optimal’ extract
@@ -217,7 +239,7 @@ to generate the datacube using the weighted rectification matrix generated durin
 </div></blockquote>
 </section>
 <section id="leastextract">
-<span id="id2"></span><h2><a class="toc-backref" href="#id13" role="doc-backlink">LeastExtract</a><a class="headerlink" href="#leastextract" title="Link to this heading"></a></h2>
+<span id="id2"></span><h2><a class="toc-backref" href="#id16" role="doc-backlink">LeastExtract</a><a class="headerlink" href="#leastextract" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p><strong>Generate a 3D datacube with wavelength as third axis.</strong></p>
 <p>Read the bias and flat corrected raw data and perform a ‘chi-square’ extract
@@ -227,11 +249,11 @@ daytime wavelength calibration.</p>
 </div></blockquote>
 </section>
 <section id="skysubtraction">
-<h2><a class="toc-backref" href="#id14" role="doc-backlink">SkySubtraction</a><a class="headerlink" href="#skysubtraction" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id17" role="doc-backlink">SkySubtraction</a><a class="headerlink" href="#skysubtraction" title="Link to this heading"></a></h2>
 <p>Working on</p>
 </section>
 <section id="wavecalib">
-<span id="id3"></span><h2><a class="toc-backref" href="#id15" role="doc-backlink">Wavecalib</a><a class="headerlink" href="#wavecalib" title="Link to this heading"></a></h2>
+<span id="id3"></span><h2><a class="toc-backref" href="#id18" role="doc-backlink">Wavecalib</a><a class="headerlink" href="#wavecalib" title="Link to this heading"></a></h2>
 <p>Working on</p>
 </section>
 </section>

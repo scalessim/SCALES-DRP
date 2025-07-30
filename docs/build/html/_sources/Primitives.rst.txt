@@ -7,6 +7,36 @@ This section gives a brief idea about all the primitives used for **SCALES-DRP**
    :local:
    :depth: 2
 
+Data Quality (DQ) Flaging
+--------------------------
+   **Flag the saturated and non physical pixels values for each read.**
+      working on 
+
+
+
+Reference Pixel Correction
+--------------------------
+
+   **Determines overscan offset and subtracts it from the image.**
+
+   The primitive do the reference pixel correction using the top and bottom four reference pixel rows. Calculate the sigma clipped mean value of these reference pixels and subtract it from the each amplifier channel for odd and even column separately.  There is an option to turn the odd/even step off, and replace with a single sigma-clipped mean value for all horizontal reference pixels in each amplifier.
+
+1/f Noise Correction
+--------------------
+
+   **Determines 1/f noise and and subtracts it from the image.**
+
+   The primitive do the 1/f correction using the left and right four reference pixel columns. Performs an optimal filtering of the vertical reference pixel to reduce 1/f noise (horizontal stripes). A sigma clipped mean value of the reference pixels smooths
+   using FFT by removing the random white noise. FFT method adapted from Kosarev & Pantos algorithm. This assumes that the data to be filtered/smoothed has been sampled evenly. M. Robberto `IDL code  <http://www.stsci.edu/~robberto/Main/Software/IDL4pipeline/>`_. Majority of the python version of the code is adopted from `Jarron Leisenring <https://github.com/JarronL/hxrg_ref_pixels/tree/main>`_.
+
+
+
+
+
+Linearity Correction
+--------------------
+
+
 
 RampFit
 ------------
@@ -16,20 +46,6 @@ RampFit
 
    In the case of reads less than 5, we do an iterative stright line fit to the data after correcting the read noise to estimate the slope image. 
  
-
-
-
-
-SubtractOverscan
-----------------
-
-   **Determines overscan offset and subtracts it from the image.**
-
-   Uses the BIASSEC header keyword to determine where to calculate the overscan
-   offset.  Subtracts the overscan offset and records the value in the header.
-   In addition, performs a polynomial fit and uses the residuals to determine
-   the read noise in the overscan.  Records the overscan readnoise in the
-   header as well.
 
 
 TrimOverscan
