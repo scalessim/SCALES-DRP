@@ -697,7 +697,7 @@ class StartCalib(BasePrimitive):
 
 
         for imtype in processing_order:
-            #print(imtype)
+            print(imtype)
             if imtype in organized_groups:
                 groups_for_this_type = organized_groups[imtype]
                 for group in groups_for_this_type:
@@ -802,11 +802,35 @@ class StartCalib(BasePrimitive):
                                 #self.context.proctab.write_proctab(
                                 #    tfil=self.config.instrument.procfile)
                                 
-                                #if imtype == 'BIAS':
-                                #    bias_ramps.append(output_fitramp_final)
+                        if imtype == 'BIAS':
+                            bias_ramps.append(final_corrected_image)
 
-                                #if imtype == 'DARK':
-                                #    dark_ramps.append(output_fitramp_final)
+                        if imtype == 'DARK':
+                            dark_ramps.append(final_corrected_image)
+
+                        if imtype == 'FLATLENS':
+                            flatlen_ramps.append(final_corrected_image)
+
+                        if imtype == 'FLATLAMP':
+                            flatlamp_ramps.append(final_corrected_image)
+
+                        if imtype == 'CALUNIT':
+                            calunit_ramps.append(final_corrected_image)
+
+        master_dark = robust.mean(dark_ramps,axis=0)
+        master_bias = robust.mean(bias_ramps,axis=0)
+        master_flatlen = robust.mean(flatlen_ramps,axis=0)
+        master_flatlamp = robust.mean(flatlamp_ramps,axis=0)
+        master_calunit = robust.mean(calunit_ramps,axis=0)
+        self.logger.info('+++++++++++++ master calibration files created ++++++++++++++')
+        
+        #self.fits_writer_steps(
+        #    data=master_dark,
+        #    header=data_header,
+        #    output_dir=self.action.args.dirname,
+        #    input_filename=filename,
+        #    suffix='_mdark',
+        #    overwrite=True)
         
         log_string = StartCalib.__module__
         self.logger.info(log_string)
