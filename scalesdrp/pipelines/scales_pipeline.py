@@ -34,20 +34,6 @@ class Scales_pipeline(BasePipeline):
         "file_ingested":             ("action_planner", None, None),
        
 
-        # BIAS PROCESSING
-        
-        #"process_bias":              ("ProcessBias",
-        #                              "bias_processing_started",
-        #                              "bias_subtract_overscan"),
-        #"bias_subtract_overscan":    ("SubtractOverscan",
-        #                              "subtract_overscan_started",
-        #                              "bias_trim_overscan"),
-        #"bias_trim_overscan":        ("TrimOverscan",
-        #                              "trim_overscan_started",      # intb
-        #                              "bias_make_master"),
-        #"bias_make_master":          ("MakeMasterBias",
-        #                              "master_bias_started",        # mbias
-        #                              None),
         # OBJECT PROCESSING
         "process_object":            ("ProcessObject",
                                       "object_processing_started",
@@ -58,17 +44,11 @@ class Scales_pipeline(BasePipeline):
         "bpm_correction":            ("BPMCorrect",
                                       "bpm_correction_started",
                                       "object_flag_saturation"),
-        "object_flag_saturation":    ("FlagSaturation",
+        "object_flag_saturation":    ("FlagSaturation", #rewrite and should come before rampfit
                                       "object_flag_saturation_started",
-                                      "object_subtract_overscan"),
-        "object_subtract_overscan":  ("SubtractOverscan",
-                                      "subtract_overscan_started",
-                                      "object_trim_overscan"),
-        "object_trim_overscan":      ("TrimOverscan",
-                                      "trim_overscan_started",
-                                      "object_subtract_bias"),
-        "object_subtract_bias":      ("SubtractBias",
-                                      "subtract_bias started",
+                                      "object_subtract_dark"),
+        "object_subtract_dark":      ("SubtractDark", #rewrite, optional depends on SNR of the dark frame available
+                                      "subtract_dark started",
                                       "object_correct_gain"),
         "object_correct_gain":       ("CorrectGain",
                                       "gain_correction_started",
