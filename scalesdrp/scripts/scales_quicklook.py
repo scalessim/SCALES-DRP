@@ -183,6 +183,8 @@ def main():
             framework.context.pipeline_logger.info("Skipping sky subtraction")
             framework.config.instrument.skipsky = args.skipsky
 
+    #framework.config.default_ingestion_event = "add_only"
+
     # update proc table argument
     if args.proctab:
         framework.context.pipeline_logger.info(
@@ -205,7 +207,7 @@ def main():
     framework.context.proctab.read_proctab(framework.config.instrument.procfile)
 
     framework.logger.info("Framework initialized")
-
+    print("=====================")
     # start queue manager only (useful for RPC)
     if args.queue_manager_only:
         # The queue manager runs forever.
@@ -215,8 +217,9 @@ def main():
     # ingest an entire directory, trigger "next_file" (which is an option
     # specified in the config file) on each file,
     # optionally continue to monitor if -m is specified
+        print("=====================")
     elif args.dirname is not None:
-
+        print("++++++++++++")
         framework.ingest_data(args.dirname, None, args.monitor)
 
     framework.config.instrument.wait_for_event = args.wait_for_event
