@@ -242,7 +242,9 @@ scalesdrp/primitives/SubtractDark.py
 scalesdrp/primitives/SubtractOverscan.py
 scalesdrp/primitives/TrimOverscan.py
 scalesdrp/primitives/__init__.py
+scalesdrp/primitives/bpm_correction.py
 scalesdrp/primitives/fitramp.py
+scalesdrp/primitives/linearity.py
 scalesdrp/primitives/reference.py
 scalesdrp/primitives/robust.py
 scalesdrp/primitives/scales_file_primitives.py

@@ -40,14 +40,8 @@ class Scales_pipeline(BasePipeline):
                                       "ramp_fit"),
         "ramp_fit":                  ("RampFit",
                                       "science_ramp_fitting",
-                                      "bpm_correction"),
-        "bpm_correction":            ("BPMCorrect",
-                                      "bpm_correction_started",
-                                      "object_flag_saturation"),
-        "object_flag_saturation":    ("FlagSaturation", #rewrite and should come before rampfit
-                                      "object_flag_saturation_started",
                                       "object_subtract_dark"),
-        "object_subtract_dark":      ("SubtractDark", #rewrite, optional depends on SNR of the dark frame available
+        "object_subtract_dark":      ("SubtractDark", #rewrite as optional
                                       "subtract_dark started",
                                       "object_correct_gain"),
         "object_correct_gain":       ("CorrectGain",
