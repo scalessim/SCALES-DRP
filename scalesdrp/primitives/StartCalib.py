@@ -191,14 +191,14 @@ class StartCalib(BasePrimitive):
         if nim_s < 6:
             print('Number of reads are less than 5, starting a stright line fit to the reads')
             reads = input_read[:nim_s, :, :]
-            read_times = np.arange(nim_s).astype(float)*read_time
+            read_times = np.linspace(0, total_exptime, nim_s)
             output_fitramp_final = fit_slope_image(reads, read_times,SIG_map_scaled)
         else:
             sci_im_original_units = input_read[:nim_s, :, :]
             sci_im_scaled = sci_im_original_units / FLUX_SCALING_FACTOR
             sci_im_with_jumps_scaled = sci_im_scaled.copy()
             ols_t_global = np.arange(nim_s)
-            readtimes_for_covar_sci = t = np.linspace(0, total_exptime, nim_s)
+            readtimes_for_covar_sci = np.linspace(0, total_exptime, nim_s)
             B_ols_sci = np.zeros((2048, 2048), dtype=float)
             for i_r in range(2048):
                 for j_c in range(2048):
@@ -310,7 +310,7 @@ class StartCalib(BasePrimitive):
 
                     slope = self.ramp_fit(sci_im_full_original1,total_exptime=readtime)
                     filled, nanmask = self.inpaint_nearest_fast(slope)
-                    ramp_image_ouput1 = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                    ramp_image_ouput = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
                     self.logger.info("+++++++++++ ramp fitting completed +++++++++++")
                     
                     #ramp_image_ouput = bpm.apply_full_correction(ramp_image_ouput1,obsmode)
