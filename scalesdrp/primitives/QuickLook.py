@@ -43,43 +43,44 @@ class QuickLook(BasePrimitive):
         self.logger.info("+++++++++++ FITS file saved +++++++++++")
         return output_path
 
-    #def plot_png_save(self,data,output_dir,input_filename,suffix,overwrite=True):
-    #    base_name = os.path.basename(input_filename)
-    #    file_root, file_ext = os.path.splitext(base_name)
-    #    file_ext = '.png'
-    #    output_filename = f"{file_root}{suffix}{file_ext}"
-    #    plot_output_dir = os.path.join(output_dir, 'plots')
-    #    os.makedirs(plot_output_dir, exist_ok=True)
-    #    output_path = os.path.join(plot_output_dir, output_filename)
-    #    fig = plt.figure(figsize=(8, 8))
-    #    im = plt.imshow(data,origin='lower')
-    #    cbar = plt.colorbar(im, label='DN/s')
-    #    cbar.ax.tick_params(labelsize=14)
-    #    plt.xticks(fontsize=14)
-    #    plt.yticks(fontsize=14)
-    #    plt.savefig(output_path)
-    #    plt.show()
-        #self.logger.info("+++++++++++ Image saved +++++++++++")
-    #    return 
-
-    def plot_png_save(self,data,output_dir,input_filename,suffix):
-        import threading
-        print("Thread name:", threading.current_thread().name)
+    def plot_png_save(self,data,output_dir,input_filename,suffix,overwrite=True):
         base_name = os.path.basename(input_filename)
-        file_root,_ = os.path.splitext(base_name)
-        output_filename = f"{file_root}{suffix}.png"
+        file_root, file_ext = os.path.splitext(base_name)
+        file_ext = '.png'
+        output_filename = f"{file_root}{suffix}{file_ext}"
         plot_output_dir = os.path.join(output_dir, 'plots')
         os.makedirs(plot_output_dir, exist_ok=True)
         output_path = os.path.join(plot_output_dir, output_filename)
-        fig,ax = plt.subplots(figsize=(8, 8))
-        im = ax.imshow(data,origin='lower',cmap='viridis')
+        fig = plt.figure(figsize=(8, 8))
+        im = plt.imshow(data,origin='lower')
         cbar = plt.colorbar(im, label='DN/s')
         cbar.ax.tick_params(labelsize=14)
-        ax.tick_params(axis="both", labelsize=14)
-        ax.set_title(f"{file_root}{suffix}", fontsize=14)
-        mpl_plot(fig=fig,show=True, save=True, filename=output_path)
-        mpl_clear()
-        return output_path
+        plt.title(f"{file_root}{suffix}", fontsize=14)
+        plt.xticks(fontsize=14)
+        plt.yticks(fontsize=14)
+        plt.savefig(output_path)
+        #plt.show()
+        #self.logger.info("+++++++++++ Image saved +++++++++++")
+        return 
+
+    #def plot_png_save(self,data,output_dir,input_filename,suffix):
+    #    import threading
+    #    print("Thread name:", threading.current_thread().name)
+    #    base_name = os.path.basename(input_filename)
+    #    file_root,_ = os.path.splitext(base_name)
+    #    output_filename = f"{file_root}{suffix}.png"
+    #    plot_output_dir = os.path.join(output_dir, 'plots')
+    #    os.makedirs(plot_output_dir, exist_ok=True)
+    #    output_path = os.path.join(plot_output_dir, output_filename)
+    #    fig,ax = plt.subplots(figsize=(8, 8))
+    #    im = ax.imshow(data,origin='lower',cmap='viridis')
+    #    cbar = plt.colorbar(im, label='DN/s')
+    #    cbar.ax.tick_params(labelsize=14)
+    #    ax.tick_params(axis="both", labelsize=14)
+    #    ax.set_title(f"{file_root}{suffix}", fontsize=14)
+    #    mpl_plot(fig=fig,show=True, save=True, filename=output_path)
+    #    mpl_clear()
+    #    return output_path
 
 
     def masked_smooth_fast(self,filled, nanmask, sigma=1.25):
