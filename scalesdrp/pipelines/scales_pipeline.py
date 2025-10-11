@@ -78,9 +78,9 @@ class Scales_pipeline(BasePipeline):
             return False
 
         groupid = action.args.groupid
-        camera = action.args.ccddata.header['MODE'].upper()
-        self.context.pipeline_logger.info("******* GROUPID is %s " %
-                                          action.args.groupid)
+        camera = action.args.ccddata.header['OBSMODE'].upper()
+        #self.context.pipeline_logger.info("******* GROUPID is %s " %
+        #                                  action.args.groupid)
         self.context.pipeline_logger.info(
             "******* STATEID is %s (%s) " %
             (action.args.ccddata.header["STATENAM"],

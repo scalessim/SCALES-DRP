@@ -139,11 +139,13 @@ class RampFit(BasePrimitive):
         DEFAULT_SIG_FALLBACK_SCALED = 5.0 / FLUX_SCALING_FACTOR 
         JUMP_THRESH_ONEOMIT = 20.25 #4.5 sigma
         JUMP_THRESH_TWOOMIT = 23.8
-        total_exptime = 300.0 #self.action.args.ccddata.header['RLEXPT']
+        total_exptime = self.action.args.ccddata.header['EXPTIME']
         calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
         SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
 
-        sci_im_full_original = reference.reffix_hxrg(self.action.args.ccddata.data, nchans=4, fixcol=True)
+        input_data = self.action.args.ccddata.data
+        print(input_data.shape)
+        sci_im_full_original = reference.reffix_hxrg(input_data, nchans=4, fixcol=True)
         self.logger.info("refpix and 1/f correction completed")
         #saturation_map = linearity.create_saturation_map_by_slope(
         #    science_ramp=sci_im_full_original1,

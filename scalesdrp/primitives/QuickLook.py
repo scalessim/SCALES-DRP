@@ -275,7 +275,7 @@ class QuickLook(BasePrimitive):
             obs_mode = hdr.get("OBSMODE", "")
             ifs_mode = hdr.get("IFSMODE", "")
             last_file =  hdr.get("LASTFILE", "")
-            read_time = hdr.get("READTIME", "")
+            read_time = hdr.get("EXPTIME", "")
             file_name = hdr.get("OFNAME", "")
 
             NUM_FRAMES_FROM_SCIENCE = hdr.get("NREADS", "")
@@ -284,7 +284,7 @@ class QuickLook(BasePrimitive):
             n_ext = len(hdul)
             print('number of extension = ',n_ext)
             t0 = time.time()
-            if file_name == filename:
+            if filename == filename:
                 if obs_mode == "IMAGING":
                     if n_ext == 1:
                         data_1 = hdul[0].data

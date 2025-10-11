@@ -291,9 +291,9 @@ class StartCalib(BasePrimitive):
                     try:
                         with fits.open(filename) as hdulist:
                             #sci_im_full_original1 = hdulist[0]
-                            sci_im_full_original1 = hdulist[0].data
+                            sci_im_full_original1 = hdulist[1].data
                             data_header = hdulist[0].header
-                            readtime = data_header['RLEXPT']
+                            readtime = data_header['EXPTIME']
                     except Exception as e:
                         self.logger.error(f"Failed to read {filename}: {e}")
 

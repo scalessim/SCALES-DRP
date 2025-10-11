@@ -29,14 +29,14 @@ class SpectralExtract(BasePrimitive):
     def __init__(self, action, context):
         BasePrimitive.__init__(self, action, context)
         self.logger = context.pipeline_logger
-        self.logger.info("Spectral Extract: object created")
+        #self.logger.info("Spectral Extract: object created")
 
     def _perform(self):
         self.logger.info("Spectral Extraction Started")
         tab = self.context.proctab.search_proctab(
             frame=self.action.args.ccddata, target_type='OBJECT',
             nearest=True)
-        self.logger.info("%d object frames found" % len(tab))
+        #self.logger.info("%d object frames found" % len(tab))
 
         is_obj = ('OBJECT' in self.action.args.ccddata.header['IMTYPE'])
 
@@ -292,6 +292,7 @@ class SpectralExtract(BasePrimitive):
     
             data_image = self.action.args.ccddata.data
             data_vector_d = data_image.flatten().astype(np.float64)
+
             R_for_extract = load_npz(calib_path+'QLmat_new.npz')
             R_matrix = load_npz(calib_path+'C2mat_new.npz')
         

@@ -10,7 +10,7 @@ class Proctab:
         self.proctab = None
 
     def new_proctab(self):
-        cnames = ('FRAMENO', 'CID', 'DID', 'TYPE', 'GRPID', 'TTIME', 'MODE',
+        cnames = ('FRAMENO', 'CID', 'DID', 'TYPE', 'GRPID', 'TTIME', 'OBSMODE',
                   'IFU','GRAT','GANG','CWAVE','BIN','FILT','MJD',
                   'STAGE', 'SUFF', 'OFNAME', 'TARGNAME', 'filename')
         dtypes = ('int32', 'S24', 'int64', 'S9', 'S12', 'float64', 'S4',
@@ -95,7 +95,7 @@ class Proctab:
             #    dto = frame.header['DATE-OBS']
             #    fno = frame.header['FRAMENO']
             #    frame.header['GROUPID'] = "%s-%s" % (dto, fno)
-            cam = frame.header['MODE'].upper()
+            cam = frame.header['OBSMODE'].upper()
             if 'LOWRES' in cam:
                 grnam = frame.header['BGRATNAM']
                 grang = frame.header['BGRANGLE']
@@ -147,9 +147,9 @@ class Proctab:
         if target_type is not None and self.proctab is not None:
             self.log.info('Looking for %s frames' % target_type)
             # get relevant mode (lowres or medres)
-            self.log.info('Observing Mode is %s' % frame.header['MODE'])
-            tab = self.proctab[(self.proctab['MODE'] ==
-                                frame.header['MODE'].upper().strip())]
+            self.log.info('Observing Mode is %s' % frame.header['OBSMODE'])
+            tab = self.proctab[(self.proctab['OBSMODE'] ==
+                                frame.header['OBSMODE'].upper().strip())]
             # get target type images
             tab = tab[(self.proctab['TYPE'] == target_type)]
             self.log.info('Target type is %s' % target_type)
@@ -209,8 +209,8 @@ class Proctab:
 
     def in_proctab(self, frame):
         # get relevant mode (lowres or medres)
-        tab = self.proctab[(self.proctab['MODE'] ==
-                            frame.header['MODE'].upper().strip())]
+        tab = self.proctab[(self.proctab['OBSMODE'] ==
+                            frame.header['OBSMODE'].upper().strip())]
         imno_list = tab['MJD']
         if frame.header['MJD'] in imno_list:
             return True

@@ -160,7 +160,7 @@ class ingest_file(BasePrimitive):
         Returns:
             0 for Blue channel, 1 for Red, and -1 for Unknown.
         """
-        camera = self.get_keyword('MODE').upper()
+        camera = self.get_keyword('OBSMODE').upper()
         if 'LOWRES' in camera:
             return 0
         elif 'MEDRES' in camera:
@@ -565,24 +565,24 @@ class ingest_file(BasePrimitive):
         # AMPMODE
         out_args.ampmode = self.ampmode()
         # BINNING
-        out_args.xbinsize, out_args.ybinsize = \
-            map(int, self.get_keyword('BINNING').split(','))
+        #out_args.xbinsize, out_args.ybinsize = \
+        #    map(int, self.get_keyword('BINNING').split(','))
         # IFUNUM
-        out_args.ifunum = int(self.get_keyword('IFUNUM'))
+        #out_args.ifunum = int(self.get_keyword('IFUNUM'))
         # IFUNAM
-        out_args.ifuname = self.get_keyword('IFUNAM')
+        #out_args.ifuname = self.get_keyword('IFUNAM')
         # PLOTLABEL
         #out_args.plotlabel = self.plotlabel()
         # STDLABEL
        # out_args.stdlabel = self.stdlabel()
         # ILUM
-        out_args.illum = self.illum()
+        #out_args.illum = self.illum()
         # MAPCCD
-        out_args.map_ccd = self.map_ccd(out_args.xbinsize, out_args.ybinsize)
+        #out_args.map_ccd = self.map_ccd(out_args.xbinsize, out_args.ybinsize)
         # CALIBRATION LAMP
-        out_args.calibration_lamp = self.calibration_lamp()
+        #out_args.calibration_lamp = self.calibration_lamp()
         # TTIME
-        out_args.ttime = self.get_keyword('TTIME')
+        #out_args.ttime = self.get_keyword('TTIME')
 
         return out_args
 
@@ -715,14 +715,24 @@ def scales_fits_reader(file):
         hdul.close()
         raise ValueError(f"FITS file '{file}' does not have a valid PRIMARY HDU with data.")
 
-    primary_data = primary_hdu.data
-    primary_shape = primary_data.shape
-    primary_ndim = primary_data.ndim
+    #primary_data = primary_hdu.data
+    #primary_shape = primary_data.shape
+    #primary_ndim = primary_data.ndim
     
-    print(f"  Primary data found with {primary_ndim} dimensions and shape {primary_shape}.")
+    #print(f"  Primary data found with {primary_ndim} dimensions and shape {primary_shape}.")
+    cube_hdu = None
+    for i, hdu in enumerate(hdul[:2]):
+        if hasattr(hdu, "data") and hdu.data is not None:
+            if hdu.data.ndim == 3:
+                cube_hdu = hdu
+                print(f"[INFO] Found 3D data in HDU {i} with shape {hdu.data.shape}")
+                break
+    if cube_hdu is None:
+        hdul.close()
+        raise ValueError(f"FITS file '{file}' contains no valid 3D data cube in HDU 0 or 1.")
 
-
-    ccddata = KCCDData(primary_data, meta=primary_hdu.header, unit='adu')
+    #ccddata = KCCDData(np.array(primary_data), meta=primary_hdu.header, unit='adu')
+    ccddata = KCCDData(np.array(cube_hdu.data, dtype=np.float64),meta=primary_hdu.header, unit='adu')
 
     read_imgs = 1
     read_tabs = 0
@@ -751,25 +761,25 @@ def scales_fits_reader(file):
     # prepare for floating point
     ccddata.data = ccddata.data.astype(np.float64)
     # Fix red headers
-    fix_header(ccddata)
+    #fix_header(ccddata)
     # Check for CCDCFG keyword
-    if 'CCDCFG' not in ccddata.header:
-        ccdcfg = ccddata.header['CCDSUM'].replace(" ", "")
-        ccdcfg += "%1d" % ccddata.header['CCDMODE']
-        ccdcfg += "%02d" % ccddata.header['GAINMUL']
-        ccdcfg += "%02d" % ccddata.header['AMPMNUM']
-        ccddata.header['CCDCFG'] = ccdcfg
+    #if 'CCDCFG' not in ccddata.header:
+    #    ccdcfg = ccddata.header['CCDSUM'].replace(" ", "")
+    #    ccdcfg += "%1d" % ccddata.header['CCDMODE']
+    #    ccdcfg += "%02d" % ccddata.header['GAINMUL']
+    #    ccdcfg += "%02d" % ccddata.header['AMPMNUM']
+    #    ccddata.header['CCDCFG'] = ccdcfg
 
-    if ccddata:
-        if 'BUNIT' in ccddata.header:
-            ccddata.unit = ccddata.header['BUNIT']
-            if ccddata.uncertainty:
-                ccddata.uncertainty.unit = ccddata.header['BUNIT']
+    #if ccddata:
+    #    if 'BUNIT' in ccddata.header:
+    #        ccddata.unit = ccddata.header['BUNIT']
+    #        if ccddata.uncertainty:
+    #            ccddata.uncertainty.unit = ccddata.header['BUNIT']
             # print("setting image units to " + ccddata.header['BUNIT'])
 
-    logger.info("<<< read %d imgs and %d tables out of %d hdus in %s" %
-                (read_imgs, read_tabs, len(hdul), file))
-    hdul.close()
+    #logger.info("<<< read %d imgs and %d tables out of %d hdus in %s" %
+    #            (read_imgs, read_tabs, len(hdul), file))
+    #hdul.close()
     return ccddata, table
 
 
@@ -1007,7 +1017,7 @@ def fix_header(ccddata):
 
     """
     # are we lowres?
-    if 'LOWRES' in ccddata.header['MODE'].upper():
+    if 'LOWRES' in ccddata.header['OBSMODE'].upper():
         gainmul = ccddata.header['GAINMUL']
         namps = ccddata.header['NVIDINP']
         for ia in range(namps):
@@ -1015,7 +1025,7 @@ def fix_header(ccddata):
             gain = blue_amp_gain[gainmul][ampid]
             ccddata.header['GAIN%d' % (ia+1)] = gain
     # are we medres?
-    elif 'MEDRES' in ccddata.header['MODE'].upper():
+    elif 'MEDRES' in ccddata.header['OBSMODE'].upper():
         # Fix red headers during Caltech AIT
         if 'TELESCOP' not in ccddata.header:
             # Add DCS keywords
