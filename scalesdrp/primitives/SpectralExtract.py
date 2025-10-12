@@ -38,7 +38,7 @@ class SpectralExtract(BasePrimitive):
             nearest=True)
         #self.logger.info("%d object frames found" % len(tab))
 
-        is_obj = ('OBJECT' in self.action.args.ccddata.header['IMTYPE'])
+        is_obj = ('LOWRES' in self.action.args.ccddata.header['OBSMODE'])
 
 
         def optimal_extract_with_error(
@@ -270,22 +270,22 @@ class SpectralExtract(BasePrimitive):
         if is_obj:
 
             SCALES_CENTER_MAP = {
-                'LOWRES-SED': (54, 54),
-                'LOWRES-K': (50, 60),
-                'LOWRES-L': (50, 60),
-                'LOWRES-M': (50, 60),
-                'LOWRES-H20': (50, 60),
-                'LOWRES-PAH': (50, 60),
-                'MEDRES-K': (50, 60),
-                'MEDRES-L': (50, 60),
-                'MEDRES-M': (50, 60),
+                'LowRes-SED': (54, 54),
+                'LowRes-K': (50, 60),
+                'LowRes-L': (50, 60),
+                'LowRes-M': (50, 60),
+                'LowRes-H20': (50, 60),
+                'LowRes-PAH': (50, 60),
+                'MedRes-K': (50, 60),
+                'MedRes-L': (50, 60),
+                'MedRes-M': (50, 60),
             }
     
             SCALES_DEFAULT_CENTER = (54, 54)
             calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
             readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
             var_read_vector = (readnoise.flatten().astype(np.float64))**2
-            GAIN = self.action.args.ccddata.header['GAIN']
+            GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             IMG_DIM = 2048
             FLUX_SHAPE_3D = (54, 108, 108)
             N_PIXELS = IMG_DIM * IMG_DIM
@@ -355,9 +355,9 @@ class SpectralExtract(BasePrimitive):
                 output_dir=self.config.instrument.output_directory,
                 suffix="opt_cube")
 
-        self.context.proctab.update_proctab(frame=self.action.args.ccddata, suffix="cube", newtype='OBJECT',
-                filename=self.action.args.ccddata.header['OFNAME'])
-        self.context.proctab.write_proctab(
-                tfil=self.config.instrument.procfile)
+        #self.context.proctab.update_proctab(frame=self.action.args.ccddata, suffix="cube", newtype='OBJECT',
+        #        filename=self.action.args.ccddata.header['OFNAME'])
+        #self.context.proctab.write_proctab(
+        #        tfil=self.config.instrument.procfile)
         return self.action.args
     # END: class LeastExtract()

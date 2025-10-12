@@ -18,7 +18,6 @@ import matplotlib.pyplot as plt
 import time
 from scipy.optimize import leastsq
 from scipy.signal import savgol_filter
-from scipy.ndimage import distance_transform_edt, gaussian_filter
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
 import matplotlib.pyplot as plt
 
@@ -82,141 +81,51 @@ class QuickLook(BasePrimitive):
     #    mpl_clear()
     #    return output_path
 
-
-    def masked_smooth_fast(self,filled, nanmask, sigma=1.25):
-        """Smooth only inside bbox around NaNs; keep valid pixels fixed."""
-        out = np.asarray(filled, dtype=np.float32).copy()
-        (ys, xs), ok = self._bbox(nanmask)
-        if not ok:
-            return out
-        submask = nanmask[ys, xs]
-        subimg  = out[ys, xs]
-        sm = gaussian_filter(subimg, sigma=sigma, mode='nearest')
-        dist_inside = distance_transform_edt(submask.astype(np.uint8))
-        blend = np.clip(dist_inside / (3.0 * sigma), 0.0, 1.0).astype(np.float32)
-        subimg[submask] = (1 - blend[submask]) * subimg[submask] + blend[submask] * sm[submask]
-        out[ys, xs] = subimg
-        #self.logger.info("Ramp fitting completed")
-        return out
-
-    def inpaint_nearest_fast(self,img, nanmask):
-        """Do the EDT only on the small bbox around NaNs."""
-        out = np.asarray(img, dtype=np.float32).copy()
-        (ys, xs), ok = self._bbox(nanmask)
-        if not ok:
-            return out
-        submask = nanmask[ys, xs]
-        subimg  = out[ys, xs]
-        _, (iy, ix) = distance_transform_edt(submask, return_indices=True)
-        subimg[submask] = subimg[iy[submask], ix[submask]]
-        out[ys, xs] = subimg
-        return out
-
-    def _bbox(self,mask, pad=16):
-        ys, xs = np.where(mask)
-        if ys.size == 0:
-            return (slice(0,0), slice(0,0)), False
-        y0 = max(0, ys.min() - pad)
-        y1 = min(mask.shape[0], ys.max() + pad + 1)
-        x0 = max(0, xs.min() - pad)
-        x1 = min(mask.shape[1], xs.max() + pad + 1)
-        return (slice(y0, y1), slice(x0, x1)), True
-
-    def slope_linear(self,
-        ims, *,
-        read_time=None, times=None,
-        sat_thresh=4096.0,   # ADC full-well (DN)
-        nl_frac=0.7,         # Use only DN < nl_frac * sat_thresh (e.g. 0.6–0.8)
-        drop_first_n=3,      # Skip early unstable reads
-        min_reads=6,         # Require at least this many valid reads
-        tile=(256, 256),     # Process in spatial tiles to reduce RAM
-        dtype=np.float32,):
+    def adaptive_weighted_ramp_fit(self,ramp, read_time, cutoff_frac=0.75, sat_level=4096.0, tile=(256,256)):
         """
-        Per-pixel linear fit y(t) = a + b*t using only the *strictly-linear* portion
-        of each pixel's ramp.
-
-        Returns
-        -------
-        slope : (Y,X) array, float32
-            Fitted slope (DN/s)
-        nanmask : (Y,X) boolean array
-            True where the slope could not be reliably fit
+        Adaptive weighted ramp fit (thread-safe, DRP-compatible version).
+        Processes the ramp in tiles to stay memory- and cache-efficient.
         """
+        n_reads, n_rows, n_cols = ramp.shape
+        read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
+        slope = np.zeros((n_rows, n_cols), dtype=np.float32)
+        eps = 1e-6
 
-        ims = np.asarray(ims, dtype=dtype)
-        assert ims.ndim == 3, "ims must be (N, Y, X)"
-        N0, Y, X = ims.shape
-
-        # --- Time axis in seconds ---
-        if times is None:
-            if read_time is None:
-                raise ValueError("Provide read_time or times")
-            t = np.arange(N0, dtype=np.float32) * float(read_time)
-        else:
-            t = np.asarray(times, dtype=np.float32)
-            if t.shape != (N0,):
-                raise ValueError("times must have shape (N,)")
-
-        # Drop first few reads (settling)
-        if drop_first_n > 0:
-            ims = ims[drop_first_n:]
-            t = t[drop_first_n:]
-        N = ims.shape[0]
-
-        # Precompute time powers
-        t1 = t
-        t2 = t1 * t1
-        lin_dn = None if (sat_thresh is None or nl_frac is None) else np.float32(nl_frac * sat_thresh)
-
-        # Prepare outputs
-        slope = np.full((Y, X), np.nan, dtype=np.float32)
-        nanmask = np.ones((Y, X), dtype=bool)
-
-        # --- Tile loop to keep memory low ---
         Ty, Tx = tile
-        for y0 in range(0, Y, Ty):
-            y1 = min(Y, y0 + Ty)
-            for x0 in range(0, X, Tx):
-                x1 = min(X, x0 + Tx)
-
-                cube = ims[:, y0:y1, x0:x1]     # (N, ty, tx)
+        for y0 in range(0, n_rows, Ty):
+            y1 = min(n_rows, y0 + Ty)
+            for x0 in range(0, n_cols, Tx):
+                x1 = min(n_cols, x0 + Tx)
+                cube = ramp[:, y0:y1, x0:x1]  # (N, ty, tx)
                 ty, tx = cube.shape[1:]
-                k = ty * tx
-                y = cube.reshape(N, k)          # (N, k)
+                N = cube.shape[0]
 
-                # Valid samples: finite and below nonlinearity DN
-                valid = np.isfinite(y)
-                if lin_dn is not None:
-                    valid &= (y < lin_dn)
+                # Find cutoff index per pixel where counts exceed cutoff_frac * sat_level
+                cutoff_mask = cube > (cutoff_frac * sat_level)
+                # argmax returns 0 if all False — handle that
+                cutoff_idx = np.argmax(cutoff_mask, axis=0)
+                cutoff_idx[~np.any(cutoff_mask, axis=0)] = N - 1
 
-                w = valid.astype(np.float32)
-
-                # Need enough valid reads
-                S0 = w.sum(axis=0)
-                good = (S0 >= min_reads)
-                if not np.any(good):
-                    nanmask[y0:y1, x0:x1] = True
-                    continue
+                # Build weights centered around cutoff index
+                idx = np.arange(N)[:, None, None]
+                w = np.exp(-((idx - cutoff_idx)**2) / 8.0).astype(np.float32)
 
                 # Weighted sums
-                St  = t1 @ w                   # Σ w t
-                Stt = t2 @ w                   # Σ w t²
-                wy  = w * y
-                Sy  = wy.sum(axis=0)           # Σ w y
-                Sty = t1 @ wy                  # Σ w t y
+                t = read_times[:, None, None]
+                y = cube
+                S0  = np.sum(w, axis=0)
+                St  = np.sum(w * t, axis=0)
+                Stt = np.sum(w * t * t, axis=0)
+                Sy  = np.sum(w * y, axis=0)
+                Sty = np.sum(w * t * y, axis=0)
 
-                # Centered linear fit per pixel
-                Var_t = Stt - (St * St) / np.maximum(S0, 1)
-                Cov_ty = Sty - (St * Sy) / np.maximum(S0, 1)
+                denom = S0 * Stt - St * St
+                valid = denom > eps
+                local_slope = np.full_like(S0, np.nan, dtype=np.float32)
+                local_slope[valid] = (S0[valid] * Sty[valid] - St[valid] * Sy[valid]) / denom[valid]
+                slope[y0:y1, x0:x1] = local_slope
 
-                b = np.full(k, np.nan, dtype=np.float32)
-                valid_fit = good & (Var_t > 0)
-                b[valid_fit] = Cov_ty[valid_fit] / Var_t[valid_fit]
-
-                slope[y0:y1, x0:x1] = b.reshape(ty, tx)
-                nanmask[y0:y1, x0:x1] = ~valid_fit.reshape(ty, tx)
-
-        return slope, nanmask
+        return slope
 
 
     def optimal_extract_with_error(self,
@@ -299,17 +208,8 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                         elif data_1.ndim == 3:
                             img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                            slope, nanmask = self.slope_linear(
-                                img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                            slope_filled = self.adaptive_weighted_ramp_fit(
+                                img_corr,read_time=read_time)
                             t1 = time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
@@ -339,16 +239,8 @@ class QuickLook(BasePrimitive):
                             suffix='_server')
                         img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                        slope, nanmask = self.slope_linear(
-                            img_corr,
-                            read_time=read_time,
-                            sat_thresh=4000.0,
-                            nl_frac=0.7,
-                            drop_first_n=3,
-                            min_reads=6,
-                            tile=(512, 512))
-                        filled = self.inpaint_nearest_fast(slope, nanmask)
-                        slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                        slope_filled = self.adaptive_weighted_ramp_fit(
+                            img_corr,read_time=read_time)
                         t1 = time.time()
                         self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                         self.plot_png_save(
@@ -381,16 +273,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
                                     data = slope_filled,
@@ -420,16 +305,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
                                 data = slope_filled,
@@ -472,17 +350,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-                                
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
                                     data = slope_filled,
@@ -512,17 +382,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
                                 data = slope_filled,
@@ -566,17 +428,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-                                
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
                                     data = slope_filled,
@@ -606,16 +460,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
                                 data = slope_filled,
@@ -659,17 +506,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-                                
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 t1  = time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
@@ -700,17 +539,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
@@ -756,16 +587,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
@@ -795,16 +619,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
@@ -849,17 +666,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
@@ -890,16 +699,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
@@ -946,17 +748,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-                                
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
@@ -987,16 +781,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             t1 = time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
@@ -1039,17 +826,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
@@ -1080,16 +859,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
@@ -1133,16 +905,9 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope, nanmask = self.slope_linear(
+                                slope_filled = self.adaptive_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time,
-                                    sat_thresh=4000.0,
-                                    nl_frac=0.7,
-                                    drop_first_n=3,
-                                    min_reads=6,
-                                    tile=(512, 512))
-                                filled = self.inpaint_nearest_fast(slope, nanmask)
-                                slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                    read_time=read_time)
                                 t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 self.plot_png_save(
@@ -1173,16 +938,9 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope, nanmask = self.slope_linear(
+                            slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
-                                read_time=read_time,
-                                sat_thresh=4000.0,
-                                nl_frac=0.7,
-                                drop_first_n=3,
-                                min_reads=6,
-                                tile=(512, 512))
-                            filled = self.inpaint_nearest_fast(slope, nanmask)
-                            slope_filled = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
+                                read_time=read_time)
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(

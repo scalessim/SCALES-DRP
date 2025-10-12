@@ -28,6 +28,7 @@ from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
 import pkg_resources
 from scipy.ndimage import distance_transform_edt, gaussian_filter
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
+from tqdm import tqdm
 
 class StartCalib(BasePrimitive):
     """
@@ -87,21 +88,6 @@ class StartCalib(BasePrimitive):
             self.logger.info(f"Created {len(file_groups)} groups from data table.")
 
         return file_groups
-   
-
-    def ols_pack_parms(self,a, b, c): 
-        return np.array([a, b, c])
-
-    def ols_unpack_parms(self,p):
-        a_p, b_p, c_p = p
-        return a_p, b_p, c_p
-
-    def ols_model_fn(self,p_model): # Quadratic model
-        a_m, b_m, c_m = ols_unpack_parms(p_model)
-        global ols_t_global
-        if ols_t_global is None:
-            raise ValueError("Global time array 'ols_t_global' for OLS model_fn is not set.")
-        return a_m + b_m * ols_t_global + c_m * ols_t_global**2
 
 ############# ouput fits writing ##############################
     def fits_writer_steps(self,data,header,output_dir,input_filename,suffix,overwrite=True):
@@ -159,24 +145,54 @@ class StartCalib(BasePrimitive):
         x1 = min(mask.shape[1], xs.max() + pad + 1)
         return (slice(y0, y1), slice(x0, x1)), True
 
+    def adaptive_weighted_ramp_fit(self,ramp, read_time, cutoff_frac=0.75, sat_level=4096.0, tile=(256,256)):
+        """
+        Adaptive weighted ramp fit (thread-safe, DRP-compatible version).
+        Processes the ramp in tiles to stay memory- and cache-efficient.
+        """
+        n_reads, n_rows, n_cols = ramp.shape
+        read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
+        slope = np.zeros((n_rows, n_cols), dtype=np.float32)
+        eps = 1e-6
+
+        Ty, Tx = tile
+        for y0 in range(0, n_rows, Ty):
+            y1 = min(n_rows, y0 + Ty)
+            for x0 in range(0, n_cols, Tx):
+                x1 = min(n_cols, x0 + Tx)
+                cube = ramp[:, y0:y1, x0:x1]  # (N, ty, tx)
+                ty, tx = cube.shape[1:]
+                N = cube.shape[0]
+
+                # Find cutoff index per pixel where counts exceed cutoff_frac * sat_level
+                cutoff_mask = cube > (cutoff_frac * sat_level)
+                # argmax returns 0 if all False — handle that
+                cutoff_idx = np.argmax(cutoff_mask, axis=0)
+                cutoff_idx[~np.any(cutoff_mask, axis=0)] = N - 1
+
+                # Build weights centered around cutoff index
+                idx = np.arange(N)[:, None, None]
+                w = np.exp(-((idx - cutoff_idx)**2) / 8.0).astype(np.float32)
+
+                # Weighted sums
+                t = read_times[:, None, None]
+                y = cube
+                S0  = np.sum(w, axis=0)
+                St  = np.sum(w * t, axis=0)
+                Stt = np.sum(w * t * t, axis=0)
+                Sy  = np.sum(w * y, axis=0)
+                Sty = np.sum(w * t * y, axis=0)
+
+                denom = S0 * Stt - St * St
+                valid = denom > eps
+                local_slope = np.full_like(S0, np.nan, dtype=np.float32)
+                local_slope[valid] = (S0[valid] * Sty[valid] - St[valid] * Sy[valid]) / denom[valid]
+                slope[y0:y1, x0:x1] = local_slope
+        return slope
 ################## ramp fitting ############################
-    ols_t_global = None
 
-    def ols_pack_parms(self,a, b, c): 
-        return np.array([a, b, c])
 
-    def ols_unpack_parms(self,p):
-        a_p, b_p, c_p = p
-        return a_p, b_p, c_p
-
-    def ols_model_fn(self,p_model): # Quadratic model
-        a_m, b_m, c_m = ols_unpack_parms(p_model)
-        global ols_t_global
-        if ols_t_global is None:
-            raise ValueError("Global time array 'ols_t_global' for OLS model_fn is not set.")
-        return a_m + b_m * ols_t_global + c_m * ols_t_global**2
-
-    def ramp_fit(self,input_read,total_exptime):
+    def ramp_fiting(self,input_read,total_exptime):
         calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
         SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
         FLUX_SCALING_FACTOR = 1.0
@@ -189,7 +205,7 @@ class StartCalib(BasePrimitive):
         self.logger.info("refpix and 1/f correction completed")
         nim_s = input_read.shape[0]
         if nim_s < 6:
-            print('Number of reads are less than 5, starting a stright line fit to the reads')
+            self.logger.info('Number of reads are less than 5, starting a stright line fit to the reads')
             reads = input_read[:nim_s, :, :]
             read_times = np.linspace(0, total_exptime, nim_s)
             output_fitramp_final = fit_slope_image(reads, read_times,SIG_map_scaled)
@@ -247,6 +263,157 @@ class StartCalib(BasePrimitive):
             self.logger.info(f"  fitramp on the data took {end_time - start_time:.2f} seconds.")
         return output_fitramp_final
 
+    def ramp_fit(self,input_read, total_exptime):
+        """
+        Perform hybrid ramp fitting:
+        - tile-based sigma-clipped preprocessing of input reads
+        - slope_linear() fallback for all pixels
+        - fitramp for valid regions
+        - smooth blending and NaN handling
+        """
+        # === Helper: fast tile-based sigma clipping ===
+        def sigma_clip_ramp_inputs(science_ramp, sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128)):
+            """
+            Iteratively sigma-clip each pixel's ramp along the time axis, tile by tile.
+            Returns a boolean mask (True = keep read).
+            """
+            n_reads, n_rows, n_cols = science_ramp.shape
+            keep_mask = np.ones_like(science_ramp, dtype=bool)
+            Ty, Tx = tile
+
+            for y0 in tqdm(range(0, n_rows, Ty), desc="σ-clipping tiles"):
+                y1 = min(n_rows, y0 + Ty)
+                for x0 in range(0, n_cols, Tx):
+                    x1 = min(n_cols, x0 + Tx)
+
+                    cube = science_ramp[:, y0:y1, x0:x1]  # (N, ty, tx)
+                    N, ty, tx = cube.shape
+                    k = ty * tx
+                    y = cube.reshape(N, k)
+                    mask = np.isfinite(y)
+
+                    for _ in range(max_iter):
+                        valid_counts = mask.sum(axis=0)
+                        good = valid_counts >= min_reads
+                        if not np.any(good):
+                            break
+
+                        t = np.arange(N, dtype=np.float32)
+                        S0 = mask.sum(axis=0)
+                        St = t @ mask
+                        Stt = (t**2) @ mask
+                        wy = y * mask
+                        Sy = wy.sum(axis=0)
+                        Sty = t @ wy
+                        Var_t = Stt - (St * St) / np.maximum(S0, 1)
+                        Cov_ty = Sty - (St * Sy) / np.maximum(S0, 1)
+                        b = np.zeros(k, dtype=np.float32)
+                        valid = Var_t > 0
+                        b[valid] = Cov_ty[valid] / Var_t[valid]
+                        a = (Sy - b * St) / np.maximum(S0, 1)
+
+                        y_pred = a + np.outer(t, b)
+                        resid = (y - y_pred)
+                        resid[~mask] = np.nan
+                        std = np.nanstd(resid, axis=0)
+                        new_mask = np.abs(resid) < sigma_clip * std
+                        new_mask &= np.isfinite(y)
+                        if np.array_equal(new_mask, mask):
+                            break
+                        mask = new_mask
+
+                    keep_mask[:, y0:y1, x0:x1] = mask.reshape(N, ty, tx)
+
+            return keep_mask
+
+        # === Load calibration maps ===
+        calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+        FLUX_SCALING_FACTOR = 1.0
+        JUMP_THRESH_ONEOMIT = 20.25
+        JUMP_THRESH_TWOOMIT = 23.8
+
+        nim_s = input_read.shape[0]
+        read_times = np.linspace(0, total_exptime, nim_s)
+
+        # === Case 1: Few reads (simple linear fit) ===
+        if nim_s < 6:
+            self.logger.info('Few reads (<6): Performing direct slope fit...')
+            slope_map = self.adaptive_weighted_ramp_fit(
+                input_read,read_time=total_exptime)
+            return output_final
+
+        # === Case 2: Full ramp fitting ===
+        self.logger.info("Applying σ-clipping to input ramp (tile-based)...")
+        valid_reads_mask = sigma_clip_ramp_inputs(
+            input_read, sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128)
+        )
+
+        sci_im_scaled = input_read / FLUX_SCALING_FACTOR
+        Covar_obj = fitramp.Covar(read_times, pedestal=False)
+
+        # Apply sigma-clipped mask
+        masked_input = np.where(valid_reads_mask, sci_im_scaled, np.nan)
+        d_sci = masked_input[1:] - masked_input[:-1]
+
+        # === Precompute linear fallback (OLS) ===
+        self.logger.info("Computing initial guess for ramp fitting...")
+        B_ols_sci = self.adaptive_weighted_ramp_fit(
+            sci_im_scaled,
+            read_time=total_exptime)
+
+        # === fitramp fitting ===
+        output_final = np.empty((sci_im_scaled.shape[1], sci_im_scaled.shape[2]), dtype=float)
+        start_time = time.time()
+
+        for i in range(sci_im_scaled.shape[1]):
+            if i % 128 == 0:
+                print(f"  Fitting row {i}/{sci_im_scaled.shape[1]}...")
+
+            current_sig_for_row = SIG_map_scaled[i, :]
+            diffs_for_row = d_sci[:, i, :]
+            countrateguess = B_ols_sci[i, :]
+
+            # convert sigma-clipped mask to diffs2use
+            diffs2use = valid_reads_mask[1:, i, :] & valid_reads_mask[:-1, i, :]
+
+            try:
+                # Combine with fitramp’s own jump mask
+                diffs2use_fitramp, _ = fitramp.mask_jumps(
+                    diffs_for_row, Covar_obj, current_sig_for_row,
+                    threshold_oneomit=JUMP_THRESH_ONEOMIT,
+                    threshold_twoomit=JUMP_THRESH_TWOOMIT,
+                )
+                diffs2use &= diffs2use_fitramp
+
+                result = fitramp.fit_ramps(
+                    diffs_for_row, Covar_obj, current_sig_for_row,
+                    diffs2use=diffs2use,
+                    countrateguess=countrateguess,
+                    rescale=True,
+                )
+
+                valid = np.isfinite(result.countrate) & (
+                    result.countrate > 0.05 * np.nanmedian(countrateguess)
+                )
+                row_out = np.where(valid, result.countrate, countrateguess)
+
+            except Exception:
+                row_out = countrateguess  # fallback if fitramp fails entirely
+
+            output_final[i, :] = row_out * FLUX_SCALING_FACTOR
+
+        end_time = time.time()
+        self.logger.info(f"Ramp fitting completed in {end_time - start_time:.2f} seconds.")
+
+        # === Global smooth and cleanup ===
+        #bad_mask_global = (output_final <= 0) | ~np.isfinite(output_final)
+        #if np.any(bad_mask_global):
+        #    output_final = self.masked_smooth_fast(output_final, bad_mask_global, sigma=1.0)
+        #med = np.nanmedian(output_final[output_final > 0])
+        #output_final[np.isnan(output_final)] = med
+
+        return output_final
 ########################################### START MAIN ######################
 
     def _perform(self):
@@ -309,21 +476,19 @@ class StartCalib(BasePrimitive):
                     #    obsmode = obsmode)
 
                     slope = self.ramp_fit(sci_im_full_original1,total_exptime=readtime)
-                    filled, nanmask = self.inpaint_nearest_fast(slope)
-                    ramp_image_ouput = self.masked_smooth_fast(filled, nanmask, sigma=1.25)
                     self.logger.info("+++++++++++ ramp fitting completed +++++++++++")
                     
                     #ramp_image_ouput = bpm.apply_full_correction(ramp_image_ouput1,obsmode)
                     #self.logger.info("+++++++++++ BPM correction completed +++++++++++")
 
                     self.fits_writer_steps(
-                        data=ramp_image_ouput,
+                        data=slope,
                         header=data_header,
                         output_dir=self.action.args.dirname,
                         input_filename=filename,
                         suffix='_L1_ramp',
                         overwrite=True)
-                    final_corrected_image = ramp_image_ouput
+                    final_corrected_image = slope
                                 #self.context.proctab.new_proctab()
                                 #name1 = data_header['IMTYPE']
                                 
