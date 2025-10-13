@@ -186,6 +186,8 @@ class QuickLook(BasePrimitive):
             last_file =  hdr.get("LASTFILE", "")
             read_time = hdr.get("EXPTIME", "")
             file_name = hdr.get("OFNAME", "")
+            obj =       hdr.get("OBJECT", "")
+
 
             NUM_FRAMES_FROM_SCIENCE = hdr.get("NREADS", "")
             print(f"OBSMODE = {obs_mode}")
@@ -308,6 +310,7 @@ class QuickLook(BasePrimitive):
                             slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
+                            t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
                                 data = slope_filled,
@@ -322,10 +325,14 @@ class QuickLook(BasePrimitive):
                                 input_filename=filename,
                                 suffix='_quicklook',
                                 overwrite=True)
-                        if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                            R_matrix = load_npz(calib_path+'QLmat_new.npz')
+                        if (
+                            slope_filled is not None
+                            and os.path.exists(os.path.join(calib_path, "LowRes-K_QL_rectmat.npz"))
+                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+
+                            R_matrix = load_npz(calib_path+'LowRes-K_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
+                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
                             cube= cube1.reshape(54,108,108)
                             self.fits_writer_steps(
                                 data=cube,
@@ -385,6 +392,7 @@ class QuickLook(BasePrimitive):
                             slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
+                            t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
                                 data = slope_filled,
@@ -400,8 +408,12 @@ class QuickLook(BasePrimitive):
                                 suffix='_quicklook',
                                 overwrite=True)
 
-                        if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                            R_matrix = load_npz(calib_path+'QLmat_new.npz')
+                        if (
+                            slope_filled is not None
+                            and os.path.exists(os.path.join(calib_path, "LowRes-L_QL_rectmat.npz"))
+                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+
+                            R_matrix = load_npz(calib_path+'LowRes-L_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
                             cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
                             cube= cube1.reshape(54,108,108)
@@ -463,6 +475,7 @@ class QuickLook(BasePrimitive):
                             slope_filled = self.adaptive_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
+                            t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             self.plot_png_save(
                                 data = slope_filled,
@@ -478,8 +491,12 @@ class QuickLook(BasePrimitive):
                                 suffix='_quicklook',
                                 overwrite=True)
 
-                        if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                            R_matrix = load_npz(calib_path+'QLmat_new.npz')
+                        if (
+                            slope_filled is not None
+                            and os.path.exists(os.path.join(calib_path, "LowRes-M_QL_rectmat.npz"))
+                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+
+                            R_matrix = load_npz(calib_path+'LowRes-M_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
                             cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
                             cube= cube1.reshape(54,108,108)
@@ -558,8 +575,12 @@ class QuickLook(BasePrimitive):
                                 suffix='_quicklook',
                                 overwrite=True)
 
-                        if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                            R_matrix = load_npz(calib_path+'QLmat_new.npz')
+                        if (
+                            slope_filled is not None
+                            and os.path.exists(os.path.join(calib_path, "LowRes-KLM_QL_rectmat.npz"))
+                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+
+                            R_matrix = load_npz(calib_path+'LowRes-KLM_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
                             cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
                             cube= cube1.reshape(54,108,108)
@@ -638,8 +659,12 @@ class QuickLook(BasePrimitive):
                                 suffix='_quicklook',
                                 overwrite=True)
 
-                        if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                            R_matrix = load_npz(calib_path+'QLmat_new.npz')
+                        if (
+                            slope_filled is not None
+                            and os.path.exists(os.path.join(calib_path, "LowRes-KL_QL_rectmat.npz"))
+                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+
+                            R_matrix = load_npz(calib_path+'LowRes-KL_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
                             cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
                             cube= cube1.reshape(54,108,108)
@@ -718,8 +743,12 @@ class QuickLook(BasePrimitive):
                                 suffix='_quicklook',
                                 overwrite=True)
 
-                        if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                            R_matrix = load_npz(calib_path+'QLmat_new.npz')
+                        if (
+                            slope_filled is not None
+                            and os.path.exists(os.path.join(calib_path, "LowRes-Ls_QL_rectmat.npz"))
+                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+
+                            R_matrix = load_npz(calib_path+'LowRes-Ls_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
                             cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
                             cube= cube1.reshape(54,108,108)
