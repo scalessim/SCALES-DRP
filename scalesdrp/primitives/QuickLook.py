@@ -167,6 +167,102 @@ class QuickLook(BasePrimitive):
         self.logger.info(f"Optimal extraction finished in {t1:.4f} seconds.")
         return optimized_flux, flux_error
 
+    def iterative_sigma_weighted_ramp_fit4(self,ramp, read_time, gain=3.0, rn=5.0, max_iter=3, tile=(256, 256)):
+        n_reads, n_rows, n_cols = ramp.shape
+        read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
+        dt = np.mean(np.diff(read_times))
+        slope = np.zeros((n_rows, n_cols), dtype=np.float32)
+        bias = np.zeros_like(slope)
+
+        ie = np.index_exp[:, :, 0::2]
+        io = np.index_exp[:, :, 1::2]
+
+        Ty, Tx = tile
+        for y0 in range(0, n_rows, Ty):
+            y1 = min(n_rows, y0 + Ty)
+            for x0 in range(0, n_cols, Tx):
+                x1 = min(n_cols, x0 + Tx)
+                cube = ramp[:, y0:y1, x0:x1]  # (N, ty, tx)
+                N, ty, tx = cube.shape
+                shape = (ty, tx)
+                m = np.zeros(shape, dtype=np.float32)
+                b = np.zeros(shape, dtype=np.float32)
+                for iteration in range(max_iter):
+                    sig2 = np.maximum(cube / gain + rn**2, 1e-6)
+                    i = np.arange(N, dtype=np.float32)[:, None, None]
+                    S0  = np.sum(1.0 / sig2, axis=0)
+                    S1  = np.sum(i / sig2, axis=0)
+                    S2  = np.sum(i**2 / sig2, axis=0)
+                    S0x = np.sum(cube / sig2, axis=0)
+                    S1x = np.sum(i * cube / sig2, axis=0)
+                    ibar = S1 / S0
+                    mdt = (S1x - ibar * S0x) / np.maximum(S2 - ibar**2 * S0, 1e-8)
+                    m = mdt / dt
+                    b = S0x / S0 - mdt * ibar
+                    cube_model = b[None, :, :] + m[None, :, :] * i * dt
+                    cube = np.clip(cube_model, 0, None)  # keep stable iteration
+                slope[y0:y1, x0:x1] = m
+                bias[y0:y1, x0:x1] = b
+        return slope
+
+    def iterative_sigma_weighted_ramp_fit(
+        self, ramp1, read_time, gain=3.0, rn=5.0, max_iter=3, tile=(256, 256), do_swap=True):
+
+        n_reads, n_rows, n_cols = ramp1.shape
+        read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
+        dt = np.mean(np.diff(read_times))
+        ramp = np.empty_like(ramp1)
+        n_amps = 4
+        block = n_cols // n_amps
+        for a in range(n_amps):
+            x0, x1 = a * block, (a + 1) * block
+            sub = ramp1[..., x0:x1]
+            nsub = sub.shape[-1]
+            new_order = []
+            for i in range(0, nsub, 2):
+                if i + 1 < nsub:
+                    new_order.extend([i + 1, i])
+                else:
+                    new_order.append(i)
+            ramp[..., x0:x1] = sub[..., new_order]
+        slope = np.zeros((n_rows, n_cols), dtype=np.float32)
+        bias = np.zeros_like(slope)
+        Ty, Tx = tile
+        for y0 in range(0, n_rows, Ty):
+            y1 = min(n_rows, y0 + Ty)
+            for x0 in range(0, n_cols, Tx):
+                x1 = min(n_cols, x0 + Tx)
+                cube = ramp[:, y0:y1, x0:x1]
+                N, ty, tx = cube.shape
+                m_tile = np.zeros((ty, tx), dtype=np.float32)
+                b_tile = np.zeros_like(m_tile)
+                for col_slice, out_slice in [(np.index_exp[:, :, 0::2], (slice(None), slice(0, None, 2))),
+                    (np.index_exp[:, :, 1::2], (slice(None), slice(1, None, 2))),]:
+
+                    subcube = cube[col_slice]
+                    if subcube.size == 0:
+                        continue
+                    for iteration in range(max_iter):
+                        sig2 = np.maximum(subcube / gain + rn**2, 1e-6)
+                        i = np.arange(subcube.shape[0], dtype=np.float32)[:, None, None]
+                        S0 = np.sum(1.0 / sig2, axis=0)
+                        S1 = np.sum(i / sig2, axis=0)
+                        S2 = np.sum(i**2 / sig2, axis=0)
+                        S0x = np.sum(subcube / sig2, axis=0)
+                        S1x = np.sum(i * subcube / sig2, axis=0)
+                        ibar = S1 / S0
+                        mdt = (S1x - ibar * S0x) / np.maximum(S2 - ibar**2 * S0, 1e-8)
+                        m = mdt / dt
+                        b = S0x / S0 - mdt * ibar
+                        subcube = np.clip(b[None, :, :] + m[None, :, :] * i * dt, 0, None)
+                    m_tile[out_slice] = m
+                    b_tile[out_slice] = b
+                slope[y0:y1, x0:x1] = m_tile
+                bias[y0:y1, x0:x1] = b_tile
+        return slope
+
+
+
     def _perform(self):
         self.logger.info("+++++++++++ Quicklook Started +++++++++++")
 
@@ -181,13 +277,12 @@ class QuickLook(BasePrimitive):
         read_noise_var = SIG_map_scaled.flatten().astype(np.float64)**2
         with fits.open(input_data) as hdul:
             hdr = hdul[0].header
-            obs_mode = hdr.get("OBSMODE", "")
-            ifs_mode = hdr.get("IFSMODE", "")
-            last_file =  hdr.get("LASTFILE", "")
+            obs_mode = hdr.get("CAMERA", "")
+            ifs_mode = 'LowRes-K'#hdr.get("IFSMODE", "")
+            #last_file =  hdr.get("LASTFILE", "")
             read_time = hdr.get("EXPTIME", "")
-            file_name = hdr.get("OFNAME", "")
-            obj =       hdr.get("OBJECT", "")
-
+            #file_name = hdr.get("OFNAME", "")
+            #obj =       hdr.get("OBJECT", "")
 
             NUM_FRAMES_FROM_SCIENCE = hdr.get("NREADS", "")
             print(f"OBSMODE = {obs_mode}")
@@ -196,7 +291,7 @@ class QuickLook(BasePrimitive):
             print('number of extension = ',n_ext)
             t0 = time.time()
             if filename == filename:
-                if obs_mode == "IMAGING":
+                if obs_mode == "Im":
                     if n_ext == 1:
                         data_1 = hdul[0].data
                         if data_1 is None:
@@ -210,16 +305,16 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                         elif data_1.ndim == 3:
                             img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,read_time=read_time)
                             t1 = time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope_filled,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+                            #self.plot_png_save(
+                            #    data = slope_filled,
+                            #    output_dir=output_dir,
+                            #    input_filename=filename,
+                            #    suffix='_quicklook',
+                            #    overwrite=True)
                             self.fits_writer_steps(
                                 data=slope_filled,
                                 header=hdr,
@@ -230,8 +325,8 @@ class QuickLook(BasePrimitive):
                         else:
                             raise ValueError(f"Unexpected data shape: {data_1.shape}")
                     elif n_ext >= 2:
-                        img2d = hdul[0].data
-                        ramp3d = hdul[1].data
+                        img2d = hdul[1].data
+                        ramp3d = hdul[0].data
                         if img2d.ndim != 2 or ramp3d.ndim != 3:
                             raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
                         self.plot_png_save(
@@ -241,15 +336,15 @@ class QuickLook(BasePrimitive):
                             suffix='_server')
                         img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                        slope_filled = self.adaptive_weighted_ramp_fit(
+                        slope_filled = self.iterative_sigma_weighted_ramp_fit(
                             img_corr,read_time=read_time)
                         t1 = time.time()
                         self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                        self.plot_png_save(
-                            data = slope_filled,
-                            output_dir=output_dir,
-                            input_filename=filename,
-                            suffix='_quicklook')
+                        #self.plot_png_save(
+                        #    data = slope_filled,
+                        #    output_dir=output_dir,
+                        #    input_filename=filename,
+                        #    suffix='_quicklook')
                         self.fits_writer_steps(
                             data=slope_filled,
                             header=hdr,
@@ -258,7 +353,7 @@ class QuickLook(BasePrimitive):
                             suffix='_quicklook',
                             overwrite=True)
 
-                elif obs_mode == "LOWRES":
+                elif obs_mode == "IFS":
                     if ifs_mode == "LowRes-K":
                         print("IFSMODE is", ifs_mode)
                         if n_ext == 1:
@@ -275,16 +370,17 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
+                                t1 = time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
+                                #self.plot_png_save(
+                                #    data = slope_filled,
+                                #    output_dir=output_dir,
+                                #    input_filename=filename,
+                                #    suffix='_quicklook',
+                                #    overwrite=True)
                                 self.fits_writer_steps(
                                     data=slope_filled,
                                     header=hdr,
@@ -295,29 +391,29 @@ class QuickLook(BasePrimitive):
                             else:
                                 raise ValueError(f"Unexpected data shape: {data_1.shape}")
                         elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
+                            img2d = hdul[1].data
+                            ramp3d = hdul[0].data
                             if img2d.ndim != 2 or ramp3d.ndim != 3:
                                 raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
+                            #self.plot_png_save(
+                            #    data = img2d,
+                            #    output_dir=output_dir,
+                            #    input_filename=filename,
+                            #    suffix='_server',
+                            #    overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope_filled,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+                            #self.plot_png_save(
+                            #    data = slope_filled,
+                            #    output_dir=output_dir,
+                            #    input_filename=filename,
+                            #    suffix='_quicklook',
+                            #    overwrite=True)
                             self.fits_writer_steps(
                                 data=slope_filled,
                                 header=hdr,
@@ -357,16 +453,17 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
+                                t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
+                                #self.plot_png_save(
+                                #    data = slope_filled,
+                                #    output_dir=output_dir,
+                                #    input_filename=filename,
+                                #    suffix='_quicklook',
+                                #    overwrite=True)
                                 self.fits_writer_steps(
                                     data=slope_filled,
                                     header=hdr,
@@ -377,8 +474,8 @@ class QuickLook(BasePrimitive):
                             else:
                                 raise ValueError(f"Unexpected data shape: {data_1.shape}")
                         elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
+                            img2d = hdul[1].data
+                            ramp3d = hdul[0].data
                             if img2d.ndim != 2 or ramp3d.ndim != 3:
                                 raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
                             self.plot_png_save(
@@ -389,7 +486,7 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1=time.time()
@@ -415,7 +512,7 @@ class QuickLook(BasePrimitive):
 
                             R_matrix = load_npz(calib_path+'LowRes-L_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
+                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
                             cube= cube1.reshape(54,108,108)
                             self.fits_writer_steps(
                                 data=cube,
@@ -440,16 +537,17 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
+                                t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
+                                #self.plot_png_save(
+                                #    data = slope_filled,
+                                #    output_dir=output_dir,
+                                #    input_filename=filename,
+                                #    suffix='_quicklook',
+                                #    overwrite=True)
                                 self.fits_writer_steps(
                                     data=slope_filled,
                                     header=hdr,
@@ -460,8 +558,8 @@ class QuickLook(BasePrimitive):
                             else:
                                 raise ValueError(f"Unexpected data shape: {data_1.shape}")
                         elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
+                            img2d = hdul[1].data
+                            ramp3d = hdul[0].data
                             if img2d.ndim != 2 or ramp3d.ndim != 3:
                                 raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
                             self.plot_png_save(
@@ -472,17 +570,17 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope_filled,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+                            #self.plot_png_save(
+                            #    data = slope_filled,
+                            #    output_dir=output_dir,
+                            #    input_filename=filename,
+                            #    suffix='_quicklook',
+                            #    overwrite=True)
                             self.fits_writer_steps(
                                 data=slope_filled,
                                 header=hdr,
@@ -498,7 +596,7 @@ class QuickLook(BasePrimitive):
 
                             R_matrix = load_npz(calib_path+'LowRes-M_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
+                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
                             cube= cube1.reshape(54,108,108)
                             self.fits_writer_steps(
                                 data=cube,
@@ -523,7 +621,7 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
                                 t1  = time.time()
@@ -544,8 +642,8 @@ class QuickLook(BasePrimitive):
                             else:
                                 raise ValueError(f"Unexpected data shape: {data_1.shape}")
                         elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
+                            img2d = hdul[1].data
+                            ramp3d = hdul[0].data
                             if img2d.ndim != 2 or ramp3d.ndim != 3:
                                 raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
                             self.plot_png_save(
@@ -556,17 +654,17 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope_filled,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+                            #self.plot_png_save(
+                            #    data = slope_filled,
+                            #    output_dir=output_dir,
+                            #    input_filename=filename,
+                            #    suffix='_quicklook',
+                            #    overwrite=True)
                             self.fits_writer_steps(
                                 data=slope_filled,
                                 header=hdr,
@@ -582,7 +680,7 @@ class QuickLook(BasePrimitive):
 
                             R_matrix = load_npz(calib_path+'LowRes-KLM_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
+                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
                             cube= cube1.reshape(54,108,108)
                             self.fits_writer_steps(
                                 data=cube,
@@ -608,17 +706,17 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
                                 t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
+                                #self.plot_png_save(
+                                #    data = slope_filled,
+                                #    output_dir=output_dir,
+                                #    input_filename=filename,
+                                #    suffix='_quicklook',
+                                #   overwrite=True)
                                 self.fits_writer_steps(
                                     data=slope_filled,
                                     header=hdr,
@@ -628,8 +726,8 @@ class QuickLook(BasePrimitive):
                             else:
                                 raise ValueError(f"Unexpected data shape: {data_1.shape}")
                         elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
+                            img2d = hdul[1].data
+                            ramp3d = hdul[0].data
                             if img2d.ndim != 2 or ramp3d.ndim != 3:
                                 raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
                             self.plot_png_save(
@@ -640,7 +738,7 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1=time.time()
@@ -666,7 +764,7 @@ class QuickLook(BasePrimitive):
 
                             R_matrix = load_npz(calib_path+'LowRes-KL_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
+                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
                             cube= cube1.reshape(54,108,108)
                             self.fits_writer_steps(
                                 data=cube,
@@ -691,17 +789,17 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
                                 t1=time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
+                                #self.plot_png_save(
+                                #    data = slope_filled,
+                                #    output_dir=output_dir,
+                                #    input_filename=filename,
+                                #    suffix='_quicklook',
+                                #    overwrite=True)
                                 self.fits_writer_steps(
                                     data=slope_filled,
                                     header=hdr,
@@ -724,7 +822,7 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1=time.time()
@@ -750,7 +848,7 @@ class QuickLook(BasePrimitive):
 
                             R_matrix = load_npz(calib_path+'LowRes-Ls_QL_rectmat.npz')
                             print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
+                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
                             cube= cube1.reshape(54,108,108)
                             self.fits_writer_steps(
                                 data=cube,
@@ -777,7 +875,7 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
                                 t1=time.time()
@@ -798,8 +896,8 @@ class QuickLook(BasePrimitive):
                             else:
                                 raise ValueError(f"Unexpected data shape: {data_1.shape}")
                         elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
+                            img2d = hdul[1].data
+                            ramp3d = hdul[0].data
                             if img2d.ndim != 2 or ramp3d.ndim != 3:
                                 raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
                             self.plot_png_save(
@@ -810,7 +908,7 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1 = time.time()
@@ -855,7 +953,7 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
                                 t1=time.time()
@@ -876,8 +974,8 @@ class QuickLook(BasePrimitive):
                             else:
                                 raise ValueError(f"Unexpected data shape: {data_1.shape}")
                         elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
+                            img2d = hdul[1].data
+                            ramp3d = hdul[0].data
                             if img2d.ndim != 2 or ramp3d.ndim != 3:
                                 raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
                             self.plot_png_save(
@@ -888,7 +986,7 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1=time.time()
@@ -934,7 +1032,7 @@ class QuickLook(BasePrimitive):
                             elif data_1.ndim == 3:
                                 img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
                                 self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.adaptive_weighted_ramp_fit(
+                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
                                     read_time=read_time)
                                 t1=time.time()
@@ -955,8 +1053,8 @@ class QuickLook(BasePrimitive):
                             else:
                                 raise ValueError(f"Unexpected data shape: {data_1.shape}")
                         elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
+                            img2d = hdul[1].data
+                            ramp3d = hdul[0].data
                             if img2d.ndim != 2 or ramp3d.ndim != 3:
                                 raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
                             self.plot_png_save(
@@ -967,7 +1065,7 @@ class QuickLook(BasePrimitive):
                                 overwrite=True)
                             img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
                             self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.adaptive_weighted_ramp_fit(
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                 img_corr,
                                 read_time=read_time)
                             t1=time.time()
