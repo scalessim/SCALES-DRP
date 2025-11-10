@@ -161,9 +161,9 @@ class ingest_file(BasePrimitive):
             0 for Blue channel, 1 for Red, and -1 for Unknown.
         """
         camera = self.get_keyword('OBSMODE').upper()
-        if 'LOWRES' in camera:
+        if 'LowRes' in camera:
             return 0
-        elif 'MEDRES' in camera:
+        elif 'MedRes' in camera:
             return 1
         else:
             return -1
@@ -619,10 +619,10 @@ class ingest_file(BasePrimitive):
             (bool): ``True`` if processing can proceed, ``False`` if not.
 
         """
-        if imtype == 'OBJECT':
+        #if imtype == 'OBJECT':
             # bias frames
-            bias_frames = self.context.proctab.search_proctab(
-                frame=self.ccddata, target_type='MBIAS', nearest=True)
+        #    bias_frames = self.context.proctab.search_proctab(
+        #        frame=self.ccddata, target_type='MBIAS', nearest=True)
 #            # arclamp
 #            arclamp_frames = self.context.proctab.search_proctab(
 #                frame=self.ccddata, target_type='MARC', nearest=True)

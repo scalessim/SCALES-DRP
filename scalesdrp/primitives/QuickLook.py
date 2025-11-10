@@ -173,10 +173,6 @@ class QuickLook(BasePrimitive):
         dt = np.mean(np.diff(read_times))
         slope = np.zeros((n_rows, n_cols), dtype=np.float32)
         bias = np.zeros_like(slope)
-
-        ie = np.index_exp[:, :, 0::2]
-        io = np.index_exp[:, :, 1::2]
-
         Ty, Tx = tile
         for y0 in range(0, n_rows, Ty):
             y1 = min(n_rows, y0 + Ty)
@@ -261,7 +257,55 @@ class QuickLook(BasePrimitive):
                 bias[y0:y1, x0:x1] = b_tile
         return slope
 
+    def remove_channel_offset_and_gradient(self,cube, nchans=4, sigma_clip=3.0, iterations=3):
+        """
+        Remove both additive offset and small gradient from each amplifier channel.
+        Uses robust statistics (sigma clipping) from active pixels.
+        """
+        cube_corr = cube.astype(np.float32).copy()
+        n_frames, ny, nx = cube_corr.shape
+        chan_width = nx // nchans
+        offsets_all = []
+        slopes_all = []
 
+        for f in range(n_frames):
+            frame = cube_corr[f]
+            frame_offsets = []
+            frame_slopes = []
+
+            for c in range(nchans):
+                x0, x1 = c * chan_width, (c + 1) * chan_width
+                chan = frame[:, x0:x1]
+
+                # Median per column
+                col_med = np.median(chan, axis=0)
+
+                # Sigma clipping on the column medians to avoid outliers
+                good = np.ones_like(col_med, dtype=bool)
+                for _ in range(iterations):
+                    med = np.median(col_med[good])
+                    std = np.std(col_med[good])
+                    good_new = (col_med > med - sigma_clip*std) & (col_med < med + sigma_clip*std)
+                    if np.all(good_new == good):
+                        break
+                    good = good_new
+
+                # Fit and subtract a linear baseline (offset + slope)
+                x = np.arange(x0, x1)
+                p = np.polyfit(x[good], col_med[good], 1)  # [slope, intercept]
+                slope, offset = p
+                frame_slopes.append(slope)
+                frame_offsets.append(offset)
+
+                # Subtract fitted baseline
+                baseline = slope * x + offset
+                frame[:, x0:x1] -= baseline
+
+            cube_corr[f] = frame
+            offsets_all.append(frame_offsets)
+            slopes_all.append(frame_slopes)
+
+        return cube_corr #, offsets_all, slopes_all
 
     def _perform(self):
         self.logger.info("+++++++++++ Quicklook Started +++++++++++")
@@ -304,9 +348,9 @@ class QuickLook(BasePrimitive):
                                 suffix='_server',
                                 overwrite=True)
                         elif data_1.ndim == 3:
-                            img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,read_time=read_time)
+                            #img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
+                            slope_filled = self.iterative_sigma_weighted_ramp_fit4(
+                                data_1,read_time=read_time)
                             t1 = time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             #self.plot_png_save(
@@ -334,10 +378,10 @@ class QuickLook(BasePrimitive):
                             output_dir=output_dir,
                             input_filename=filename,
                             suffix='_server')
-                        img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                        self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                        slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                            img_corr,read_time=read_time)
+                        #img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
+                        #self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
+                        slope_filled = self.iterative_sigma_weighted_ramp_fit4(
+                            ramp3d,read_time=read_time)
                         t1 = time.time()
                         self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                         #self.plot_png_save(
@@ -368,11 +412,13 @@ class QuickLook(BasePrimitive):
                                     suffix='_server',
                                     overwrite=True)
                             elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
+                                #img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True,altcol=False)
+                                img_corr = self.remove_channel_offset_and_gradient(data_1,nchans=4)
+                                self.logger.info("+++++++++++ channel offset corrected +++++++++++")
                                 slope_filled = self.iterative_sigma_weighted_ramp_fit(
                                     img_corr,
-                                    read_time=read_time)
+                                    read_time=read_time,do_swap=False)
+
                                 t1 = time.time()
                                 self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                                 #self.plot_png_save(
@@ -401,11 +447,12 @@ class QuickLook(BasePrimitive):
                             #    input_filename=filename,
                             #    suffix='_server',
                             #    overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
+                            #img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True,altcol=True)
+                            img_corr = self.remove_channel_offset_and_gradient(ramp3d,nchans=4)
+                            self.logger.info("+++++++++++ channel offset corrected +++++++++++")
                             slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
+                                img_corr,read_time=read_time)
+
                             t1=time.time()
                             self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
                             #self.plot_png_save(
@@ -421,22 +468,22 @@ class QuickLook(BasePrimitive):
                                 input_filename=filename,
                                 suffix='_quicklook',
                                 overwrite=True)
-                        if (
-                            slope_filled is not None
-                            and os.path.exists(os.path.join(calib_path, "LowRes-K_QL_rectmat.npz"))
-                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+                        #if (
+                        #    slope_filled is not None
+                        #    and os.path.exists(os.path.join(calib_path, "LowRes-K_QL_rectmat.npz"))
+                        #   and (obj == "SCIENCE" or obj == "FLATLEN")):
 
-                            R_matrix = load_npz(calib_path+'LowRes-K_QL_rectmat.npz')
-                            print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
-                            cube= cube1.reshape(54,108,108)
-                            self.fits_writer_steps(
-                                data=cube,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quick_cube',
-                                overwrite=True)
+                        #    R_matrix = load_npz(calib_path+'LowRes-K_QL_rectmat.npz')
+                        #    print("Quicklook optimal extraction started for",ifs_mode)
+                        #    cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
+                        #    cube= cube1.reshape(54,108,108)
+                        #    self.fits_writer_steps(
+                        #        data=cube,
+                        #        header=hdr,
+                        #        output_dir=output_dir,
+                        #        input_filename=filename,
+                        #        suffix='_quick_cube',
+                        #        overwrite=True)
                     elif ifs_mode == "LowRes-L":
                         print("IFSMODE is", ifs_mode)
                         if n_ext == 1:

@@ -52,7 +52,7 @@ class StartCalib(BasePrimitive):
         - If OBSMODE in ('LOWRES', 'MEDRES'): group by (OBSMODE, IFSMODE, IMTYPE, EXPTIME)
         """
 
-        required_cols = ['OBSMODE', 'IFSMODE', 'IM-FW-1', 'IMTYPE', 'EXPTIME']
+        required_cols = ['OBSMODE', 'IFSMODE', 'IM-FW-1', 'IMTYPE', 'EXPTIME','MCLOCK']
         missing = [c for c in required_cols if c not in dt.columns]
         if missing:
             self.logger.error(f"Missing required columns: {missing}")
@@ -63,10 +63,10 @@ class StartCalib(BasePrimitive):
         # --- Split by observing mode first
         for mode, mode_df in dt.groupby('OBSMODE'):
             if mode.upper() == 'IMAGING':
-                group_keys = ['OBSMODE', 'IM-FW-1', 'IMTYPE', 'EXPTIME']
+                group_keys = ['OBSMODE', 'IM-FW-1', 'IMTYPE', 'EXPTIME','MCLOCK']
                 self.logger.info(f"Grouping IMAGING data by {group_keys}")
-            elif mode.upper() in ('LOWRES', 'MEDRES'):
-                group_keys = ['OBSMODE', 'IFSMODE', 'IMTYPE', 'EXPTIME']
+            elif mode.upper() =='IFS':
+                group_keys = ['OBSMODE', 'IFSMODE', 'IMTYPE', 'EXPTIME','MCLOCK']
                 self.logger.info(f"Grouping {mode} data by {group_keys}")
             else:
                 self.logger.warning(f"Unknown OBSMODE '{mode}'; skipping.")
@@ -101,97 +101,66 @@ class StartCalib(BasePrimitive):
         hdu.writeto(output_path, overwrite=overwrite)
         return output_path
 
-###################### dealing with saturated pixel with nans #############
-    def masked_smooth_fast(self,filled, nanmask, sigma=1.25):
-        """Smooth only inside bbox around NaNs; keep valid pixels fixed."""
-        out = np.asarray(filled, dtype=np.float32).copy()
-        (ys, xs), ok = self._bbox(nanmask)
-        if not ok:
-            return out
-        submask = nanmask[ys, xs]
-        subimg  = out[ys, xs]
-        sm = gaussian_filter(subimg, sigma=sigma, mode='nearest')
-        dist_inside = distance_transform_edt(submask.astype(np.uint8))
-        blend = np.clip(dist_inside / (3.0 * sigma), 0.0, 1.0).astype(np.float32)
-        subimg[submask] = (1 - blend[submask]) * subimg[submask] + blend[submask] * sm[submask]
-        out[ys, xs] = subimg
-        #self.logger.info("Ramp fitting completed")
-        return out
-
-    def inpaint_nearest_fast(self,img, nanmask=None, pad=16):
-        """Do the EDT only on the small bbox around NaNs."""
-        out = np.asarray(img, dtype=np.float32).copy()
-        if nanmask is None:
-            nanmask = ~np.isfinite(out)
-        if not np.any(nanmask):
-            return out, nanmask
-        (ys, xs), ok = self._bbox(nanmask)
-        if not ok:
-            return out, nanmask
-        submask = nanmask[ys, xs]
-        subimg  = out[ys, xs]
-        _, (iy, ix) = distance_transform_edt(submask, return_indices=True)
-        subimg[submask] = subimg[iy[submask], ix[submask]]
-        out[ys, xs] = subimg
-        return out, nanmask
-
-    def _bbox(self,mask, pad=16):
-        ys, xs = np.where(mask)
-        if ys.size == 0:
-            return (slice(0,0), slice(0,0)), False
-        y0 = max(0, ys.min() - pad)
-        y1 = min(mask.shape[0], ys.max() + pad + 1)
-        x0 = max(0, xs.min() - pad)
-        x1 = min(mask.shape[1], xs.max() + pad + 1)
-        return (slice(y0, y1), slice(x0, x1)), True
-
-    def adaptive_weighted_ramp_fit(self,ramp, read_time, cutoff_frac=0.75, sat_level=4096.0, tile=(256,256)):
-        """
-        Adaptive weighted ramp fit (thread-safe, DRP-compatible version).
-        Processes the ramp in tiles to stay memory- and cache-efficient.
-        """
-        n_reads, n_rows, n_cols = ramp.shape
+###################### ramp fitting reads<5 #############
+    def iterative_sigma_weighted_ramp_fit(
+        self, ramp1, read_time, gain=3.0, rn=5.0, max_iter=3, tile=(256, 256), do_swap=True):
+        t1=time.time()
+        n_reads, n_rows, n_cols = ramp1.shape
         read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
+        dt = np.mean(np.diff(read_times))
+        ramp = np.empty_like(ramp1)
+        n_amps = 4
+        block = n_cols // n_amps
+        for a in range(n_amps):
+            x0, x1 = a * block, (a + 1) * block
+            sub = ramp1[..., x0:x1]
+            nsub = sub.shape[-1]
+            new_order = []
+            for i in range(0, nsub, 2):
+                if i + 1 < nsub:
+                    new_order.extend([i + 1, i])
+                else:
+                    new_order.append(i)
+            ramp[..., x0:x1] = sub[..., new_order]
         slope = np.zeros((n_rows, n_cols), dtype=np.float32)
-        eps = 1e-6
-
+        bias = np.zeros_like(slope)
         Ty, Tx = tile
         for y0 in range(0, n_rows, Ty):
             y1 = min(n_rows, y0 + Ty)
             for x0 in range(0, n_cols, Tx):
                 x1 = min(n_cols, x0 + Tx)
-                cube = ramp[:, y0:y1, x0:x1]  # (N, ty, tx)
-                ty, tx = cube.shape[1:]
-                N = cube.shape[0]
+                cube = ramp[:, y0:y1, x0:x1]
+                N, ty, tx = cube.shape
+                m_tile = np.zeros((ty, tx), dtype=np.float32)
+                b_tile = np.zeros_like(m_tile)
+                for col_slice, out_slice in [(np.index_exp[:, :, 0::2], (slice(None), slice(0, None, 2))),
+                    (np.index_exp[:, :, 1::2], (slice(None), slice(1, None, 2))),]:
 
-                # Find cutoff index per pixel where counts exceed cutoff_frac * sat_level
-                cutoff_mask = cube > (cutoff_frac * sat_level)
-                # argmax returns 0 if all False — handle that
-                cutoff_idx = np.argmax(cutoff_mask, axis=0)
-                cutoff_idx[~np.any(cutoff_mask, axis=0)] = N - 1
-
-                # Build weights centered around cutoff index
-                idx = np.arange(N)[:, None, None]
-                w = np.exp(-((idx - cutoff_idx)**2) / 8.0).astype(np.float32)
-
-                # Weighted sums
-                t = read_times[:, None, None]
-                y = cube
-                S0  = np.sum(w, axis=0)
-                St  = np.sum(w * t, axis=0)
-                Stt = np.sum(w * t * t, axis=0)
-                Sy  = np.sum(w * y, axis=0)
-                Sty = np.sum(w * t * y, axis=0)
-
-                denom = S0 * Stt - St * St
-                valid = denom > eps
-                local_slope = np.full_like(S0, np.nan, dtype=np.float32)
-                local_slope[valid] = (S0[valid] * Sty[valid] - St[valid] * Sy[valid]) / denom[valid]
-                slope[y0:y1, x0:x1] = local_slope
+                    subcube = cube[col_slice]
+                    if subcube.size == 0:
+                        continue
+                    for iteration in range(max_iter):
+                        sig2 = np.maximum(subcube / gain + rn**2, 1e-6)
+                        i = np.arange(subcube.shape[0], dtype=np.float32)[:, None, None]
+                        S0 = np.sum(1.0 / sig2, axis=0)
+                        S1 = np.sum(i / sig2, axis=0)
+                        S2 = np.sum(i**2 / sig2, axis=0)
+                        S0x = np.sum(subcube / sig2, axis=0)
+                        S1x = np.sum(i * subcube / sig2, axis=0)
+                        ibar = S1 / S0
+                        mdt = (S1x - ibar * S0x) / np.maximum(S2 - ibar**2 * S0, 1e-8)
+                        m = mdt / dt
+                        b = S0x / S0 - mdt * ibar
+                        subcube = np.clip(b[None, :, :] + m[None, :, :] * i * dt, 0, None)
+                    m_tile[out_slice] = m
+                    b_tile[out_slice] = b
+                slope[y0:y1, x0:x1] = m_tile
+                bias[y0:y1, x0:x1] = b_tile
+        t2=time.time()
+        self.logger.info(f"Ramp fitting finished in {t2-t1:.2f} seconds.")
         return slope
-################## ramp fitting ############################
 
-
+    ################## ramp fitting reads > 5 ############################
     def ramp_fiting(self,input_read,total_exptime):
         calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
         SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
@@ -321,9 +290,7 @@ class StartCalib(BasePrimitive):
                         if np.array_equal(new_mask, mask):
                             break
                         mask = new_mask
-
                     keep_mask[:, y0:y1, x0:x1] = mask.reshape(N, ty, tx)
-
             return keep_mask
 
         # === Load calibration maps ===
@@ -339,7 +306,7 @@ class StartCalib(BasePrimitive):
         # === Case 1: Few reads (simple linear fit) ===
         if nim_s < 6:
             self.logger.info('Few reads (<6): Performing direct slope fit...')
-            slope_map = self.adaptive_weighted_ramp_fit(
+            slope_map = self.iterative_sigma_weighted_ramp_fit(
                 input_read,read_time=total_exptime)
             return output_final
 
@@ -358,7 +325,7 @@ class StartCalib(BasePrimitive):
 
         # === Precompute linear fallback (OLS) ===
         self.logger.info("Computing initial guess for ramp fitting...")
-        B_ols_sci = self.adaptive_weighted_ramp_fit(
+        B_ols_sci = self.iterative_sigma_weighted_ramp_fit(
             sci_im_scaled,
             read_time=total_exptime)
 
@@ -417,7 +384,7 @@ class StartCalib(BasePrimitive):
 ########################################### START MAIN ######################
 
     def _perform(self):
-        self.logger.info("+++++++++++ Calibration Process +++++++++++")
+        self.logger.info("+++++++++++ SCALES calibration starting +++++++++++")
         dt = self.context.data_set.data_table
         all_groups = self.group_files_by_header(dt)
         if not all_groups:
@@ -440,7 +407,6 @@ class StartCalib(BasePrimitive):
         flatlamp_ramps=[]
         flatlen_ramps=[]
         calunit_ramps=[]
-
         for imtype in processing_order:
             if imtype not in organized_groups:
                 continue
@@ -452,13 +418,14 @@ class StartCalib(BasePrimitive):
                 ifsmode = params.get('ifsmode', 'N/A')
                 filtername = params.get('im-fw-1', 'N/A')
                 exptime = params.get('exptime', 0)
+                mclock = params.get('mclock', 0)
                 self.logger.info(f"Processing {imtype}: {len(filenames)} files "
-                    f"(OBSMODE={obsmode}, IFSMODE={ifsmode}, FILTER={filtername}, EXPTIME={exptime})")
+                    f"(OBSMODE={obsmode}, IFSMODE={ifsmode}, FILTER={filtername}, EXPTIME={exptime}, MCLOCK={mclock})")
                 for filename in filenames:
                     try:
                         with fits.open(filename) as hdulist:
                             #sci_im_full_original1 = hdulist[0]
-                            sci_im_full_original1 = hdulist[1].data
+                            sci_im_full_original1 = hdulist[0].data
                             data_header = hdulist[0].header
                             readtime = data_header['EXPTIME']
                     except Exception as e:
@@ -474,12 +441,8 @@ class StartCalib(BasePrimitive):
                     #    science_ramp=sci_im_full_original1,
                     #    saturation_map=saturation_map,
                     #    obsmode = obsmode)
-
+                    self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                     slope = self.ramp_fit(sci_im_full_original1,total_exptime=readtime)
-                    self.logger.info("+++++++++++ ramp fitting completed +++++++++++")
-                    
-                    #ramp_image_ouput = bpm.apply_full_correction(ramp_image_ouput1,obsmode)
-                    #self.logger.info("+++++++++++ BPM correction completed +++++++++++")
 
                     self.fits_writer_steps(
                         data=slope,
@@ -501,89 +464,96 @@ class StartCalib(BasePrimitive):
                                 
                     if imtype == 'BIAS':
                         bias_ramps.append(final_corrected_image)
-
+                        bias_header = data_header
                     if imtype == 'DARK':
                         dark_ramps.append(final_corrected_image)
+                        dark_header = data_header
 
                     if imtype == 'FLATLENS':
                         flatlen_ramps.append(final_corrected_image)
-
+                        flatlens_header = data_header
                     if imtype == 'FLATLAMP':
                         flatlamp_ramps.append(final_corrected_image)
-
+                        flatlamp_header = data_header
                     if imtype == 'CALUNIT':
                         calunit_ramps.append(final_corrected_image)
+                        calunit_header = data_header
+
+                if len(dark_ramps) > 0:
+                    master_dark = robust.mean(dark_ramps,axis=0)
+                    self.logger.info("+++++++++++ BPM correction started for master dark +++++++++++")
+                    bpm_master_dark = bpm.apply_full_correction(master_dark,obsmode)
+                    self.logger.info("+++++++++++ BPM correction completed +++++++++++")
+                    key = ('DARK', obsmode, ifsmode, filtername, mclock)
+                    #dark_header['HISTORY'] = 'Master dark file'
+                    
+                    self.fits_writer_steps(
+                        data=bpm_master_dark,
+                        header=dark_header,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mdark',
+                        overwrite=True)
+
+                if len(bias_ramps) > 0:
+                    master_bias = robust.mean(bias_ramps,axis=0)
+                    self.logger.info("+++++++++++ BPM correction started for master bias +++++++++++")
+                    bpm_master_bias = bpm.apply_full_correction(master_bias,obsmode)
+                    self.logger.info("+++++++++++ BPM correction completed +++++++++++")
+                    #bias_header['HISTORY'] = 'Master bias file'
+                    self.fits_writer_steps(
+                        data=bpm_master_bias,
+                        header=bias_header,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mbias',
+                        overwrite=True)
+
+                if len(flatlen_ramps) > 0:
+                    master_flatlens = robust.mean(flatlen_ramps,axis=0)
+                    self.logger.info("+++++++++++ BPM correction started for master lenslet flat +++++++++++")
+                    bpm_master_flatlens = bpm.apply_full_correction(master_flatlens,obsmode)
+                    self.logger.info("+++++++++++ BPM correction completed +++++++++++")
+                    #data_header['HISTORY'] = 'Master lenslet flat file'
+                    self.fits_writer_steps(
+                        data=bpm_master_flatlens,
+                        header=flatlens_header,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mflatlens',
+                        overwrite=True)
+
+                if len(flatlamp_ramps) > 0:
+                    master_flatlamp = robust.mean(flatlamp_ramps,axis=0)
+
+                    self.logger.info("+++++++++++ BPM correction started for master detector flat +++++++++++")
+                    bpm_master_flatlamp = bpm.apply_full_correction(master_flatlamp,obsmode)
+                    self.logger.info("+++++++++++ BPM correction completed +++++++++++")
+                    #data_header['HISTORY'] = 'Master detector flat file'
+                    self.fits_writer_steps(
+                        data=bpm_master_flatlamp,
+                        header=flatlamp_header,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mflatlamp',
+                        overwrite=True)
+
+                if len(calunit_ramps) > 0:
+                    master_calunit = robust.mean(calunit_ramps,axis=0)
+                    self.logger.info("+++++++++++ BPM correction started for master calunit +++++++++++")
+                    bpm_master_calunit = bpm.apply_full_correction(master_calunit,obsmode)
+                    self.logger.info("+++++++++++ BPM correction completed +++++++++++")
+                    #data_header['HISTORY'] = 'Master calunit file'
+                    self.fits_writer_steps(
+                        data=bpm_master_calunit,
+                        header=calunit_header,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mcalunit',
+                        overwrite=True)
         
-        #bpm_from_darks = bpm.generate_bpm(
-        #    np.array(dark_ramps),
-        #    stack_name="Dark Stack",
-        #    temporal_sigma_thresh=5.0,
-        #    spatial_brightness_factor=10.0,
-        #    plot_results=False)
-        #bpm_from_flats = bpm.generate_bpm(
-        #    np.array(flatlamp_ramps),
-        #    stack_name="Flat Stack",
-        #    temporal_sigma_thresh=5.0,
-        #    spatial_brightness_factor=1.5,
-        #    plot_results=False)
-
-        #final_combined_bpm = bpm_from_darks | bpm_from_flats
-        #hdu = fits.PrimaryHDU(data=final_combined_bpm.astype(np.uint8))
-        #print(self.action.args.dirname)
-        #hdu.writeto(calib_path+'bpm.fits', overwrite=True)
-        #self.logger.info('+++++++++++++ Bad pixel mask created ++++++++++++++')
-
-        if dark_ramps > 0:
-            master_dark = robust.mean(dark_ramps,axis=0)
-            self.fits_writer_steps(
-                data=master_dark,
-                header=data_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mdark',
-                overwrite=True)
-
-        if bias_ramps > 0:
-            master_bias = robust.mean(bias_ramps,axis=0)
-            self.fits_writer_steps(
-                data=master_bias,
-                header=data_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mdark',
-                overwrite=True)
-
-        if flatlen_ramps > 0:
-            master_flatlen = robust.mean(flatlen_ramps,axis=0)
-            self.fits_writer_steps(
-                data=master_flatlen,
-                header=data_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mdark',
-                overwrite=True)
-
-        if flatlamp_ramps > 0:
-            master_flatlamp = robust.mean(flatlamp_ramps,axis=0)
-            self.fits_writer_steps(
-                data=master_flatlamp,
-                header=data_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mdark',
-                overwrite=True)
-
-        if calunit_ramps > 0:
-            master_calunit = robust.mean(calunit_ramps,axis=0)
-            self.fits_writer_steps(
-                data=master_calunit,
-                header=data_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mdark',
-                overwrite=True)
-        
-        self.logger.info('+++++++++++++ Master calibration files created ++++++++++++++')
+        self.logger.info('+++++++++++++ All available Master calibration files are created ++++++++++++++')
+        self.logger.info('+++++++++++++ Ready to process the science exposures ++++++++++++++')
         
         log_string = StartCalib.__module__
         self.logger.info(log_string)
