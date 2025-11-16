@@ -96,9 +96,11 @@ def apply_full_correction(image_to_correct,obsmode, pass1_kwargs={}):
     calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
 
     if obsmode=='IMAGING':
-    	master_bpm = fits.getdata(calib_path+'cd3_bpm_ifs_5mhz.fits').astype(bool)
+        master_bpm = fits.getdata(calib_path+'bpm_new_5.fits').astype(bool)
+        #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
     else:
-    	master_bpm = fits.getdata(calib_path+'cd3_bpm_ifs_5mhz.fits').astype(bool)
+        master_bpm = fits.getdata(calib_path+'cd3_bpm_ifs_5mhz.fits').astype(bool)
+        #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
 
     corrected_pass1, large_defects_mask = correct_local_defects_pass1_improved(
         image_to_correct,

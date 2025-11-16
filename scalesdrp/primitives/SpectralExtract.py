@@ -18,6 +18,7 @@ import time
 from astropy.nddata import StdDevUncertainty
 from astropy.coordinates import Angle
 from astropy.wcs import WCS
+import os
 
 class SpectralExtract(BasePrimitive):
     """
@@ -246,7 +247,212 @@ class SpectralExtract(BasePrimitive):
             warnings.simplefilter("ignore", fits.verify.VerifyWarning)
             w = WCS(wcs_dict, naxis=3)
         return w
-    ##################################################################################
+
+    ################# search for lenslet flat #######################################
+    def load_and_normalize_lenslet_flat(
+        self,
+        ifsmode,
+        *,
+        clip_sigma=7.0,
+        iterations=3,
+        method='median'):
+        """
+        Find <prefix>_cube_flatlens.fits by IFSMODE, ensure it's a 3D cube,
+        load (data, uncert), normalize each slice, and propagate uncertainties.
+        Search order: ./redux/ then pkg calib/.
+        Returns (flat_norm, flat_norm_uncert) or (None, None).
+        """
+        norm_ifsmode = (ifsmode or "").strip().upper().replace("_", "-")
+
+        def _try_dir(base_dir):
+            if not os.path.isdir(base_dir):
+                return None, None, None
+            # look for any file ending in _cube_flatlens.fits
+            candidates = [f for f in os.listdir(base_dir)
+                    if f.endswith("_cube_flatlens.fits") and os.path.isfile(os.path.join(base_dir, f))]
+            for fname in candidates:
+                path = os.path.join(base_dir, fname)
+                try:
+                    with fits.open(path) as hdul:
+                        hdr = hdul[0].header
+                        file_ifs = (hdr.get("IFSMODE") or "").strip().upper().replace("_", "-")
+                        if file_ifs != norm_ifsmode:
+                            continue
+
+                        data = hdul[0].data
+                        if data is None:
+                            self.logger.debug(f"Skipping {fname}: primary data is None.")
+                            continue
+                        if data.ndim != 3:
+                            self.logger.debug(f"Skipping {fname}: not a cube (ndim={data.ndim}).")
+                            continue
+
+                        # try to get uncertainty cube with same shape
+                        uncert = None
+                        if "UNCERT" in hdul and hdul["UNCERT"].data is not None:
+                            if hdul["UNCERT"].data.shape == data.shape:
+                                uncert = hdul["UNCERT"].data
+                            else:
+                                self.logger.debug(f"Skipping UNCERT in {fname}: shape mismatch {hdul['UNCERT'].data.shape} vs {data.shape}.")
+                        elif len(hdul) > 1 and getattr(hdul[1], "data", None) is not None:
+                            if hdul[1].data.shape == data.shape:
+                                uncert = hdul[1].data
+                            else:
+                                self.logger.debug(f"Skipping ext[1] as UNCERT in {fname}: shape mismatch {hdul[1].data.shape} vs {data.shape}.")
+
+                        return path, data, uncert
+                except Exception as e:
+                    self.logger.debug(f"Error reading {fname}: {e}")
+                    continue
+            return None, None, None
+
+        # 1) ./redux
+        path_used, flat, uflat = _try_dir(os.path.join(os.getcwd(), "redux"))
+        # 2) pkg calib if not found
+        if flat is None:
+            pkg_dir = pkg_resources.resource_filename('scalesdrp', 'calib/')
+            path_used, flat, uflat = _try_dir(pkg_dir)
+
+        if flat is None:
+            self.logger.warning(f"No lenslet flat cube found for IFSMODE={ifsmode}.")
+            return None, None
+
+        self.logger.info(f"Loaded lenslet flat cube: {os.path.basename(path_used)}")
+
+        flat = np.asarray(flat, dtype=np.float64)
+        uflat = None if uflat is None else np.asarray(uflat, dtype=np.float64)
+
+        N, Y, X = flat.shape
+        flat_norm = np.full_like(flat, np.nan, dtype=np.float64)
+        flat_norm_uncert = None if uflat is None else np.full_like(uflat, np.nan, dtype=np.float64)
+
+        for k in range(N):
+            f = flat[k]
+            invalid = ~np.isfinite(f) | (f <= 0)
+            vals = f[~invalid]
+            if vals.size == 0:
+                continue
+
+            # iterative sigma clip
+            clipped = vals.copy()
+            for _ in range(iterations):
+                med = np.median(clipped); std = np.std(clipped)
+                if not np.isfinite(med) or not np.isfinite(std) or std == 0:
+                    break
+                keep = (clipped > med - clip_sigma*std) & (clipped < med + clip_sigma*std)
+                if np.all(keep):
+                    break
+                clipped = clipped[keep]
+                if clipped.size == 0:
+                    break
+            if clipped.size == 0:
+                continue
+
+            a = np.median(clipped) if method.lower() == 'median' else np.mean(clipped)
+            if not np.isfinite(a) or a <= 0:
+                continue
+
+            # estimate σ_a from clipped scatter
+            s = np.std(clipped); N_eff = max(1, clipped.size)
+            sa = s / np.sqrt(N_eff)
+
+            # normalize slice
+            flat_norm[k] = f / a
+            flat_norm[k, invalid] = np.nan
+
+            # uncertainty propagation if available
+            if uflat is not None:
+                uf = uflat[k]
+                if uf is not None and uf.shape == f.shape:
+                    term1 = (uf / a)**2
+                    term2 = ((f * sa) / (a**2))**2
+                    flat_norm_uncert[k] = np.sqrt(term1 + term2)
+                    flat_norm_uncert[k, invalid] = np.nan
+
+        self.logger.info(f"Normalized lenslet flat cube for IFSMODE={ifsmode}.")
+        return flat_norm, flat_norm_uncert
+
+    ##################### flat correction to the cube ##############################
+    def apply_flatlens(
+        self,
+        data,                # (H,W) or (N,H,W) science
+        sigma_data,          # same shape as data (1σ)
+        calib,               # (H,W) or (N,H,W) lenslet flat (prefer normalized)
+        sigma_calib,         # same shape as calib (1σ); can be None
+        imtype,              # should be 'FLATLENS'
+        *,
+        eps: float = 1e-10,  # guard for near-zero flats
+        clip_nan: bool = True):
+        """
+        Divide science by lenslet-flat (supports 2D or 3D cubes) with uncertainty propagation:
+            out = data / F
+            σ_out^2 = (σ_data / F)^2 + (data * σ_F / F^2)^2
+        Shapes:
+            - data, sigma_data: (H,W) or (N,H,W)
+            - calib, sigma_calib: (H,W) or (N,H,W)
+            (Broadcasting is supported for (H,W) calib across N if needed.)
+        """
+        kind = (imtype or "").strip().upper()
+        if kind != "FLATLENS":
+            raise ValueError(f"IMTYPE='{imtype}' not supported here; expected 'FLATLENS'.")
+            return data.astype(np.float32), sigma_data.astype(np.float32)
+
+        if calib is None or (isinstance(calib, np.ndarray) and calib.size == 0):
+            self.logger.warning("No flatlens data provided; skipping flat correction.")
+            return data.astype(np.float32), sigma_data.astype(np.float32)
+        
+        # Cast to float arrays; allow sigma_calib=None (treated as zeros)
+        data        = np.asarray(data, dtype=float)
+        sigma_data  = np.asarray(sigma_data, dtype=float)
+        calib       = np.asarray(calib, dtype=float)
+        sigma_calib = np.zeros_like(calib, dtype=float) if sigma_calib is None else np.asarray(sigma_calib, dtype=float)
+
+        try:
+            if data.shape != sigma_data.shape:
+                raise ValueError(f"sigma_data shape {sigma_data.shape} must match data {data.shape}.")
+            if calib.shape != data.shape:
+                # Allow (H,W) flat to apply to (N,H,W) science
+                if calib.ndim == 2 and data.ndim == 3 and calib.shape == data.shape[-2:]:
+                    calib = np.broadcast_to(calib, data.shape)
+                    sigma_calib = np.broadcast_to(sigma_calib, data.shape) if sigma_calib.ndim == 2 else sigma_calib
+                else:
+                    raise ValueError(f"calib shape {calib.shape} not compatible with data {data.shape}.")
+            if sigma_calib.shape != calib.shape:
+                # Allow (H,W) σ_flat to broadcast to (N,H,W)
+                if sigma_calib.ndim == 2 and calib.ndim == 3 and sigma_calib.shape == calib.shape[-2:]:
+                    sigma_calib = np.broadcast_to(sigma_calib, calib.shape)
+                else:
+                    raise ValueError(f"sigma_calib shape {sigma_calib.shape} not compatible with calib {calib.shape}.")
+        except Exception as e:
+            self.logger.warning(f"[apply_flatlens] Shape mismatch — skipping flat correction: {e}")
+            return data.astype(np.float32), sigma_data.astype(np.float32)
+
+        # Guard against invalid flat values
+        finite_flat = np.isfinite(calib)
+        if not np.any(finite_flat):
+            self.logger.warning("Flatlens data invalid or all NaN; skipping correction.")
+            return data.astype(np.float32), sigma_data.astype(np.float32)
+
+        safe_flat = np.where(finite_flat & (np.abs(calib) > eps), calib, np.nan)
+
+        # Division
+        out = data / safe_flat
+
+        # Uncertainty propagation
+        # σ_out^2 = (σ_data / F)^2 + (data * σ_F / F^2)^2
+        term1 = (sigma_data / safe_flat) ** 2
+        term2 = ((data * sigma_calib) / (safe_flat ** 2)) ** 2
+        sig = np.sqrt(term1 + term2)
+
+        if clip_nan:
+            good = np.isfinite(out) & np.isfinite(sig)
+            out = np.where(good, out, np.nan)
+            sig = np.where(good, sig, np.nan)
+
+        self.logger.info("Successfully applied lenslet flat correction.")
+        return out.astype(np.float32), sig.astype(np.float32)
+
+    #################################################################################
 
     def _perform(self):
         #self.logger.info("Spectral Extraction Started")
@@ -321,23 +527,38 @@ class SpectralExtract(BasePrimitive):
             A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
             A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
 
-            A_optimal_nnls = self.solve_bounded_weighted_nnls(
-                R_for_extract, data_vector_d, var_read_vector, GAIN, A_guess_vector)
+            #A_optimal_nnls = self.solve_bounded_weighted_nnls(
+            #    R_for_extract, data_vector_d, var_read_vector, GAIN, A_guess_vector)
 
-            Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
+            #Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
 
-            Amp_chi_square_err = self.calculate_error_flux_cube(
-                R_matrix=R_for_extract,
-                flux_vector_A=A_optimal_nnls,
-                var_read_vector=var_read_vector,
-                flux_shape_3d=FLUX_SHAPE_3D,
-               gain=GAIN)
+            #Amp_chi_square_err = self.calculate_error_flux_cube(
+            #    R_matrix=R_for_extract,
+            #    flux_vector_A=A_optimal_nnls,
+            #    var_read_vector=var_read_vector,
+            #    flux_shape_3d=FLUX_SHAPE_3D,
+            #    gain=GAIN)
 
-            chi_rslt = CCDData(
-                data=Amp_chi_square,
-                uncertainty=StdDevUncertainty(Amp_chi_square_err),
-                meta=self.action.args.ccddata.header,
-                unit='adu')
+            norm_flatlens,norm_flatlens_uncert = self.load_and_normalize_lenslet_flat(ifsmode)
+
+            A_opt, A_opt_err = self.apply_flatlens(
+                A_opt,
+                A_opt_err,
+                norm_flatlens,
+                norm_flatlens_uncert,
+                imtype='FLATLENS')
+
+            #Amp_chi_square, Amp_chi_square_err = self.apply_flatlens(
+            #    Amp_chi_square,
+            #    Amp_chi_square_err,
+            #    norm_flatlens,
+            #    norm_flatlens_uncert)
+
+            #chi_rslt = CCDData(
+            #    data=Amp_chi_square,
+            #    uncertainty=StdDevUncertainty(Amp_chi_square_err),
+            #    meta=self.action.args.ccddata.header,
+            #    unit='adu')
 
             opt_rslt = CCDData(
                 data=A_opt,
@@ -362,11 +583,11 @@ class SpectralExtract(BasePrimitive):
             self.logger.info(log_string)
 
 
-            scales_fits_writer(ccddata = chi_rslt, 
-                table=self.action.args.table,
-                output_file=self.action.args.name,
-                output_dir=self.config.instrument.output_directory,
-                suffix="chi_cube")
+            #scales_fits_writer(ccddata = chi_rslt, 
+            #    table=self.action.args.table,
+            #    output_file=self.action.args.name,
+            #    output_dir=self.config.instrument.output_directory,
+            #    suffix="chi_cube")
  
             scales_fits_writer(ccddata = opt_rslt, 
                 table=self.action.args.table,

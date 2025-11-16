@@ -14,6 +14,7 @@ import scalesdrp.primitives.reference as reference #1/f and reference pixel corr
 import scalesdrp.primitives.linearity as linearity #linearity correction
 import scalesdrp.primitives.bpm_correction as bpm #bpm correction
 from tqdm import tqdm
+from astropy.nddata import StdDevUncertainty
 
 class RampFit(BasePrimitive):
 
@@ -41,203 +42,267 @@ class RampFit(BasePrimitive):
         self.logger = context.pipeline_logger
 
     ############## ramp fit for reads less than 5############################
-    def iterative_sigma_weighted_ramp_fit(
-        self, ramp1, read_time, gain=3.0, rn=5.0, max_iter=3, tile=(256, 256), do_swap=True):
-        t1=time.time()
-        n_reads, n_rows, n_cols = ramp1.shape
-        read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
-        dt = np.mean(np.diff(read_times))
-        ramp = np.empty_like(ramp1)
-        n_amps = 4
-        block = n_cols // n_amps
-        for a in range(n_amps):
-            x0, x1 = a * block, (a + 1) * block
-            sub = ramp1[..., x0:x1]
-            nsub = sub.shape[-1]
-            new_order = []
-            for i in range(0, nsub, 2):
-                if i + 1 < nsub:
-                    new_order.extend([i + 1, i])
-                else:
-                    new_order.append(i)
-            ramp[..., x0:x1] = sub[..., new_order]
-        slope = np.zeros((n_rows, n_cols), dtype=np.float32)
-        bias = np.zeros_like(slope)
-        Ty, Tx = tile
-        for y0 in range(0, n_rows, Ty):
-            y1 = min(n_rows, y0 + Ty)
-            for x0 in range(0, n_cols, Tx):
-                x1 = min(n_cols, x0 + Tx)
-                cube = ramp[:, y0:y1, x0:x1]
-                N, ty, tx = cube.shape
-                m_tile = np.zeros((ty, tx), dtype=np.float32)
-                b_tile = np.zeros_like(m_tile)
-                for col_slice, out_slice in [(np.index_exp[:, :, 0::2], (slice(None), slice(0, None, 2))),
-                    (np.index_exp[:, :, 1::2], (slice(None), slice(1, None, 2))),]:
+    # per-row OLS slope uncertainty (1σ) using valid reads ---
+    def _ols_row_and_uncert(self,row_reads,             # (N, W) counts
+                        valid_reads_mask,      # (N, W) bool
+                        t,                     # (N,) seconds
+                        sig_row):              # (W,) single-read σ (e-)
+        """
+        Return (OLS_slope_row, OLS_slope_uncert_row).
+        OLS slope uncertainty:  σ_m = σ_read / sqrt( Σ_i (t_i - tbar)^2 ), using only valid reads.
+        This is the classic unweighted OLS formula (appropriate when each read has the same σ per pixel).
+        """
+        N, W = row_reads.shape
+        v = valid_reads_mask.astype(bool)
 
-                    subcube = cube[col_slice]
-                    if subcube.size == 0:
-                        continue
-                    for iteration in range(max_iter):
-                        sig2 = np.maximum(subcube / gain + rn**2, 1e-6)
-                        i = np.arange(subcube.shape[0], dtype=np.float32)[:, None, None]
-                        S0 = np.sum(1.0 / sig2, axis=0)
-                        S1 = np.sum(i / sig2, axis=0)
-                        S2 = np.sum(i**2 / sig2, axis=0)
-                        S0x = np.sum(subcube / sig2, axis=0)
-                        S1x = np.sum(i * subcube / sig2, axis=0)
-                        ibar = S1 / S0
-                        mdt = (S1x - ibar * S0x) / np.maximum(S2 - ibar**2 * S0, 1e-8)
-                        m = mdt / dt
-                        b = S0x / S0 - mdt * ibar
-                        subcube = np.clip(b[None, :, :] + m[None, :, :] * i * dt, 0, None)
-                    m_tile[out_slice] = m
-                    b_tile[out_slice] = b
-                slope[y0:y1, x0:x1] = m_tile
-                bias[y0:y1, x0:x1] = b_tile
-        t2=time.time()
-        self.logger.info(f"Ramp fitting finished in {t2-t1:.2f} seconds.")
-        return slope
+        # counts of valid reads per pixel
+        S0 = v.sum(axis=0)                                    # (W,)
+        S0_safe = np.maximum(S0, 1)
+
+        # time statistics on valid reads
+        St  = (t[:, None] * v).sum(axis=0)                    # (W,)
+        tbar = St / S0_safe                                   # (W,)
+        Stt_centered = (((t[:, None] - tbar) ** 2) * v).sum(axis=0)  # (W,)
+
+        # OLS slope (per pixel) using valid reads
+        y   = np.where(v, row_reads, 0.0)
+        Sy  = y.sum(axis=0)
+        Sty = (t[:, None] * y).sum(axis=0)
+        # slope = Cov(t,y)/Var(t) = (Σ t y - tbar Σ y) / Σ (t - tbar)^2
+        num = Sty - tbar * Sy
+        den = np.where(Stt_centered > 0, Stt_centered, np.nan)
+        slope_row = num / den
+
+        # 1σ on slope (e-/s); if <2 reads valid, set NaN
+        slope_unc_row = sig_row / np.sqrt(den)
+        slope_unc_row[(S0 < 2) | ~np.isfinite(den)] = np.nan
+
+        return slope_row, slope_unc_row
 
     ########### ramp fit for read >5 ########################################
-
-    def ramp_fit(self,input_read, total_exptime, SIG_map_scaled):
+    def ramp_fit(self,input_read, total_exptime, SIG_map_scaled, *,
+        return_pedestal=True,
+        reset_prior_strength=3.0, # prior σ = k * SIG per pixel
+        use_sigma_clip=False,  # optional; physics mask usually suffices
+        sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128),
+        JUMP_THRESH_ONEOMIT=20.25,
+        JUMP_THRESH_TWOOMIT=23.8):
         """
-        Perform hybrid ramp fitting:
-        - tile-based sigma-clipped preprocessing of input reads
-        - slope_linear() fallback for all pixels
-        - fitramp for valid regions
-        - smooth blending and NaN handling
+        produce two images—slope (countrate) and pedestal (reset) using fitramp everywhere it’s well-posed,
+        and fall back to a robust OLS only where fitramp can’t run. Optionally clean reads,
+        mask physically impossible read pairs, and (optionally) detect jumps.
+    
+        Prefer fitramp (pedestal=True) for any number of reads; OLS only as per-pixel fallback.
+        - Saturation/rollover handled via Δread > 0 mask.
+        - Jump detection layered on top.
+        - Finite reset prior from first valid read.
         """
-        # === Helper: fast tile-based sigma clipping ===
-        def sigma_clip_ramp_inputs(science_ramp, sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128)):
-            """
-            Iteratively sigma-clip each pixel's ramp along the time axis, tile by tile.
-            Returns a boolean mask (True = keep read).
-            """
-            n_reads, n_rows, n_cols = science_ramp.shape
-            keep_mask = np.ones_like(science_ramp, dtype=bool)
+        N, H, W = input_read.shape
+        dt = float(total_exptime) / N
+        t  = (np.arange(N, dtype=float) + 0.5) * dt
+        t1=time.time()
+        # (optional) σ-clip (off by default)
+        def _sigma_clip_reads(self,cube):
+            from tqdm import tqdm
+            keep = np.ones_like(cube, dtype=bool)
             Ty, Tx = tile
-
-            for y0 in tqdm(range(0, n_rows, Ty), desc="σ-clipping tiles"):
-                y1 = min(n_rows, y0 + Ty)
-                for x0 in range(0, n_cols, Tx):
-                    x1 = min(n_cols, x0 + Tx)
-
-                    cube = science_ramp[:, y0:y1, x0:x1]  # (N, ty, tx)
-                    N, ty, tx = cube.shape
-                    k = ty * tx
-                    y = cube.reshape(N, k)
-                    mask = np.isfinite(y)
-
+            for y0 in tqdm(range(0, H, Ty), desc="σ-clip tiles"):
+                y1 = min(H, y0+Ty)
+                for x0 in range(0, W, Tx):
+                    x1 = min(W, x0+Tx)
+                    sub = cube[:, y0:y1, x0:x1]
+                    n, ty, tx = sub.shape
+                    k = ty*tx
+                    Y = sub.reshape(n, k)
+                    mask = np.isfinite(Y)
+                    time_idx = np.arange(n, dtype=np.float32)
                     for _ in range(max_iter):
-                        valid_counts = mask.sum(axis=0)
-                        good = valid_counts >= min_reads
-                        if not np.any(good):
-                            break
-
-                        t = np.arange(N, dtype=np.float32)
-                        S0 = mask.sum(axis=0)
-                        St = t @ mask
-                        Stt = (t**2) @ mask
-                        wy = y * mask
-                        Sy = wy.sum(axis=0)
-                        Sty = t @ wy
-                        Var_t = Stt - (St * St) / np.maximum(S0, 1)
-                        Cov_ty = Sty - (St * Sy) / np.maximum(S0, 1)
-                        b = np.zeros(k, dtype=np.float32)
-                        valid = Var_t > 0
-                        b[valid] = Cov_ty[valid] / Var_t[valid]
-                        a = (Sy - b * St) / np.maximum(S0, 1)
-
-                        y_pred = a + np.outer(t, b)
-                        resid = (y - y_pred)
+                        cnt = mask.sum(0)
+                        if not np.any(cnt >= min_reads): break
+                        S0  = cnt
+                        St  = time_idx @ mask
+                        Stt = (time_idx**2) @ mask
+                        Wy  = Y * mask
+                        Sy  = Wy.sum(0)
+                        Sty = time_idx @ Wy
+                        Var_t = Stt - (St*St)/np.maximum(S0, 1)
+                        Cov_ty = Sty - (St*Sy)/np.maximum(S0, 1)
+                        b = np.zeros(k, np.float32)
+                        ok = Var_t > 0
+                        b[ok] = Cov_ty[ok] / Var_t[ok]
+                        a = (Sy - b*St) / np.maximum(S0, 1)
+                        Yhat = a + np.outer(time_idx, b)
+                        resid = Y - Yhat
                         resid[~mask] = np.nan
-                        std = np.nanstd(resid, axis=0)
-                        new_mask = np.abs(resid) < sigma_clip * std
-                        new_mask &= np.isfinite(y)
-                        if np.array_equal(new_mask, mask):
-                            break
+                        s = np.nanstd(resid, 0)
+                        new_mask = (np.abs(resid) < sigma_clip*s) & np.isfinite(Y)
+                        if np.array_equal(new_mask, mask): break
                         mask = new_mask
+                    keep[:, y0:y1, x0:x1] = mask.reshape(n, ty, tx)
+            return keep
 
-                    keep_mask[:, y0:y1, x0:x1] = mask.reshape(N, ty, tx)
+        base_valid = np.isfinite(input_read)
+        if use_sigma_clip:
+            base_valid &= self._sigma_clip_reads(input_read)
 
-            return keep_mask
+        # differences and physics mask
+        diffs = input_read[1:] - input_read[:-1]
+        ## both reads valid & Δread must be positive
+        pair_mask = (base_valid[1:] & base_valid[:-1]) & (diffs > 0)
 
-        FLUX_SCALING_FACTOR = 1.0
-        JUMP_THRESH_ONEOMIT = 20.25
-        JUMP_THRESH_TWOOMIT = 23.8
+        # ---------- Reset prior: first valid read; else no prior (σ=∞) ----------
+        #If the first resultant is valid, use it as the prior mean on the pedestal.
+        #Prior uncertainty is reset_prior_strength × SIG (finite). If first read is bad, set σ=∞ (flat prior).
+        #With few usable differences, a finite reset prior makes the joint 
+        #(pedestal+slope) fit solvable and better conditioned.
 
-        nim_s = input_read.shape[0]
-        read_times = np.linspace(0, total_exptime, nim_s)
+        first_read = input_read[0]
+        first_ok = base_valid[0] & np.isfinite(first_read)
+        resetval_map = np.where(first_ok, first_read, 0.0)
+        resetsig_map = np.where(first_ok, reset_prior_strength * SIG_map_scaled, np.inf)
 
-        # === Case 1: Few reads (simple linear fit) ===
-        if nim_s < 6:
-            self.logger.info('Few reads (<6): Performing a stright line fit...')
-            output_final = self.iterative_sigma_weighted_ramp_fit(
-                input_read,read_time=total_exptime)
-        else:
-            # === Case 2: Full ramp fitting ===
-            self.logger.info("Applying σ-clipping to input ramp (tile-based)...")
-            valid_reads_mask = sigma_clip_ramp_inputs(
-                input_read, sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128))
+        C_no  = fitramp.Covar(t, pedestal=False)
+        C_ped = fitramp.Covar(t, pedestal=True)
 
-            sci_im_scaled = input_read / FLUX_SCALING_FACTOR
-            Covar_obj = fitramp.Covar(read_times, pedestal=False)
+        slope  = np.full((H, W), np.nan, float)
+        ped    = np.full((H, W), np.nan, float)
+        uncert = np.full((H, W), np.nan, float)
 
-            # Apply sigma-clipped mask
-            masked_input = np.where(valid_reads_mask, sci_im_scaled, np.nan)
-            d_sci = masked_input[1:] - masked_input[:-1]
+        for i in range(H):
+            if i % 128 == 0:
+                print(f"Fitting row {i}/{H}...")
 
-            # === Precompute linear fallback (OLS) ===
-            self.logger.info("Computing initial guess for ramp fitting...")
-            B_ols_sci = self.iterative_sigma_weighted_ramp_fit(
-                sci_im_scaled,
-                read_time=total_exptime)
+            sig_row   = SIG_map_scaled[i, :]
+            d_row     = diffs[:, i, :]
+            m_row     = pair_mask[:, i, :]
+            resetval  = resetval_map[i, :]
+            resetsig  = resetsig_map[i, :]
 
-            # === fitramp fitting ===
-            output_final = np.empty((sci_im_scaled.shape[1], sci_im_scaled.shape[2]), dtype=float)
-            start_time = time.time()
+            Wrow = d_row.shape[1]
+            row_slope  = np.full(Wrow, np.nan, float)
+            row_ped    = np.full(Wrow, np.nan, float)
+            row_uncert = np.full(Wrow, np.nan, float)
 
-            for i in range(sci_im_scaled.shape[1]):
-                if i % 128 == 0:
-                    print(f"  Fitting row {i}/{sci_im_scaled.shape[1]}...")
+            # 0) Usable diffs BEFORE jump detection
+            usable0 = m_row.sum(axis=0)
 
-                current_sig_for_row = SIG_map_scaled[i, :]
-                diffs_for_row = d_sci[:, i, :]
-                countrateguess = B_ols_sci[i, :]
+            #If a pixel has ≥2 usable diffs, we can get a fitramp-based seed for its slope.
+            #Otherwise, seed comes from the robust OLS fallback.
+            # 1) Initial seed via fitramp only where well-posed (≥2 diffs). Else OLS seed.
+            #The final (pedestal=True) optimization benefits from a decent slope initial guess.
+            seed = np.full(Wrow, np.nan, float)
+            idx_seed_fit = (usable0 >= 2)
+            idx_seed_ols = ~idx_seed_fit
 
-                # convert sigma-clipped mask to diffs2use
-                diffs2use = valid_reads_mask[1:, i, :] & valid_reads_mask[:-1, i, :]
-
+            #Use pedestal=False for speed/robustness; countrateguess=None lets fitramp infer it from the data.
+            #If something throws, we switch those pixels to OLS seeding.
+            if np.any(idx_seed_fit):
                 try:
-                    # Combine with fitramp’s own jump mask
-                    diffs2use_fitramp, _ = fitramp.mask_jumps(
-                        diffs_for_row, Covar_obj, current_sig_for_row,
-                        threshold_oneomit=JUMP_THRESH_ONEOMIT,
-                        threshold_twoomit=JUMP_THRESH_TWOOMIT,)
-
-                    diffs2use &= diffs2use_fitramp
-
-                    result = fitramp.fit_ramps(
-                        diffs_for_row, Covar_obj, current_sig_for_row,
-                        diffs2use=diffs2use,
-                        countrateguess=countrateguess,
-                        rescale=True,)
-
-                    valid = np.isfinite(result.countrate) & (
-                        result.countrate > 0.05 * np.nanmedian(countrateguess))
-
-                    row_out = np.where(valid, result.countrate, countrateguess)
-
+                    d_sub   = d_row[:, idx_seed_fit]
+                    m_sub   = m_row[:, idx_seed_fit]
+                    sig_sub = sig_row[idx_seed_fit]
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=RuntimeWarning)
+                        init_res = fitramp.fit_ramps(d_sub, C_no, sig_sub,
+                            diffs2use=m_sub,
+                            countrateguess=None,
+                            rescale=True)
+                    seed[idx_seed_fit] = init_res.countrate
                 except Exception:
-                    row_out = countrateguess  # fallback if fitramp fails entirely
+                    idx_seed_ols |= idx_seed_fit
 
-                output_final[i, :] = row_out * FLUX_SCALING_FACTOR
+            if np.any(idx_seed_ols):
+                # compute OLS for the whole row once and slice
+                ols_row, _ = self._ols_row_and_uncert(input_read[:, i, :],  # (N,W)
+                    base_valid[:, i, :],
+                    t, sig_row)
+                seed[idx_seed_ols] = ols_row[idx_seed_ols]
 
-            end_time = time.time()
-            self.logger.info(f"Ramp fitting completed in {end_time - start_time:.2f} seconds.")
-        return output_final
+            # fill non-finite seeds with OLS
+            bad = ~np.isfinite(seed)
+            if np.any(bad):
+                ols_row, _ = self._ols_row_and_uncert(input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t, sig_row)
+                seed[bad] = ols_row[bad]
+
+            # 2) Jump detection (only where we have ≥1 diff)
+            #Likelihood-based cosmic-ray/jump search; returns a binary mask for diffs to keep.
+            #Drop diffs that substantially improve χ² when omitted (thresholds ≈ 4.5σ false-positive equivalent).
+            m_row2 = m_row.copy()
+            idx_jump = (usable0 >= 1)
+            if np.any(idx_jump):
+                try:
+                    d_sub   = d_row[:, idx_jump]
+                    m_sub   = m_row[:, idx_jump]
+                    sig_sub = sig_row[idx_jump]
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=RuntimeWarning)
+                        m2_sub, _ = fitramp.mask_jumps(d_sub, C_no, sig_sub,
+                            threshold_oneomit=JUMP_THRESH_ONEOMIT,
+                            threshold_twoomit=JUMP_THRESH_TWOOMIT,
+                            diffs2use=m_sub)
+                    m_row2[:, idx_jump] = m2_sub
+                except Exception:
+                    pass
+
+            usable_final = m_row2.sum(axis=0)
+
+            # 3) Final fit with pedestal=True
+            # Solvable if:
+            #   - usable_final >= 1 AND prior finite, OR
+            #   - usable_final >= 2 (solvable even without a prior)
+            #This is the high-fidelity fit that jointly estimates pedestal and slope using the full covariance model.
+            idx_final_fit = (usable_final >= 1) & (np.isfinite(resetsig) | (usable_final >= 2))
+            if np.any(idx_final_fit):
+                try:
+                    d_sub    = d_row[:, idx_final_fit]
+                    m_sub    = m_row2[:, idx_final_fit]
+                    sig_sub  = sig_row[idx_final_fit]
+                    seed_sub = seed[idx_final_fit]
+                    r0_sub   = resetval[idx_final_fit]
+                    s0_sub   = resetsig[idx_final_fit]
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=RuntimeWarning)
+                        final_res = fitramp.fit_ramps(d_sub, C_ped, sig_sub,
+                            diffs2use=m_sub,
+                            countrateguess=seed_sub,
+                            resetval=r0_sub, resetsig=s0_sub,
+                            rescale=True)
+                    row_slope[idx_final_fit]  = final_res.countrate
+                    row_ped[idx_final_fit]    = final_res.pedestal
+                    row_uncert[idx_final_fit] = final_res.uncert     # <-- from fitramp
+                except Exception:
+                    pass
+
+            # 4) Per-pixel fallback: unsolved, zero usable diffs, or excluded by gating
+            #If final fit is missing, use OLS slope and the prior mean for pedestal.
+            need_fallback = (~np.isfinite(row_slope)) | (usable_final == 0) | (~idx_final_fit)
+            if np.any(need_fallback):
+                ols_row, ols_unc = self._ols_row_and_uncert(input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t, sig_row)
+                row_slope[need_fallback]  = ols_row[need_fallback]
+                row_uncert[need_fallback] = ols_unc[need_fallback]
+                row_ped[need_fallback]    = resetval[need_fallback]  # prior mean
+
+            # 5) Final sanitation: any remaining non-finite → seed; then OLS
+            bad_final = ~np.isfinite(row_slope)
+            if np.any(bad_final):
+                ols_row, ols_unc = self._ols_row_and_uncert(input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t, sig_row)
+                row_slope[bad_final]  = ols_row[bad_final]
+                row_uncert[bad_final] = ols_unc[bad_final]
+                row_ped[bad_final]    = resetval[bad_final]
+
+            slope[i, :]  = row_slope
+            ped[i,   :]  = row_ped
+            uncert[i, :] = row_uncert
+        t2=time.time()
+        self.logger.info(f"Ramp fitting completed in {t2 - t1:.3f} seconds.")
+        return (slope, ped, uncert) if return_pedestal else (slope, uncert)
+
 
     ####################### getting the master files needed from /redux #####################
     def load_single_master_file(self,expected_keywords, master_type):
@@ -265,7 +330,7 @@ class RampFit(BasePrimitive):
             "MedRes-M_master_lensflat.fits",]
 
         if not os.path.isdir(base):
-            return None
+            return (None,None)
 
         # collect candidate filenames in redux/
         all_files = [f for f in os.listdir(base) if f.lower().endswith(".fits")]
@@ -290,7 +355,7 @@ class RampFit(BasePrimitive):
                     candidates.append(os.path.join(base, f))
 
         if not candidates:
-            return None
+            return (None,None)
 
         # now open candidates and check headers
         for path in candidates:
@@ -298,6 +363,7 @@ class RampFit(BasePrimitive):
                 with fits.open(path) as hdul:
                     hdr = hdul[0].header
                     data = hdul[0].data
+                    uncert = hdul['UNCERT'].data
             except Exception:
                 continue
 
@@ -328,35 +394,183 @@ class RampFit(BasePrimitive):
                 continue
 
             # if we reach here, this file matches everything we care about
-            return data
+            return (data,uncert)
 
         # no candidate matched fully
-        return None
+        return (None,None)
 
-    ####################### flat normalization #############################
-    def normalize_detector_flat(self,flat, mask=None, method='median', clip_sigma=7.0, iterations=3):
-        flat = np.array(flat, dtype=np.float32)
-        invalid = ~np.isfinite(flat) | (flat <= 0)
+    ####################### calib correction #############################
+    def apply_calibration(
+        self,
+        data,                # (H,W) science data
+        sigma_data,          # (H,W) 1σ of science data
+        calib,               # (H,W) calibration frame: bias/dark/flat
+        sigma_calib,         # (H,W) 1σ of calibration frame
+        imtype,              # str from header, e.g. 'BIAS','DARK','FLAT'
+        *,
+        scale: float = 1.0,  # optional scale for bias/dark (e.g. exposure ratio)
+        eps: float = 1e-10,  # avoid divide-by-zero for flats
+        clip_nan: bool = True):
+        """
+        Return (corrected_data, corrected_sigma) with error propagation.
+
+        If IMTYPE is 'BIAS' or 'DARK' (case-insensitive):
+            out = data - scale * calib
+            σ_out = sqrt( σ_data^2 + (scale^2) * σ_calib^2 )
+
+        If IMTYPE is 'FLAT' (normalized flat):
+            out = data / calib
+            σ_out = sqrt( σ_data^2 / calib^2 + data^2 * σ_calib^2 / calib^4 )
+
+        Notes:
+        - All arrays must be same shape and numeric.
+        - For subtraction, units of data & calib (and their σ) must match.
+        - For flat-fielding, calib should be normalized (unitless, ~1.0 mean).
+        - `scale` is applied only for BIAS/DARK (ignored for FLAT).
+        """
+        data        = np.asarray(data, dtype=float)
+        sigma_data  = np.asarray(sigma_data, dtype=float)
+        calib       = np.asarray(calib, dtype=float)
+        sigma_calib = np.asarray(sigma_calib, dtype=float)
+
+        kind = (imtype or "").strip().upper()
+
+        if kind in ("BIAS", "DARK"):
+            out = data - scale * calib
+            sig = np.sqrt(sigma_data**2 + (scale**2) * sigma_calib**2)
+
+        elif kind in ("FLATLAMP", 'FLATLENS'):
+            denom = np.where(np.isfinite(calib) & (np.abs(calib) > eps), calib, np.nan)
+            out = data / denom
+            sig = np.sqrt( (sigma_data**2) / (denom**2) + (data**2) * (sigma_calib**2) / (denom**4) )
+
+        else:
+            raise ValueError(f"Unrecognized IMTYPE='{imtype}'. Expected 'BIAS', 'DARK', or 'FLAT'.")
+
+        if clip_nan:
+            good = np.isfinite(out) & np.isfinite(sig)
+            out = np.where(good, out, np.nan)
+            sig = np.where(good, sig, np.nan)
+        return out.astype(np.float32), sig.astype(np.float32)
+
+    ####################### flat normalization    ###################
+    def normalize_detector_flat(
+        self,
+        flat,                     # (H,W) master flat (same units as science)
+        flat_sigma,               # (H,W) 1σ uncertainty of master flat (same units)
+        mask=None,                # (H,W) bool, True = invalid pixel
+        method='median',          # 'median' or 'mean' for normalization constant
+        clip_sigma=7.0,
+        iterations=3,
+        eps=1e-12,
+        return_norm_stats=False):
+        """
+        Normalize a master flat and propagate uncertainty.
+
+        For each pixel i:
+            f_i_norm = F_i / c
+            σ_i_norm^2 ≈ (σ_Fi^2 / c^2) + (F_i^2 * σ_c^2 / c^4)
+
+        where c is the robust central value (median or mean) of the valid pixels,
+        estimated after sigma-clipping; σ_c is the standard error of c.
+
+        Notes
+        -----
+        * Correlation between F_i and c is ignored (good approximation for large N).
+        * For 'median':   σ_c ≈ 1.253 * σ_sample / sqrt(N_eff)
+        For 'mean'  :   σ_c =      σ_sample / sqrt(N_eff)
+        σ_sample is estimated robustly via MAD; falls back to std if needed.
+        * Invalid pixels (mask | non-finite | <=0) return NaN in both outputs.
+        """
+        flat      = np.asarray(flat, dtype=np.float64)
+        flat_sigma= np.asarray(flat_sigma, dtype=np.float64)
+        if flat.shape != flat_sigma.shape:
+            raise ValueError("flat and flat_sigma must have identical shapes")
+
+        invalid = ~np.isfinite(flat) | ~np.isfinite(flat_sigma) | (flat <= 0)
         if mask is not None:
-            invalid |= mask.astype(bool)
+            invalid |= np.asarray(mask, dtype=bool)
+
         valid = ~invalid
         valid_data = flat[valid]
         if valid_data.size == 0:
             raise ValueError("No valid pixels found in flat for normalization.")
+
+        # --- sigma clip the valid sample to define the normalization pool ---
         clipped = valid_data.copy()
         for _ in range(iterations):
             med = np.median(clipped)
-            std = np.std(clipped)
-            good = (clipped > med - clip_sigma * std) & (clipped < med + clip_sigma * std)
-            if np.all(good):
+            # robust scatter via MAD; fallback to std if MAD==0
+            mad = np.median(np.abs(clipped - med))
+            robust_sigma = mad / 0.67448975 if mad > 0 else np.std(clipped)
+            if robust_sigma == 0 or not np.isfinite(robust_sigma):
                 break
-            clipped = clipped[good]
-        norm_value = np.median(clipped) if method == 'median' else np.mean(clipped)
-        if norm_value <= 0 or not np.isfinite(norm_value):
-            raise ValueError(f"Invalid normalization constant: {norm_value}")
-        flat_norm = flat / norm_value
-        flat_norm[invalid] = np.nan
-        return flat_norm
+            low, high = med - clip_sigma * robust_sigma, med + clip_sigma * robust_sigma
+            keep = (clipped > low) & (clipped < high)
+            if np.all(keep):
+                break
+            clipped = clipped[keep]
+
+        if clipped.size == 0:
+            raise ValueError("All flat pixels rejected during clipping; cannot normalize.")
+
+        # normalization constant (c) and its standard error (σ_c)
+        if method.lower() == 'median':
+            c = np.median(clipped)
+            # recompute robust sigma on the final clipped set
+            mad = np.median(np.abs(clipped - c))
+            sig_sample = mad / 0.67448975 if mad > 0 else np.std(clipped)
+            sigma_c = 1.2533141373155001 * sig_sample / np.sqrt(clipped.size)  # ≈ sqrt(pi/2)
+        elif method.lower() == 'mean':
+            c = np.mean(clipped)
+            sig_sample = np.std(clipped, ddof=1) if clipped.size > 1 else 0.0
+            sigma_c = sig_sample / np.sqrt(clipped.size) if clipped.size > 0 else np.inf
+        else:
+            raise ValueError("method must be 'median' or 'mean'")
+        if not np.isfinite(c) or c <= 0:
+            raise ValueError(f"Invalid normalization constant: {c}")
+
+        # --- propagate uncertainties per pixel ---
+        c_safe = float(c)
+        c2 = c_safe**2
+        c4 = c_safe**4
+        # main formulas
+        flat_norm = np.full_like(flat, np.nan, dtype=np.float64)
+        sigma_norm= np.full_like(flat, np.nan, dtype=np.float64)
+
+        # avoid division by zero / nan propagation; invalid already handled
+        denom = np.where(valid, c_safe, np.nan)
+
+        flat_norm[valid]  = flat[valid] / denom[valid]
+        # Var(f/c) = Var(f)/c^2 + f^2 * Var(c)/c^4
+        sigma_norm[valid] = np.sqrt( (flat_sigma[valid]**2) / c2 + (flat[valid]**2) * (sigma_c**2) / c4 )
+
+        # cast to float32 for storage if desired
+        flat_norm  = flat_norm.astype(np.float32)
+        sigma_norm = sigma_norm.astype(np.float32)
+
+        if return_norm_stats:
+            return flat_norm, sigma_norm, (float(c), float(sigma_c), int(clipped.size))
+        return flat_norm, sigma_norm
+
+    ############# even odd swaping (optional) ############################
+    def swap_odd_even_columns(self,cube,n_amps=4,do_swap=True):
+        if do_swap:
+            nreads,n_rows,n_cols = cube.shape
+            ramp = np.empty_like(cube)
+            block = n_cols // n_amps
+            for a in range(n_amps):
+                x0, x1 = a * block, (a + 1) * block
+                sub = cube[..., x0:x1]
+                nsub = sub.shape[-1]
+                new_order = []
+                for i in range(0, nsub, 2):
+                    if i + 1 < nsub:
+                        new_order.extend([i + 1, i])
+                    else:
+                        new_order.append(i)
+                ramp[..., x0:x1] = sub[..., new_order]
+        return ramp
     ####################################################################################
         
     def _perform(self):
@@ -372,11 +586,11 @@ class RampFit(BasePrimitive):
 
             elif obsmode =='IFS':
                 SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
-        
-            output_final = []
+
             input_data = self.action.args.ccddata.data
             #print(input_data.shape)
-            sci_im_full_original = input_data 
+            self.logger.info("+++++++++++ odd even column swapping +++++++++++")
+            sci_im_full_original = self.swap_odd_even_columns(input_data)
             #sci_im_full_original = reference.reffix_hxrg(input_data, nchans=4, fixcol=True)
             #self.logger.info("refpix and 1/f correction completed")
             #saturation_map = linearity.create_saturation_map_by_slope(
@@ -391,47 +605,56 @@ class RampFit(BasePrimitive):
             #    obsmode = obsmode)
 
             nim_s = sci_im_full_original.shape[0]
-            read_times = np.linspace(0, total_exptime, nim_s)
             self.logger.info("+++++++++++ ramp fitting started +++++++++++")
 
-            output_final = self.ramp_fit(sci_im_full_original, read_times, SIG_map_scaled)
-
-            #bad_mask_global = (output_final <= 0) | ~np.isfinite(output_final)
-            #if np.any(bad_mask_global):
-            #    output_final = self.masked_smooth_fast(output_final, bad_mask_global, sigma=1.0)
-            #med = np.nanmedian(output_final[output_final > 0])
-            #output_final[np.isnan(output_final)] = med
+            final_slope,final_reset,final_uncert = self.ramp_fit(sci_im_full_original, total_exptime, SIG_map_scaled)
+            #neg_bpm = (final_slope < 0).astype(np.uint8)
 
             self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
-            final_ramp = bpm.apply_full_correction(output_final,obsmode)
-            self.logger.info("+++++++++++ BPM correction completed +++++++++++")
+            final_ramp = bpm.apply_full_correction(final_slope,obsmode)
 
             keywords_unique = {
                 key: self.action.args.ccddata.header.get(key)
                 for key in ['OBSMODE', 'IFSMODE', 'MCLOCK']}
 
-            m_dark = self.load_single_master_file(keywords_unique, master_type='DARK')
-            m_bias = self.load_single_master_file(keywords_unique, master_type='BIAS')
-            m_flat = self.load_single_master_file(keywords_unique, master_type='FLATLAMP')
+            m_dark, m_dark_uncert = self.load_single_master_file(keywords_unique, master_type='DARK')
+            m_bias, m_bias_uncert = self.load_single_master_file(keywords_unique, master_type='BIAS')
+            m_flat, m_flat_uncert = self.load_single_master_file(keywords_unique, master_type='FLATLAMP')
 
             if m_dark is not None:
-                final_ramp = final_ramp - m_dark
+                final_ramp, final_uncert = self.apply_calibration(
+                    final_ramp,
+                    final_uncert,
+                    m_dark,
+                    m_dark_uncert,
+                    imtype='DARK')
                 self.action.args.ccddata.header['HISTORY'] = 'Dark subtracted.'
                 self.logger.info("+++++++++++ Master dark subtracted +++++++++++")
         
             if m_bias is not None:
-                final_ramp = final_ramp - m_bias
+                final_ramp, final_uncert = self.apply_calibration(
+                    final_ramp,
+                    final_uncert,
+                    m_bias,
+                    m_bias_uncert,
+                    imtype='BIAS')
                 self.action.args.ccddata.header['HISTORY'] = 'Bias subtracted.'
                 self.logger.info("+++++++++++ Master bias subtracted +++++++++++")
 
             if m_flat is not None:
-                norm_flat = self.normalize_detector_flat(m_flat)
-                final_ramp = np.true_divide(final_ramp,norm_flat)
+                norm_flat,norm_flat_uncert = self.normalize_detector_flat(m_flat,m_flat_uncert)
+                final_ramp, final_uncert = self.apply_calibration(
+                    final_ramp,
+                    final_uncert,
+                    norm_flat,
+                    norm_flat_uncert,
+                    imtype='FLATLAMP')
                 self.action.args.ccddata.header['HISTORY'] = 'Detector Flat correction applied.'
                 self.logger.info("+++++++++++ detector flat correction completed  +++++++++++")
 
             self.action.args.ccddata.data = final_ramp
-        
+            self.action.args.ccddata.uncertainty = StdDevUncertainty(final_uncert.astype(np.float32))
+
             log_string = RampFit.__module__
             self.action.args.ccddata.header['HISTORY'] = log_string
             self.logger.info(log_string)
