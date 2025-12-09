@@ -29,6 +29,7 @@ import pkg_resources
 from scipy.ndimage import distance_transform_edt, gaussian_filter
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
 from tqdm import tqdm
+from scalesdrp.primitives.linearity import DQ_FLAGS
 
 class StartCalib(BasePrimitive):
     """
@@ -206,7 +207,8 @@ class StartCalib(BasePrimitive):
         use_sigma_clip=False,  # optional; physics mask usually suffices
         sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128),
         JUMP_THRESH_ONEOMIT=20.25,
-        JUMP_THRESH_TWOOMIT=23.8):
+        JUMP_THRESH_TWOOMIT=23.8,
+        group_dq=None):
         """
         produce two images—slope (countrate) and pedestal (reset) using fitramp everywhere it’s well-posed,
         and fall back to a robust OLS only where fitramp can’t run. Optionally clean reads,
@@ -265,6 +267,9 @@ class StartCalib(BasePrimitive):
         if use_sigma_clip:
             base_valid &= self._sigma_clip_reads(input_read)
 
+        if group_dq is not None:
+            saturated = (group_dq & DQ_FLAGS["SATURATED"]) != 0
+            base_valid &= ~saturated
         # differences and physics mask
         diffs = input_read[1:] - input_read[:-1]
         ## both reads valid & Δread must be positive
@@ -425,21 +430,22 @@ class StartCalib(BasePrimitive):
 
 ################## swapping ######################################
     def swap_odd_even_columns(self,cube,n_amps=4,do_swap=True):
-        if do_swap:
-            nreads,n_rows,n_cols = cube.shape
-            ramp = np.empty_like(cube)
-            block = n_cols // n_amps
-            for a in range(n_amps):
-                x0, x1 = a * block, (a + 1) * block
-                sub = cube[..., x0:x1]
-                nsub = sub.shape[-1]
-                new_order = []
-                for i in range(0, nsub, 2):
-                    if i + 1 < nsub:
-                        new_order.extend([i + 1, i])
-                    else:
-                        new_order.append(i)
-                ramp[..., x0:x1] = sub[..., new_order]
+        if not do_swap:
+            return cube
+        nreads,n_rows,n_cols = cube.shape
+        ramp = np.empty_like(cube)
+        block = n_cols // n_amps
+        for a in range(n_amps):
+            x0, x1 = a * block, (a + 1) * block
+            sub = cube[..., x0:x1]
+            nsub = sub.shape[-1]
+            new_order = []
+            for i in range(0, nsub, 2):
+                if i + 1 < nsub:
+                    new_order.extend([i + 1, i])
+                else:
+                    new_order.append(i)
+            ramp[..., x0:x1] = sub[..., new_order]
         return ramp
 
 ################### master file ###############################
@@ -613,14 +619,18 @@ class StartCalib(BasePrimitive):
         self,
         R_transpose,
         data_image,
+        sigma_image,
         read_noise_variance_vector,gain = 1.0):
 
         self.logger.info('Optimal extraction started')
         start_time1 = time.time()
         data_vector_d = data_image.flatten().astype(np.float64)
+        sigma_vector = sigma_image.array.flatten().astype(np.float64)
+        variance_from_map = sigma_vector**2
         photon_noise_variance = data_vector_d.clip(min=0) / gain
         total_variance = read_noise_variance_vector + photon_noise_variance
-        total_variance[total_variance <= 0] = 1e-9
+        #total_variance[total_variance <= 0] = 1e-9
+        total_variance = read_noise_variance_vector + photon_noise_variance + variance_from_map
         inverse_variance = 1.0 / total_variance
         weighted_data = data_vector_d * inverse_variance
         numerator = R_transpose @ weighted_data
@@ -698,23 +708,29 @@ class StartCalib(BasePrimitive):
                     elif obsmode =='IFS':
                         SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
 
-                    #saturation_map = linearity.create_saturation_map_by_slope(
-                    #    science_ramp=sci_im_full_original1,
-                    #    skip_reads=3,
-                    #    slope_threshold=2.0,
-                    #    smoothing_window=3)
-
-                    #final_ramp, final_pixel_dq, final_group_dq = linearity.run_linearity_workflow(
-                    #    science_ramp=sci_im_full_original1,
-                    #    saturation_map=saturation_map,
-                    #    obsmode = obsmode)
-                    
-                    self.logger.info("+++++++++++ ACN & 1/f correction started +++++++++++")
-                    sci_im_full_original2 = reference.reffix_hxrg(sci_im_full_original1, nchans=4, fixcol=True)
                     self.logger.info("+++++++++++ odd even swapping +++++++++++")
-                    sci_im_full_original3 = self.swap_odd_even_columns(sci_im_full_original2)
+                    sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1)
+
+                    self.logger.info("+++++++++++ ACN & 1/f correction started +++++++++++")
+                    sci_im_full_original3 = reference.reffix_hxrg(sci_im_full_original2, nchans=4, fixcol=True)
+
+                    self.logger.info("+++++++++++ linearity correction started +++++++++++")
+                    if obsmode =='IMAGING':
+                        corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map, groupdq_raw = linearity.run_linearity_workflow(
+                            sci_im_full_original3,
+                            linearity_file="linearity_coeffs_img.fits")
+
+                    if obsmode =='IFS':
+                        corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map, groupdq_raw = linearity.run_linearity_workflow(
+                            sci_im_full_original3,
+                            linearity_file="linearity_coeffs_img.fits")
+
                     self.logger.info("+++++++++++ ramp fitting started +++++++++++")
-                    slope,reset,uncert = self.ramp_fit(sci_im_full_original3,readtime,SIG_map_scaled)
+                    slope,reset,uncert = self.ramp_fit(
+                        corrected_input_ramp,
+                        readtime,
+                        SIG_map_scaled,
+                        group_dq = groupdq)
 
                     self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
                     bpm_slope = bpm.apply_full_correction(slope,obsmode)
@@ -860,6 +876,7 @@ class StartCalib(BasePrimitive):
             A_guess_cube,A_guess_cube_err = self.optimal_extract_with_error(
                 R_matrix,
                 master_flatlens,
+                master_flatlen_uncert,
                 var_read_vector)
             A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
             A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)

@@ -181,7 +181,7 @@ def mean(inputData, Cut=5.0, axis=None, dtype=None, keepdims=False,
 
     """
 
-    inputData = np.array(inputData)
+    inputData = np.array(inputData, dtype=np.float64)
     
     if np.isnan(inputData).sum() > 0:
         medfunc = np.nanmedian

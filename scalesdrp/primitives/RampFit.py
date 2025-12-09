@@ -15,7 +15,7 @@ import scalesdrp.primitives.linearity as linearity #linearity correction
 import scalesdrp.primitives.bpm_correction as bpm #bpm correction
 from tqdm import tqdm
 from astropy.nddata import StdDevUncertainty
-
+from scalesdrp.primitives.linearity import DQ_FLAGS
 class RampFit(BasePrimitive):
 
     """
@@ -86,7 +86,8 @@ class RampFit(BasePrimitive):
         use_sigma_clip=False,  # optional; physics mask usually suffices
         sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128),
         JUMP_THRESH_ONEOMIT=20.25,
-        JUMP_THRESH_TWOOMIT=23.8):
+        JUMP_THRESH_TWOOMIT=23.8,
+        group_dq=None):
         """
         produce two images—slope (countrate) and pedestal (reset) using fitramp everywhere it’s well-posed,
         and fall back to a robust OLS only where fitramp can’t run. Optionally clean reads,
@@ -145,6 +146,9 @@ class RampFit(BasePrimitive):
         if use_sigma_clip:
             base_valid &= self._sigma_clip_reads(input_read)
 
+        if group_dq is not None:
+            saturated = (group_dq & DQ_FLAGS["SATURATED"]) != 0
+            base_valid &= ~saturated
         # differences and physics mask
         diffs = input_read[1:] - input_read[:-1]
         ## both reads valid & Δread must be positive
@@ -555,22 +559,24 @@ class RampFit(BasePrimitive):
 
     ############# even odd swaping (optional) ############################
     def swap_odd_even_columns(self,cube,n_amps=4,do_swap=True):
-        if do_swap:
-            nreads,n_rows,n_cols = cube.shape
-            ramp = np.empty_like(cube)
-            block = n_cols // n_amps
-            for a in range(n_amps):
-                x0, x1 = a * block, (a + 1) * block
-                sub = cube[..., x0:x1]
-                nsub = sub.shape[-1]
-                new_order = []
-                for i in range(0, nsub, 2):
-                    if i + 1 < nsub:
-                        new_order.extend([i + 1, i])
-                    else:
-                        new_order.append(i)
-                ramp[..., x0:x1] = sub[..., new_order]
+        if not do_swap:
+            return cube
+        nreads,n_rows,n_cols = cube.shape
+        ramp = np.empty_like(cube)
+        block = n_cols // n_amps
+        for a in range(n_amps):
+            x0, x1 = a * block, (a + 1) * block
+            sub = cube[..., x0:x1]
+            nsub = sub.shape[-1]
+            new_order = []
+            for i in range(0, nsub, 2):
+                if i + 1 < nsub:
+                    new_order.extend([i + 1, i])
+                else:
+                    new_order.append(i)
+            ramp[..., x0:x1] = sub[..., new_order]
         return ramp
+
     ####################################################################################
         
     def _perform(self):
@@ -590,25 +596,30 @@ class RampFit(BasePrimitive):
             input_data = self.action.args.ccddata.data
             #print(input_data.shape)
             self.logger.info("+++++++++++ odd even column swapping +++++++++++")
-            sci_im_full_original = self.swap_odd_even_columns(input_data)
-            #sci_im_full_original = reference.reffix_hxrg(input_data, nchans=4, fixcol=True)
-            #self.logger.info("refpix and 1/f correction completed")
-            #saturation_map = linearity.create_saturation_map_by_slope(
-            #    science_ramp=sci_im_full_original1,
-            #    skip_reads=3,
-            #    slope_threshold=2.0
-            #    smoothing_window=3)
-        
-            #final_ramp, final_pixel_dq, final_group_dq = linearity.run_linearity_workflow(
-            #    science_ramp=sci_im_full_original1,
-            #    saturation_map=saturation_map,
-            #    obsmode = obsmode)
+            sci_im_full_original1 = self.swap_odd_even_columns(input_data)
 
-            nim_s = sci_im_full_original.shape[0]
+            sci_im_full_original = reference.reffix_hxrg(sci_im_full_original1, nchans=4)
+            self.logger.info("refpix and 1/f correction completed")
+
+            self.logger.info("+++++++++++ linearity correction started +++++++++++")
+            if obsmode =='IMAGING':
+                corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map, groupdq_raw = linearity.run_linearity_workflow(
+                    sci_im_full_original,
+                    linearity_file="linearity_coeffs_img.fits")
+
+            if obsmode =='IFS':
+                corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map, groupdq_raw = linearity.run_linearity_workflow(
+                sci_im_full_original,
+                linearity_file="linearity_coeffs_img.fits")
+
+            #nim_s = sci_im_full_original.shape[0]
             self.logger.info("+++++++++++ ramp fitting started +++++++++++")
 
-            final_slope,final_reset,final_uncert = self.ramp_fit(sci_im_full_original, total_exptime, SIG_map_scaled)
-            #neg_bpm = (final_slope < 0).astype(np.uint8)
+            final_slope,final_reset,final_uncert = self.ramp_fit(
+                corrected_input_ramp,
+                total_exptime,
+                SIG_map_scaled,
+                group_dq = groupdq)
 
             self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
             final_ramp = bpm.apply_full_correction(final_slope,obsmode)

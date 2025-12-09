@@ -42,92 +42,6 @@ class QuickLook(BasePrimitive):
         self.logger.info("+++++++++++ FITS file saved +++++++++++")
         return output_path
 
-    def plot_png_save(self,data,output_dir,input_filename,suffix,overwrite=True):
-        base_name = os.path.basename(input_filename)
-        file_root, file_ext = os.path.splitext(base_name)
-        file_ext = '.png'
-        output_filename = f"{file_root}{suffix}{file_ext}"
-        plot_output_dir = os.path.join(output_dir, 'plots')
-        os.makedirs(plot_output_dir, exist_ok=True)
-        output_path = os.path.join(plot_output_dir, output_filename)
-        fig = plt.figure(figsize=(8, 8))
-        im = plt.imshow(data,origin='lower')
-        cbar = plt.colorbar(im, label='DN/s')
-        cbar.ax.tick_params(labelsize=14)
-        plt.title(f"{file_root}{suffix}", fontsize=14)
-        plt.xticks(fontsize=14)
-        plt.yticks(fontsize=14)
-        plt.savefig(output_path)
-        #plt.show()
-        #self.logger.info("+++++++++++ Image saved +++++++++++")
-        return 
-
-    #def plot_png_save(self,data,output_dir,input_filename,suffix):
-    #    import threading
-    #    print("Thread name:", threading.current_thread().name)
-    #    base_name = os.path.basename(input_filename)
-    #    file_root,_ = os.path.splitext(base_name)
-    #    output_filename = f"{file_root}{suffix}.png"
-    #    plot_output_dir = os.path.join(output_dir, 'plots')
-    #    os.makedirs(plot_output_dir, exist_ok=True)
-    #    output_path = os.path.join(plot_output_dir, output_filename)
-    #    fig,ax = plt.subplots(figsize=(8, 8))
-    #    im = ax.imshow(data,origin='lower',cmap='viridis')
-    #    cbar = plt.colorbar(im, label='DN/s')
-    #    cbar.ax.tick_params(labelsize=14)
-    #    ax.tick_params(axis="both", labelsize=14)
-    #    ax.set_title(f"{file_root}{suffix}", fontsize=14)
-    #    mpl_plot(fig=fig,show=True, save=True, filename=output_path)
-    #    mpl_clear()
-    #    return output_path
-
-    def adaptive_weighted_ramp_fit(self,ramp, read_time, cutoff_frac=0.75, sat_level=4096.0, tile=(256,256)):
-        """
-        Adaptive weighted ramp fit (thread-safe, DRP-compatible version).
-        Processes the ramp in tiles to stay memory- and cache-efficient.
-        """
-        n_reads, n_rows, n_cols = ramp.shape
-        read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
-        slope = np.zeros((n_rows, n_cols), dtype=np.float32)
-        eps = 1e-6
-
-        Ty, Tx = tile
-        for y0 in range(0, n_rows, Ty):
-            y1 = min(n_rows, y0 + Ty)
-            for x0 in range(0, n_cols, Tx):
-                x1 = min(n_cols, x0 + Tx)
-                cube = ramp[:, y0:y1, x0:x1]  # (N, ty, tx)
-                ty, tx = cube.shape[1:]
-                N = cube.shape[0]
-
-                # Find cutoff index per pixel where counts exceed cutoff_frac * sat_level
-                cutoff_mask = cube > (cutoff_frac * sat_level)
-                # argmax returns 0 if all False — handle that
-                cutoff_idx = np.argmax(cutoff_mask, axis=0)
-                cutoff_idx[~np.any(cutoff_mask, axis=0)] = N - 1
-
-                # Build weights centered around cutoff index
-                idx = np.arange(N)[:, None, None]
-                w = np.exp(-((idx - cutoff_idx)**2) / 8.0).astype(np.float32)
-
-                # Weighted sums
-                t = read_times[:, None, None]
-                y = cube
-                S0  = np.sum(w, axis=0)
-                St  = np.sum(w * t, axis=0)
-                Stt = np.sum(w * t * t, axis=0)
-                Sy  = np.sum(w * y, axis=0)
-                Sty = np.sum(w * t * y, axis=0)
-
-                denom = S0 * Stt - St * St
-                valid = denom > eps
-                local_slope = np.full_like(S0, np.nan, dtype=np.float32)
-                local_slope[valid] = (S0[valid] * Sty[valid] - St[valid] * Sy[valid]) / denom[valid]
-                slope[y0:y1, x0:x1] = local_slope
-
-        return slope
-
-
     def optimal_extract_with_error(self,
         R_transpose: sp.spmatrix, 
         data_image: np.ndarray, 
@@ -167,7 +81,7 @@ class QuickLook(BasePrimitive):
         self.logger.info(f"Optimal extraction finished in {t1:.4f} seconds.")
         return optimized_flux, flux_error
 
-    def iterative_sigma_weighted_ramp_fit4(self,ramp, read_time, gain=3.0, rn=5.0, max_iter=3, tile=(256, 256)):
+    def iterative_sigma_weighted_ramp_fit1(self,ramp, read_time, gain=3.0, rn=5.0, max_iter=3, tile=(256, 256)):
         n_reads, n_rows, n_cols = ramp.shape
         read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
         dt = np.mean(np.diff(read_times))
@@ -201,111 +115,82 @@ class QuickLook(BasePrimitive):
                 bias[y0:y1, x0:x1] = b
         return slope
 
-    def iterative_sigma_weighted_ramp_fit(
-        self, ramp1, read_time, gain=3.0, rn=5.0, max_iter=3, tile=(256, 256), do_swap=True):
+    def iterative_sigma_weighted_ramp_fit(self,ramp, read_time, gain=3.0, rn=5.0, tile=(256, 256), return_bias=False):
+        ramp = np.asarray(ramp)
+        if ramp.ndim != 3:
+            raise ValueError("ramp must have shape (N_reads, N_rows, N_cols).")
 
-        n_reads, n_rows, n_cols = ramp1.shape
-        read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
+        N, n_rows, n_cols = ramp.shape
+        read_times = np.linspace(0.0, read_time, N, dtype=np.float32)
         dt = np.mean(np.diff(read_times))
-        ramp = np.empty_like(ramp1)
-        n_amps = 4
-        block = n_cols // n_amps
-        for a in range(n_amps):
-            x0, x1 = a * block, (a + 1) * block
-            sub = ramp1[..., x0:x1]
-            nsub = sub.shape[-1]
-            new_order = []
-            for i in range(0, nsub, 2):
-                if i + 1 < nsub:
-                    new_order.extend([i + 1, i])
-                else:
-                    new_order.append(i)
-            ramp[..., x0:x1] = sub[..., new_order]
         slope = np.zeros((n_rows, n_cols), dtype=np.float32)
-        bias = np.zeros_like(slope)
+        bias  = np.zeros_like(slope)
         Ty, Tx = tile
+        i = np.arange(N, dtype=np.float32)[:, None, None]
         for y0 in range(0, n_rows, Ty):
             y1 = min(n_rows, y0 + Ty)
             for x0 in range(0, n_cols, Tx):
                 x1 = min(n_cols, x0 + Tx)
                 cube = ramp[:, y0:y1, x0:x1]
-                N, ty, tx = cube.shape
-                m_tile = np.zeros((ty, tx), dtype=np.float32)
-                b_tile = np.zeros_like(m_tile)
-                for col_slice, out_slice in [(np.index_exp[:, :, 0::2], (slice(None), slice(0, None, 2))),
-                    (np.index_exp[:, :, 1::2], (slice(None), slice(1, None, 2))),]:
+                sig2 = np.maximum(cube / gain + rn**2, 1e-6)
+                w = 1.0 / sig2
+                S0  = np.sum(w, axis=0)
+                S1  = np.sum(i * w, axis=0)
+                S2  = np.sum(i**2 * w, axis=0)
+                S0x = np.sum(w * cube, axis=0)
+                S1x = np.sum(i * w * cube, axis=0)
+                ibar = S1 / S0
+                denom = np.maximum(S2 - ibar**2 * S0, 1e-8)
+                mdt = (S1x - ibar * S0x) / denom
+                m = mdt / dt
+                b_loc = S0x / S0 - mdt * ibar
+                slope[y0:y1, x0:x1] = m
+                bias[y0:y1, x0:x1]  = b_loc
+        if return_bias:
+            return slope, bias
+        else:
+            return slope
 
-                    subcube = cube[col_slice]
-                    if subcube.size == 0:
-                        continue
-                    for iteration in range(max_iter):
-                        sig2 = np.maximum(subcube / gain + rn**2, 1e-6)
-                        i = np.arange(subcube.shape[0], dtype=np.float32)[:, None, None]
-                        S0 = np.sum(1.0 / sig2, axis=0)
-                        S1 = np.sum(i / sig2, axis=0)
-                        S2 = np.sum(i**2 / sig2, axis=0)
-                        S0x = np.sum(subcube / sig2, axis=0)
-                        S1x = np.sum(i * subcube / sig2, axis=0)
-                        ibar = S1 / S0
-                        mdt = (S1x - ibar * S0x) / np.maximum(S2 - ibar**2 * S0, 1e-8)
-                        m = mdt / dt
-                        b = S0x / S0 - mdt * ibar
-                        subcube = np.clip(b[None, :, :] + m[None, :, :] * i * dt, 0, None)
-                    m_tile[out_slice] = m
-                    b_tile[out_slice] = b
-                slope[y0:y1, x0:x1] = m_tile
-                bias[y0:y1, x0:x1] = b_tile
-        return slope
+    ################## swapping ######################################
+    def swap_odd_even_columns(self,cube,n_amps=4,do_swap=True):
+        if not do_swap:
+            return cube
 
-    def remove_channel_offset_and_gradient(self,cube, nchans=4, sigma_clip=3.0, iterations=3):
-        """
-        Remove both additive offset and small gradient from each amplifier channel.
-        Uses robust statistics (sigma clipping) from active pixels.
-        """
-        cube_corr = cube.astype(np.float32).copy()
-        n_frames, ny, nx = cube_corr.shape
-        chan_width = nx // nchans
-        offsets_all = []
-        slopes_all = []
+        if cube.ndim ==2:
+            n_rows,n_cols = cube.shape
+            ramp = np.empty_like(cube)
+            block = n_cols // n_amps
+            for a in range(n_amps):
+                x0, x1 = a * block, (a + 1) * block
+                sub = cube[x0:x1]
+                nsub = sub.shape[-1]
+                new_order = []
+                for i in range(0, nsub, 2):
+                    if i + 1 < nsub:
+                        new_order.extend([i + 1, i])
+                    else:
+                        new_order.append(i)
+                ramp[x0:x1] = sub[..., new_order]
 
-        for f in range(n_frames):
-            frame = cube_corr[f]
-            frame_offsets = []
-            frame_slopes = []
+        elif cube.ndim ==3:
+            nreads,n_rows,n_cols = cube.shape
+            ramp = np.empty_like(cube)
+            block = n_cols // n_amps
+            for a in range(n_amps):
+                x0, x1 = a * block, (a + 1) * block
+                sub = cube[..., x0:x1]
+                nsub = sub.shape[-1]
+                new_order = []
+                for i in range(0, nsub, 2):
+                    if i + 1 < nsub:
+                        new_order.extend([i + 1, i])
+                    else:
+                        new_order.append(i)
+                ramp[..., x0:x1] = sub[..., new_order]
+        return ramp
 
-            for c in range(nchans):
-                x0, x1 = c * chan_width, (c + 1) * chan_width
-                chan = frame[:, x0:x1]
 
-                # Median per column
-                col_med = np.median(chan, axis=0)
-
-                # Sigma clipping on the column medians to avoid outliers
-                good = np.ones_like(col_med, dtype=bool)
-                for _ in range(iterations):
-                    med = np.median(col_med[good])
-                    std = np.std(col_med[good])
-                    good_new = (col_med > med - sigma_clip*std) & (col_med < med + sigma_clip*std)
-                    if np.all(good_new == good):
-                        break
-                    good = good_new
-
-                # Fit and subtract a linear baseline (offset + slope)
-                x = np.arange(x0, x1)
-                p = np.polyfit(x[good], col_med[good], 1)  # [slope, intercept]
-                slope, offset = p
-                frame_slopes.append(slope)
-                frame_offsets.append(offset)
-
-                # Subtract fitted baseline
-                baseline = slope * x + offset
-                frame[:, x0:x1] -= baseline
-
-            cube_corr[f] = frame
-            offsets_all.append(frame_offsets)
-            slopes_all.append(frame_slopes)
-
-        return cube_corr #, offsets_all, slopes_all
+    ########################################################################
 
     def _perform(self):
         self.logger.info("+++++++++++ Quicklook Started +++++++++++")
@@ -313,20 +198,18 @@ class QuickLook(BasePrimitive):
         input_data = self.action.args.name
         output_dir = os.path.dirname(input_data)
         filename = os.path.basename(input_data)
-        #print(input_data)
-        #print(output_dir)
-        #print(filename)
+
         calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits') #IFS readnoise map
         read_noise_var = SIG_map_scaled.flatten().astype(np.float64)**2
         with fits.open(input_data) as hdul:
             hdr = hdul[0].header
             obs_mode = hdr.get("CAMERA", "")
-            ifs_mode = 'LowRes-K'#hdr.get("IFSMODE", "")
+            ifs_mode = hdr.get("IFSMODE", "")
             #last_file =  hdr.get("LASTFILE", "")
             read_time = hdr.get("EXPTIME", "")
             #file_name = hdr.get("OFNAME", "")
-            #obj =       hdr.get("OBJECT", "")
+            obj =       hdr.get("IMTYPE", "")
 
             NUM_FRAMES_FROM_SCIENCE = hdr.get("NREADS", "")
             print(f"OBSMODE = {obs_mode}")
@@ -335,821 +218,264 @@ class QuickLook(BasePrimitive):
             print('number of extension = ',n_ext)
             t0 = time.time()
             if filename == filename:
-                if obs_mode == "Im":
-                    if n_ext == 1:
-                        data_1 = hdul[0].data
-                        if data_1 is None:
-                            raise ValueError("No data in primary HDU.")
-                        if data_1.ndim == 2:
-                            self.plot_png_save(
-                                data = data_1,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                        elif data_1.ndim == 3:
-                            #img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit4(
-                                data_1,read_time=read_time)
-                            t1 = time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            #self.plot_png_save(
-                            #    data = slope_filled,
-                            #    output_dir=output_dir,
-                            #    input_filename=filename,
-                            #    suffix='_quicklook',
-                            #    overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope_filled,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
-                        else:
-                            raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                    elif n_ext >= 2:
-                        img2d = hdul[1].data
-                        ramp3d = hdul[0].data
-                        if img2d.ndim != 2 or ramp3d.ndim != 3:
-                            raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                        self.plot_png_save(
-                            data = img2d,
-                            output_dir=output_dir,
-                            input_filename=filename,
-                            suffix='_server')
-                        #img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                        #self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                        slope_filled = self.iterative_sigma_weighted_ramp_fit4(
-                            ramp3d,read_time=read_time)
+                if n_ext == 1:
+                    data_1 = hdul[0].data
+                    if data_1 is None:
+                        raise ValueError("No data in primary HDU.")
+                    elif data_1.ndim == 2:
+                        self.logger.info("Found a single frame.")
+                        data_11 = self.swap_odd_even_columns(data_1,do_swap=True)
+                        slope_filled1 = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
+                        self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
+
+                    elif data_1.ndim == 3:
+                        data_11 = self.swap_odd_even_columns(data_1,do_swap=True)
+                        img_corr = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
+                        self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
+                        slope_filled1 = self.iterative_sigma_weighted_ramp_fit(
+                            img_corr,
+                            read_time=read_time)
+
                         t1 = time.time()
                         self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                        #self.plot_png_save(
-                        #    data = slope_filled,
-                        #    output_dir=output_dir,
-                        #    input_filename=filename,
-                        #    suffix='_quicklook')
-                        self.fits_writer_steps(
-                            data=slope_filled,
-                            header=hdr,
-                            output_dir=output_dir,
-                            input_filename=filename,
-                            suffix='_quicklook',
-                            overwrite=True)
+                    else:
+                        raise ValueError(f"Unexpected data shape: {data_1.shape}")
+                elif n_ext >= 2:
+                    img2d = hdul[1].data
+                    ramp3d = hdul[0].data
+                    if img2d.ndim != 2 or ramp3d.ndim != 3:
+                        raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
 
-                elif obs_mode == "IFS":
-                    if ifs_mode == "LowRes-K":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                #img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True,altcol=False)
-                                img_corr = self.remove_channel_offset_and_gradient(data_1,nchans=4)
-                                self.logger.info("+++++++++++ channel offset corrected +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time,do_swap=False)
+                    data_11 = self.swap_odd_even_columns(ramp3d,do_swap=True)
+                    img_corr = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
+                    self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
+                    slope_filled1 = self.iterative_sigma_weighted_ramp_fit(
+                        img_corr,
+                        read_time=read_time)
+                    t1 = time.time()
+                    self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
 
-                                t1 = time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                #self.plot_png_save(
-                                #    data = slope_filled,
-                                #    output_dir=output_dir,
-                                #    input_filename=filename,
-                                #    suffix='_quicklook',
-                                #    overwrite=True)
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[1].data
-                            ramp3d = hdul[0].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            #self.plot_png_save(
-                            #    data = img2d,
-                            #    output_dir=output_dir,
-                            #    input_filename=filename,
-                            #    suffix='_server',
-                            #    overwrite=True)
-                            #img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True,altcol=True)
-                            img_corr = self.remove_channel_offset_and_gradient(ramp3d,nchans=4)
-                            self.logger.info("+++++++++++ channel offset corrected +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,read_time=read_time)
+        if obs_mode == "Im":
+            self.logger.info("BPM correction started")
+            rmat = sparse.load_npz(calib_path+'bpmat_img.npz')
+            slope_filled2 = rmat*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
+            slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
+            self.logger.info("BPM correction completed")
+            self.fits_writer_steps(
+                data=slope_filled,
+                header=hdr,
+                output_dir=output_dir,
+                input_filename=filename,
+                suffix='_ql',
+                overwrite=True)
 
-                            t1=time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            #self.plot_png_save(
-                            #    data = slope_filled,
-                            #    output_dir=output_dir,
-                            #    input_filename=filename,
-                            #    suffix='_quicklook',
-                            #    overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope_filled,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
-                        #if (
-                        #    slope_filled is not None
-                        #    and os.path.exists(os.path.join(calib_path, "LowRes-K_QL_rectmat.npz"))
-                        #   and (obj == "SCIENCE" or obj == "FLATLEN")):
+        if obs_mode == "IFS":
+            self.logger.info("BPM correction started")
+            rmat = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+            slope_filled2 = rmat*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
+            slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
+            self.logger.info("BPM correction completed")
+            self.fits_writer_steps(
+                data=slope_filled1,
+                header=hdr,
+                output_dir=output_dir,
+                input_filename=filename,
+                suffix='_ql',
+                overwrite=True)
 
-                        #    R_matrix = load_npz(calib_path+'LowRes-K_QL_rectmat.npz')
-                        #    print("Quicklook optimal extraction started for",ifs_mode)
-                        #    cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
-                        #    cube= cube1.reshape(54,108,108)
-                        #    self.fits_writer_steps(
-                        #        data=cube,
-                        #        header=hdr,
-                        #        output_dir=output_dir,
-                        #        input_filename=filename,
-                        #        suffix='_quick_cube',
-                        #        overwrite=True)
-                    elif ifs_mode == "LowRes-L":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time)
-                                t1=time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                #self.plot_png_save(
-                                #    data = slope_filled,
-                                #    output_dir=output_dir,
-                                #    input_filename=filename,
-                                #    suffix='_quicklook',
-                                #    overwrite=True)
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[1].data
-                            ramp3d = hdul[0].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
-                            t1=time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope_filled,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope_filled,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+            if ifs_mode == "LowRes-K":
+                print("IFSMODE is", ifs_mode)
+                print("IMTYPE is", obj)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "K_QL_rectmat_lowres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                        if (
-                            slope_filled is not None
-                            and os.path.exists(os.path.join(calib_path, "LowRes-L_QL_rectmat.npz"))
-                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+                    R_matrix = load_npz(calib_path+'K_QL_rectmat_lowres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
 
-                            R_matrix = load_npz(calib_path+'LowRes-L_QL_rectmat.npz')
-                            print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
-                            cube= cube1.reshape(54,108,108)
-                            self.fits_writer_steps(
-                                data=cube,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,suffix='_quick_cube',
-                                overwrite=True)
+                    cube= cube1.reshape(56, 103, 110)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,suffix='_ql_cube',
+                        overwrite=True)
 
-                    elif ifs_mode == "LowRes-M":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time)
-                                t1=time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                #self.plot_png_save(
-                                #    data = slope_filled,
-                                #    output_dir=output_dir,
-                                #    input_filename=filename,
-                                #    suffix='_quicklook',
-                                #    overwrite=True)
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[1].data
-                            ramp3d = hdul[0].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
-                            t1=time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            #self.plot_png_save(
-                            #    data = slope_filled,
-                            #    output_dir=output_dir,
-                            #    input_filename=filename,
-                            #    suffix='_quicklook',
-                            #    overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope_filled,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+            elif ifs_mode == "LowRes-L":
+                print("IFSMODE is", ifs_mode)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "L_QL_rectmat_lowres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                        if (
-                            slope_filled is not None
-                            and os.path.exists(os.path.join(calib_path, "LowRes-M_QL_rectmat.npz"))
-                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+                    R_matrix = load_npz(calib_path+'L_QL_rectmat_lowres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
 
-                            R_matrix = load_npz(calib_path+'LowRes-M_QL_rectmat.npz')
-                            print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
-                            cube= cube1.reshape(54,108,108)
-                            self.fits_writer_steps(
-                                data=cube,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quick_cube',
-                                overwrite=True)
-                    elif ifs_mode == "LowRes-KLM":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time)
-                                t1  = time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[1].data
-                            ramp3d = hdul[0].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
-                            t1=time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            #self.plot_png_save(
-                            #    data = slope_filled,
-                            #    output_dir=output_dir,
-                            #    input_filename=filename,
-                            #    suffix='_quicklook',
-                            #    overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope_filled,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+                    cube= cube1.reshape(56,103,110)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,suffix='_ql_cube',
+                        overwrite=True)
 
-                        if (
-                            slope_filled is not None
-                            and os.path.exists(os.path.join(calib_path, "LowRes-KLM_QL_rectmat.npz"))
-                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+            elif ifs_mode == "LowRes-M":
+                self.logger.info("IFSMODE is", ifs_mode)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "M_QL_rectmat_lowres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                            R_matrix = load_npz(calib_path+'LowRes-KLM_QL_rectmat.npz')
-                            print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
-                            cube= cube1.reshape(54,108,108)
-                            self.fits_writer_steps(
-                                data=cube,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quick_cube',
-                                overwrite=True)
+                    R_matrix = load_npz(calib_path+'M_QL_rectmat_lowres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
 
-                    elif ifs_mode == "LowRes-KL":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time)
-                                t1=time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                #self.plot_png_save(
-                                #    data = slope_filled,
-                                #    output_dir=output_dir,
-                                #    input_filename=filename,
-                                #    suffix='_quicklook',
-                                #   overwrite=True)
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[1].data
-                            ramp3d = hdul[0].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
-                            t1=time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+                    cube= cube1.reshape(56,103,110)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,suffix='_ql_cube',
+                        overwrite=True)
 
-                        if (
-                            slope_filled is not None
-                            and os.path.exists(os.path.join(calib_path, "LowRes-KL_QL_rectmat.npz"))
-                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+            elif ifs_mode == "LowRes-SED":
+                print("IFSMODE is", ifs_mode)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "SED_QL_rectmat_lowres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
+                    R_matrix = load_npz(calib_path+'SED_QL_rectmat_lowres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
 
-                            R_matrix = load_npz(calib_path+'LowRes-KL_QL_rectmat.npz')
-                            print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
-                            cube= cube1.reshape(54,108,108)
-                            self.fits_writer_steps(
-                                data=cube,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quick_cube',
-                                overwrite=True)
-                    elif ifs_mode == "LowRes-Ls":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time)
-                                t1=time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                #self.plot_png_save(
-                                #    data = slope_filled,
-                                #    output_dir=output_dir,
-                                #    input_filename=filename,
-                                #    suffix='_quicklook',
-                                #    overwrite=True)
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[0].data
-                            ramp3d = hdul[1].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
-                            t1=time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+                    cube= cube1.reshape(56,103,110)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,suffix='_ql_cube',
+                        overwrite=True)
 
-                        if (
-                            slope_filled is not None
-                            and os.path.exists(os.path.join(calib_path, "LowRes-Ls_QL_rectmat.npz"))
-                            and (obj == "SCIENCE" or obj == "FLATLEN")):
+            elif ifs_mode == "LowRes-KL":
+                print("IFSMODE is", ifs_mode)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "KL_QL_rectmat_lowres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                            R_matrix = load_npz(calib_path+'LowRes-Ls_QL_rectmat.npz')
-                            print("Quicklook optimal extraction started for",ifs_mode)
-                            cube1,error1 = self.optimal_extract_with_error(R_matrix,slope_filled,read_noise_var)
-                            cube= cube1.reshape(54,108,108)
-                            self.fits_writer_steps(
-                                data=cube,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quick_cube',
-                                overwrite=True)
+                    R_matrix = load_npz(calib_path+'KL_QL_rectmat_lowres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
 
-                elif obs_mode == "MEDRES":
-                    if ifs_mode == "MedRes-K":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time)
-                                t1=time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[1].data
-                            ramp3d = hdul[0].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
-                            t1 = time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope_filled,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope_filled,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,suffix='_quicklook',
-                                overwrite=True)
+                    cube= cube1.reshape(54,108,108)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,suffix='_ql_cube',
+                        overwrite=True)
 
-                        #if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                        #    R_matrix = load_npz(calib_path+'QLmat_new.npz')
-                        #    print("Quicklook optimal extraction started for",ifs_mode)
-                        #    cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
-                        #    cube= cube1.reshape(54,108,108)
-                        #    self.fits_writer_steps(
-                        #        data=cube,
-                        #        header=hdr,
-                        #        output_dir=output_dir,
-                        #        input_filename=filename,suffix='_quick_cube',
-                        #        overwrite=True)
-                    if ifs_mode == "MedRes-L":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time)
-                                t1=time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[1].data
-                            ramp3d = hdul[0].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
-                            t1=time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope_filled,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope_filled,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+            elif ifs_mode == "LowRes-PAH":
+                print("IFSMODE is", ifs_mode)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "PAH_QL_rectmat_lowres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                        #if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                        #    R_matrix = load_npz(calib_path+'QLmat_new.npz')
-                        #    print("Quicklook optimal extraction started for",ifs_mode)
-                        #    cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
-                        #    cube= cube1.reshape(54,108,108)
-                        #    self.fits_writer_steps(
-                        #        data=cube,
-                        #        header=hdr,
-                        #        output_dir=output_dir,
-                        #        input_filename=filename,suffix='_quick_cube',
-                        #        overwrite=True)
-                    if ifs_mode == "MedRes-M":
-                        print("IFSMODE is", ifs_mode)
-                        if n_ext == 1:
-                            data_1 = hdul[0].data
-                            if data_1 is None:
-                                raise ValueError("No data in primary HDU.")
-                            if data_1.ndim == 2:
-                                self.plot_png_save(
-                                    data = data_1,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_server',
-                                    overwrite=True)
-                            elif data_1.ndim == 3:
-                                img_corr = reference.reffix_hxrg(data_1, nchans=4, fixcol=True)
-                                self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                                slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                    img_corr,
-                                    read_time=read_time)
-                                t1=time.time()
-                                self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                                self.plot_png_save(
-                                    data = slope_filled,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True) 
-                                self.fits_writer_steps(
-                                    data=slope_filled,
-                                    header=hdr,
-                                    output_dir=output_dir,
-                                    input_filename=filename,
-                                    suffix='_quicklook',
-                                    overwrite=True)
-                            else:
-                                raise ValueError(f"Unexpected data shape: {data_1.shape}")
-                        elif n_ext >= 2:
-                            img2d = hdul[1].data
-                            ramp3d = hdul[0].data
-                            if img2d.ndim != 2 or ramp3d.ndim != 3:
-                                raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
-                            self.plot_png_save(
-                                data = img2d,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_server',
-                                overwrite=True)
-                            img_corr = reference.reffix_hxrg(ramp3d, nchans=4, fixcol=True)
-                            self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
-                            slope_filled = self.iterative_sigma_weighted_ramp_fit(
-                                img_corr,
-                                read_time=read_time)
-                            t1=time.time()
-                            self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
-                            self.plot_png_save(
-                                data = slope_filled,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
-                            self.fits_writer_steps(
-                                data=slope_filled,
-                                header=hdr,
-                                output_dir=output_dir,
-                                input_filename=filename,
-                                suffix='_quicklook',
-                                overwrite=True)
+                    R_matrix = load_npz(calib_path+'PAH_QL_rectmat_lowres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
 
-                        #if slope is not None and os.path.exists(os.path.join(calib_path, "QLmat_new.npz")):
-                        #    R_matrix = load_npz(calib_path+'QLmat_new.npz')
-                        #    print("Quicklook optimal extraction started for",ifs_mode)
-                        #    cube1,error1 = self.optimal_extract_with_error(R_matrix,slope,read_noise_var)
-                        #    cube= cube1.reshape(54,108,108)
-                        #    self.fits_writer_steps(
-                        #        data=cube,
-                        #        header=hdr,
-                        #        output_dir=output_dir,
-                        #        input_filename=filename,suffix='_quick_cube',
-                        #        overwrite=True)
-                else:
-                    raise ValueError(f"Unknown OBSMODE: {obs_mode}")
+                    cube= cube1.reshape(54,108,108)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,
+                        suffix='_ql_cube',
+                        overwrite=True)
 
-            else:
-                self.logger.info("+++++++++ Waiting for the fits file to finish readout ++++++++")
-        self.logger.info("+++++++++++ Quicklook Completed for the current FITS file +++++++++++")
+            elif ifs_mode == "MedRes-K":
+                print("IFSMODE is", ifs_mode)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "K_QL_rectmat_medres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
+
+                    R_matrix = load_npz(calib_path+'K_QL_rectmat_medres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
+
+                    cube= cube1.reshape(1900,18,17)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,suffix='_ql_cube',
+                        overwrite=True)
+
+            elif ifs_mode == "MedRes-L":
+                print("IFSMODE is", ifs_mode)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "L_QL_rectmat_medres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
+
+                    R_matrix = load_npz(calib_path+'L_QL_rectmat_medres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
+
+                    cube= cube1.reshape(1900,18,17)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,suffix='_ql_cube',
+                        overwrite=True)
+
+            elif ifs_mode == "MedRes-M":
+                print("IFSMODE is", ifs_mode)
+                if (
+                    slope_filled is not None
+                    and os.path.exists(os.path.join(calib_path, "M_QL_rectmat_medres.npz"))
+                    and (obj == "OBJECT" or obj == "FLATLEN")):
+
+                    R_matrix = load_npz(calib_path+'M_QL_rectmat_medres.npz')
+                    cube1,error1 = self.optimal_extract_with_error(
+                        R_matrix,
+                        slope_filled,
+                        read_noise_var)
+
+                    cube= cube1.reshape(1900,18,17)
+                    self.fits_writer_steps(
+                        data=cube,
+                        header=hdr,
+                        output_dir=output_dir,
+                        input_filename=filename,suffix='_ql_cube',
+                        overwrite=True)
+        else:
+            self.logger.info("Unknown MODE of observation")
+
         log_string = QuickLook.__module__
-        #self.action.args.ccddata.header['HISTORY'] = log_string
         self.logger.info(log_string)
 
         return self.action.args

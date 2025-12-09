@@ -12,6 +12,7 @@ from keckdrpframework.primitives.base_primitive import BasePrimitive
 from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
 import pkg_resources
 import time
+from scipy import sparse
 
 def correct_local_defects_pass1_improved(image_data_to_correct, bad_pixel_mask, **kwargs):
 
@@ -213,4 +214,73 @@ def generate_bpm_relative(
     return final_bpm
 
 
+#############R.matrix based .npz FILE #########################
+
+def bpm_correction(obsmode):
+    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+    if obsmode=='IMAGING':
+        bpmap = pyfits.getdata(calib_path+'bpm_new_5.fits')
+    elif obsmode=='IFS':
+        bpmap = pyfits.getdata(calib_path+'cd3_bpm_ifs_5mhz.fits')
+
+    ypix = bpmap.shape[0]
+    xpix = bpmap.shape[1]
+    matrowinds = []
+    matcolinds = []
+    matvals = []
+    for i in range(len(bpmap)):
+        for j in range(len(bpmap[0])):
+            if bpmap[i,j] == 1.0:
+                vals = []
+                weights = []
+                indsx = []
+                indsy = []
+                sbox = 1
+                goodbox = False
+                while goodbox == False:
+                    sbox += 2
+                    #print(sbox)
+                    xs,xe = j-sbox//2,j+sbox//2+1
+                    ys,ye = i-sbox//2,i+sbox//2+1
+                    if xs < 0:
+                        xs = 0
+                    if xe >= xpix:
+                        xe = xpix
+                    if ys < 0:
+                        ys = 0
+                    if ye >= xpix:
+                        ye = xpix
+                    #print(xs,xe,ys,ye)
+                    box = bpmap[ys:ye,xs:xe]
+                    if len(np.where(box!=1.0)[0]) > 3:
+                        goodbox = True
+                #plt.imshow(box)
+                #plt.colorbar()
+                #plt.show()
+                #stop
+
+                for yy in range(ys,ye):
+                    for xx in range(xs,xe):
+                        if bpmap[yy,xx]==0:
+                            dist = np.sqrt((yy-i)**2 + (xx-j)**2)
+                            weights.append(1/dist)
+                            indsx.append(xx)
+                            indsy.append(yy)
+                avginds = np.ravel_multi_index((indsy,indsx),(ypix,xpix))
+                vals = np.array(weights)/np.sum(weights)
+                pixind = np.ravel_multi_index(([i],[j]),(ypix,xpix))
+                #print(vals,np.sum(vals),indsx,indsy)
+                #stop
+                for k in range(len(vals)):
+                    matrowinds.append(pixind[0])
+                    matcolinds.append(avginds[k])
+                    matvals.append(vals[k])
+            elif bpmap[i,j] == 0.0:
+                pixind = np.ravel_multi_index(([i],[j]),(ypix,xpix))
+                matrowinds.append(pixind[0])
+                matcolinds.append(pixind[0])
+                matvals.append(1.0)
+    rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(bpmap.shape),np.prod(bpmap.shape)))
+    sparse.save_npz('bpmat_ifs1.npz',rmat)
+    return
 

@@ -35,7 +35,8 @@ class SpectralExtract(BasePrimitive):
     def optimal_extract_with_error(
         self,
         R_transpose: sp.spmatrix, 
-        data_image: np.ndarray, 
+        data_image: np.ndarray,
+        sigma_image: np.ndarray,
         read_noise_variance_vector: np.ndarray, 
         gain: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -54,14 +55,18 @@ class SpectralExtract(BasePrimitive):
         self.logger.info('Optimal extraction started')
         start_time1 = time.time()
         data_vector_d = data_image.flatten().astype(np.float64)
+        sigma_vector = sigma_image.array.flatten().astype(np.float64)
+        variance_from_map = sigma_vector**2
         photon_noise_variance = data_vector_d.clip(min=0) / gain
-        total_variance = read_noise_variance_vector + photon_noise_variance
+        #total_variance = read_noise_variance_vector + photon_noise_variance
+        #are we doubling the readnoise below?
+        total_variance = read_noise_variance_vector + photon_noise_variance + variance_from_map
         total_variance[total_variance <= 0] = 1e-9  
         inverse_variance = 1.0 / total_variance
-        weighted_data = data_vector_d * inverse_variance
-        numerator = R_transpose @ weighted_data
+        weighted_data = data_vector_d * inverse_variance ## d_i / σ_i^2
+        numerator = R_transpose @ weighted_data # Σ R_ki d_i / σ_i^2
         R_transpose_squared = R_transpose.power(2)
-        denominator = R_transpose_squared @ inverse_variance
+        denominator = R_transpose_squared @ inverse_variance # Σ R_ki^2 / σ_i^2
         denominator_safe = np.maximum(denominator, 1e-9)
         optimized_flux = numerator / denominator_safe
         flux_variance = 1.0 / denominator_safe
@@ -115,7 +120,9 @@ class SpectralExtract(BasePrimitive):
 
     ############### chi sqaure error estimation #########################
 
-    def calculate_error_flux_cube(self,R_matrix: sp.spmatrix,
+    def calculate_error_flux_cube(
+        self,
+        R_matrix: sp.spmatrix,
         flux_vector_A: np.ndarray,
         var_read_vector: np.ndarray,
         flux_shape_3d: tuple,
@@ -477,12 +484,16 @@ class SpectralExtract(BasePrimitive):
             SCALES_DEFAULT_CENTER = (54, 54)
             calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
             readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
-            var_read_vector = (readnoise.flatten().astype(np.float64))**2
+            #var_read_vector = (readnoise.flatten().astype(np.float64))**2
+            sigma_image = self.action.args.ccddata.uncertainty
+            var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
             GAIN = 1.0#self.action.args.ccddata.header['GAIN']
 
             data_image = self.action.args.ccddata.data
             data_vector_d = data_image.flatten().astype(np.float64)
-            
+            sigma_image = self.action.args.ccddata.uncertainty
+
+
             ifsmode = self.action.args.ccddata.header['IFSMODE']
             if ifsmode=='LowRes-K':
                 R_for_extract = load_npz(calib_path+'K_C2_rectmat_lowres.npz')
@@ -521,7 +532,12 @@ class SpectralExtract(BasePrimitive):
                 R_matrix = load_npz(calib_path+'M_QL_rectmat_medres.npz')
                 FLUX_SHAPE_3D = (1900, 103, 110)
             
-            A_guess_cube,A_guess_cube_err = self.optimal_extract_with_error(R_matrix, data_image, var_read_vector)
+            A_guess_cube,A_guess_cube_err = self.optimal_extract_with_error(
+                R_matrix,
+                data_image,
+                sigma_image,
+                var_read_vector)
+
             A_guess_vector = A_guess_cube.flatten()
         
             A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
