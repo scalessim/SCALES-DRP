@@ -10,7 +10,8 @@ scalesdrp.egg-info/entry_points.txt
 scalesdrp.egg-info/not-zip-safe
 scalesdrp.egg-info/requires.txt
 scalesdrp.egg-info/top_level.txt
-scalesdrp/calib/bpm.fits
+scalesdrp/calib/bpm_new_5.fits
+scalesdrp/calib/cd3_bpm_ifs_5mhz.fits
 scalesdrp/calib/sim_readnoise.fits
 scalesdrp/configs/__init__.py
 scalesdrp/configs/framework.cfg
@@ -225,7 +226,6 @@ scalesdrp/pipelines/__init__.py
 scalesdrp/pipelines/scales_calib_pipeline.py
 scalesdrp/pipelines/scales_pipeline.py
 scalesdrp/pipelines/scales_quicklook_pipeline.py
-scalesdrp/primitives/BPMCorrect.py
 scalesdrp/primitives/CalibFilePrimitives.py
 scalesdrp/primitives/CentroidEstimate.py
 scalesdrp/primitives/CorrectGain.py

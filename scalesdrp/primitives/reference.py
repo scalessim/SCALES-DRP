@@ -163,10 +163,10 @@ def calc_avg_amps_old(refs_all, data_shape, nchans=4, altcol=True, mean_func=rob
         #return one value for each channel and each read
         return np.array(refs_amps_avg)
 
-################################## NEW acn ################################
+################################## NEW acn ################################        
 def reffix_amps(cube, nchans=4, in_place=True, altcol=False, supermean=False,
     top_ref=True, bot_ref=True, ntop=4, nbot=4, **kwargs):
-
+    
     """Correct amplifier offsets
     Matches all amplifier outputs of the detector to a common level.
     This routine subtracts the average of the top and bottom reference rows
@@ -344,9 +344,9 @@ def acn_filter(cube,
     """
     Row-dependent differences between even and odd columns
     (i.e. ACN that changes with row, not just a constant offset per column).
-    They are row-series describing how the even or odd reference pixels
+    They are row-series describing how the even or odd reference pixels 
     vary vs row (and frame), after baseline removal.
-
+    
     ACN correction using side reference columns.
     Separately estimates row-dependent even and odd column offsets,
     then subtracts them from the full image.
@@ -563,7 +563,7 @@ def acn_filter(cube,
     # --- Subtract from even/odd columns across the entire image ---
     #Each row y gets: one subtraction for even columns (ref_even_sm[:, y]),
     #one subtraction for odd columns (ref_odd_sm[:, y]).
-
+    
     even_cols = cols[cols % 2 == 0]
     odd_cols  = cols[cols % 2 == 1]
 
@@ -830,7 +830,7 @@ def calc_avg_cols_no_baseline(refs_left=None, refs_right=None):
     """
     Same output as calc_avg_cols(), but does NOT remove
     reference pixel means / DC offsets.
-
+    
     Useful for comparison — this version allows reference pixel
     fixed-pattern biases to leak directly into the correction vector.
 
@@ -846,7 +846,7 @@ def calc_avg_cols_no_baseline(refs_left=None, refs_right=None):
     refs_side_avg : ndarray  (N, H)
         Row-averaged reference drift without mean removal.
     """
-
+    
     nl = 0 if refs_left  is None else 1
     nr = 0 if refs_right is None else 1
 
@@ -923,14 +923,14 @@ def calc_avg_cols(refs_left=None, refs_right=None, avg_type='pix',
     	# Remove average ref pixel values
     	# Average over entire integration
     if 'int' in avg_type:
-	if nl>0: refs_left  -= mean_func(refs_left) #refs_left now contains only deviations from that global mean.
+    	if nl>0: refs_left  -= mean_func(refs_left) #refs_left now contains only deviations from that global mean.
     	if nr>0: refs_right -= mean_func(refs_right)
     # Average over each frame
     #'frame' mode remove a frame-by-frame DC offset,
     #leaving row-dependent fluctuations within each frame.
     #
     elif 'frame' in avg_type:
-	if nl>0: refs_left_mean  = mean_func(refs_left.reshape((nz,-1)), axis=1)#flatten each frame’s ref pixels to 1D, one scalar per frame.
+    	if nl>0: refs_left_mean  = mean_func(refs_left.reshape((nz,-1)), axis=1)#flatten each frame’s ref pixels to 1D, one scalar per frame.
     	if nr>0: refs_right_mean = mean_func(refs_right.reshape((nz,-1)), axis=1)
     	# Subtract estimate of each ref pixel "intrinsic" value
     	for i in range(nz):
@@ -938,11 +938,11 @@ def calc_avg_cols(refs_left=None, refs_right=None, avg_type='pix',
     		if nr>0: refs_right[i] -= refs_right_mean[i]
     # Take the average of each reference pixel
     #gives an average for each reference pixel position over all frames
-    #Subtracting this from each frame removes each pixel’s own intrinsic bias pattern.
+    #Subtracting this from each frame removes each pixel’s own intrinsic bias pattern. 
     elif 'pix' in avg_type:
-	if nl>0:
+    	if nl>0: 
             refs_left_mean  = mean_func(refs_left, axis=0) #(2048, 4)
-	if nr>0:
+    	if nr>0: 
             refs_right_mean = mean_func(refs_right, axis=0)
     	# Subtract estimate of each ref pixel "intrinsic" value
     	for i in range(nz):
@@ -950,7 +950,7 @@ def calc_avg_cols(refs_left=None, refs_right=None, avg_type='pix',
     		if nr>0: refs_right[i] -= refs_right_mean
 
     if nl==0: #ref_left is none
-	refs_side_avg = refs_right.mean(axis=2)#averages over all left reference columns
+    	refs_side_avg = refs_right.mean(axis=2)#averages over all left reference columns
     elif nr==0: #ref_right is none
     	refs_side_avg = refs_left.mean(axis=2)
     else:
@@ -988,7 +988,7 @@ def calc_col_smooth(refvals, data_shape, perint=False, edge_wrap=False,
     #like treating the entire cube’s ref signal as one long time-series.
     nz,ny,nx = data_shape
     if perint: # per integration, treats the entire (nz, ny) array as one flattened 1D series
-	if edge_wrap: # Wrap around to avoid edge effects, "mirror" the first and last frames to reduce edge ringing:
+    	if edge_wrap: # Wrap around to avoid edge effects, "mirror" the first and last frames to reduce edge ringing:
             #These are stacked above and below refvals
             #After smoothing, will strip off these mirrored sections and reshape.
     		refvals2 = np.vstack((refvals[0][::-1], refvals, refvals[-1][::-1]))
@@ -1006,7 +1006,7 @@ def calc_col_smooth(refvals, data_shape, perint=False, edge_wrap=False,
     else: #smooth each frame’s row-series separately
     	refvals_smoothed = []
     	if edge_wrap: # Wrap around to avoid edge effects
-		for ref in refvals: #(ny,)
+    		for ref in refvals: #(ny,)
                 #mirror to handle FFT more gently on edges
     			ref2 = np.concatenate((ref[:ny//2][::-1], ref, ref[ny//2:][::-1]))
     			if savgol:
@@ -1152,6 +1152,6 @@ def smooth_fft(data, delt, first_deriv=False, second_deriv=False):
     elif first_deriv:
     	return Smoothed_Data, First_Diff
     else:
-	return Smoothed_Data  #return the original data, but with high-frequency noise stripped out,
+    	return Smoothed_Data  #return the original data, but with high-frequency noise stripped out, 
                               #and only the low-frequency “shape” left, plus the original mean/trend.
 
