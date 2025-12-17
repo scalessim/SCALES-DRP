@@ -709,19 +709,19 @@ class StartCalib(BasePrimitive):
                         SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
 
                     self.logger.info("+++++++++++ odd even swapping +++++++++++")
-                    sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1)
+                    sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1,do_swap=True)
 
                     self.logger.info("+++++++++++ ACN & 1/f correction started +++++++++++")
                     sci_im_full_original3 = reference.reffix_hxrg(sci_im_full_original2, nchans=4, fixcol=True)
 
                     self.logger.info("+++++++++++ linearity correction started +++++++++++")
                     if obsmode =='IMAGING':
-                        corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map, groupdq_raw = linearity.run_linearity_workflow(
+                        corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
                             sci_im_full_original3,
                             linearity_file="linearity_coeffs_img.fits")
 
                     if obsmode =='IFS':
-                        corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map, groupdq_raw = linearity.run_linearity_workflow(
+                        corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
                             sci_im_full_original3,
                             linearity_file="linearity_coeffs_img.fits")
 

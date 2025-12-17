@@ -217,7 +217,10 @@ class QuickLook(BasePrimitive):
             n_ext = len(hdul)
             print('number of extension = ',n_ext)
             t0 = time.time()
-            if filename == filename:
+            if (
+                filename.endswith(".fits")
+                and "_dramp" not in filename
+                and "_qramp" not in filename):
                 if n_ext == 1:
                     data_1 = hdul[0].data
                     if data_1 is None:

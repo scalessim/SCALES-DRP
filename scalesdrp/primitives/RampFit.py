@@ -596,19 +596,19 @@ class RampFit(BasePrimitive):
             input_data = self.action.args.ccddata.data
             #print(input_data.shape)
             self.logger.info("+++++++++++ odd even column swapping +++++++++++")
-            sci_im_full_original1 = self.swap_odd_even_columns(input_data)
+            sci_im_full_original1 = self.swap_odd_even_columns(input_data,do_swap=True)
 
             sci_im_full_original = reference.reffix_hxrg(sci_im_full_original1, nchans=4)
             self.logger.info("refpix and 1/f correction completed")
 
             self.logger.info("+++++++++++ linearity correction started +++++++++++")
             if obsmode =='IMAGING':
-                corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map, groupdq_raw = linearity.run_linearity_workflow(
+                corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
                     sci_im_full_original,
                     linearity_file="linearity_coeffs_img.fits")
 
             if obsmode =='IFS':
-                corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map, groupdq_raw = linearity.run_linearity_workflow(
+                corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
                 sci_im_full_original,
                 linearity_file="linearity_coeffs_img.fits")
 
