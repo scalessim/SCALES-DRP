@@ -19,7 +19,7 @@ from scalesdrp.primitives.linearity import DQ_FLAGS
 class RampFit(BasePrimitive):
 
     """
-    We adopt the ramp fitting method of Brandt et. al. 2024 for reads greater than 5. 
+    We adopt the ramp fitting method of Brandt et. al. 2024. 
     This method perform an optimal fit to a pixel’s count rate nondestructively in the
     presence of both read and photon noise. The method construct a covarience matrix by
     estimating the difference in the read in a ramp, propagation of the read noise,
@@ -48,20 +48,24 @@ class RampFit(BasePrimitive):
                         t,                     # (N,) seconds
                         sig_row):              # (W,) single-read σ (e-)
         """
+        slope = (∑tiyi − tbar∑yi)/∑(ti-tbar)^2, solving the chi-square solution for a line
         Return (OLS_slope_row, OLS_slope_uncert_row).
         OLS slope uncertainty:  σ_m = σ_read / sqrt( Σ_i (t_i - tbar)^2 ), using only valid reads.
         This is the classic unweighted OLS formula (appropriate when each read has the same σ per pixel).
         """
         N, W = row_reads.shape
-        v = valid_reads_mask.astype(bool)
+        v = valid_reads_mask.astype(bool) #ensure the mask is boolean
 
         # counts of valid reads per pixel
         S0 = v.sum(axis=0)                                    # (W,)
-        S0_safe = np.maximum(S0, 1)
+        S0_safe = np.maximum(S0, 1) #minimum one valid read per pixel
 
         # time statistics on valid reads
+        #Broadcasts t to shape (N, 1) then multiplies by v ⇒ invalid reads contribute 0.
+        #Sums over time axis ⇒ St[j] = Σ t_i over valid reads for column j.
         St  = (t[:, None] * v).sum(axis=0)                    # (W,)
-        tbar = St / S0_safe                                   # (W,)
+        tbar = St / S0_safe                                   # (W,), per pixel mean time over valid reads
+        #This is the per-pixel denominator for Var(t)
         Stt_centered = (((t[:, None] - tbar) ** 2) * v).sum(axis=0)  # (W,)
 
         # OLS slope (per pixel) using valid reads
@@ -69,13 +73,13 @@ class RampFit(BasePrimitive):
         Sy  = y.sum(axis=0)
         Sty = (t[:, None] * y).sum(axis=0)
         # slope = Cov(t,y)/Var(t) = (Σ t y - tbar Σ y) / Σ (t - tbar)^2
-        num = Sty - tbar * Sy
-        den = np.where(Stt_centered > 0, Stt_centered, np.nan)
+        num = Sty - tbar * Sy #neumerator
+        den = np.where(Stt_centered > 0, Stt_centered, np.nan) #denominator
         slope_row = num / den
 
         # 1σ on slope (e-/s); if <2 reads valid, set NaN
-        slope_unc_row = sig_row / np.sqrt(den)
-        slope_unc_row[(S0 < 2) | ~np.isfinite(den)] = np.nan
+        slope_unc_row = sig_row / np.sqrt(den) #uncertaintity
+        slope_unc_row[(S0 < 2) | ~np.isfinite(den)] = np.nan #if reads <2
 
         return slope_row, slope_unc_row
 
@@ -84,14 +88,14 @@ class RampFit(BasePrimitive):
         return_pedestal=True,
         reset_prior_strength=3.0, # prior σ = k * SIG per pixel
         use_sigma_clip=False,  # optional; physics mask usually suffices
-        sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128),
+        sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128), #sigma clipping control
         JUMP_THRESH_ONEOMIT=20.25,
         JUMP_THRESH_TWOOMIT=23.8,
         group_dq=None):
         """
         produce two images—slope (countrate) and pedestal (reset) using fitramp everywhere it’s well-posed,
-        and fall back to a robust OLS only where fitramp can’t run. Optionally clean reads,
-        mask physically impossible read pairs, and (optionally) detect jumps.
+        and fall back to a robust OLS only the pixels where fitramp can’t run. Optionally clean reads,
+        mask physically impossible read pairs, and detect jumps.
     
         Prefer fitramp (pedestal=True) for any number of reads; OLS only as per-pixel fallback.
         - Saturation/rollover handled via Δread > 0 mask.
@@ -99,10 +103,11 @@ class RampFit(BasePrimitive):
         - Finite reset prior from first valid read.
         """
         N, H, W = input_read.shape
-        dt = float(total_exptime) / N
-        t  = (np.arange(N, dtype=float) + 0.5) * dt
+        dt = float(total_exptime) / N #asuume uniform spacing
+        t  = (np.arange(N, dtype=float) + 0.5) * dt #time array at mid-point of each read
         t1=time.time()
         # (optional) σ-clip (off by default)
+        #to clean the reads vary above the threshold 
         def _sigma_clip_reads(self,cube):
             from tqdm import tqdm
             keep = np.ones_like(cube, dtype=bool)
@@ -115,30 +120,32 @@ class RampFit(BasePrimitive):
                     n, ty, tx = sub.shape
                     k = ty*tx
                     Y = sub.reshape(n, k)
-                    mask = np.isfinite(Y)
+                    mask = np.isfinite(Y) #valid data points
                     time_idx = np.arange(n, dtype=np.float32)
                     for _ in range(max_iter):
-                        cnt = mask.sum(0)
+                        cnt = mask.sum(0) #sum of valid pixels
                         if not np.any(cnt >= min_reads): break
                         S0  = cnt
                         St  = time_idx @ mask
                         Stt = (time_idx**2) @ mask
-                        Wy  = Y * mask
+                        Wy  = Y * mask #invlaid set to zero
                         Sy  = Wy.sum(0)
                         Sty = time_idx @ Wy
                         Var_t = Stt - (St*St)/np.maximum(S0, 1)
                         Cov_ty = Sty - (St*Sy)/np.maximum(S0, 1)
                         b = np.zeros(k, np.float32)
                         ok = Var_t > 0
-                        b[ok] = Cov_ty[ok] / Var_t[ok]
-                        a = (Sy - b*St) / np.maximum(S0, 1)
+                        b[ok] = Cov_ty[ok] / Var_t[ok] #slope
+                        a = (Sy - b*St) / np.maximum(S0, 1) #intercept
                         Yhat = a + np.outer(time_idx, b)
                         resid = Y - Yhat
                         resid[~mask] = np.nan
                         s = np.nanstd(resid, 0)
+                        #keep points only withon the sigma threshold
                         new_mask = (np.abs(resid) < sigma_clip*s) & np.isfinite(Y)
                         if np.array_equal(new_mask, mask): break
                         mask = new_mask
+                    #return the good reads for each pixel
                     keep[:, y0:y1, x0:x1] = mask.reshape(n, ty, tx)
             return keep
 
@@ -149,41 +156,45 @@ class RampFit(BasePrimitive):
         if group_dq is not None:
             saturated = (group_dq & DQ_FLAGS["SATURATED"]) != 0
             base_valid &= ~saturated
-        # differences and physics mask
-        diffs = input_read[1:] - input_read[:-1]
+        # differences btw the consequtive reads
+        diffs = input_read[1:] - input_read[:-1] #(N-1,H,W)
         ## both reads valid & Δread must be positive
         pair_mask = (base_valid[1:] & base_valid[:-1]) & (diffs > 0)
 
         # ---------- Reset prior: first valid read; else no prior (σ=∞) ----------
         #If the first resultant is valid, use it as the prior mean on the pedestal.
-        #Prior uncertainty is reset_prior_strength × SIG (finite). If first read is bad, set σ=∞ (flat prior).
+        #Prior uncertainty is reset_prior_strength × SIG (finite). 
+        #If first read is bad, set σ=∞ (flat prior).
         #With few usable differences, a finite reset prior makes the joint 
         #(pedestal+slope) fit solvable and better conditioned.
 
         first_read = input_read[0]
-        first_ok = base_valid[0] & np.isfinite(first_read)
+        first_ok = base_valid[0] & np.isfinite(first_read) #1st read valid and finite
+        #prior mean for pedestal, if 1st read is valid, 
+        #pedestal prior value = that read; otherwise 0, 
         resetval_map = np.where(first_ok, first_read, 0.0)
         resetsig_map = np.where(first_ok, reset_prior_strength * SIG_map_scaled, np.inf)
 
-        C_no  = fitramp.Covar(t, pedestal=False)
-        C_ped = fitramp.Covar(t, pedestal=True)
+        #Build covariance matrices for the noise model:
+        C_no  = fitramp.Covar(t, pedestal=False) #covariance when only slope is fitted (no pedestal).
+        C_ped = fitramp.Covar(t, pedestal=True) #covariance when both pedestal and slope are fitted.
 
         slope  = np.full((H, W), np.nan, float)
         ped    = np.full((H, W), np.nan, float)
         uncert = np.full((H, W), np.nan, float)
 
-        for i in range(H):
+        for i in range(H): #loop over rows
             if i % 128 == 0:
                 print(f"Fitting row {i}/{H}...")
 
-            sig_row   = SIG_map_scaled[i, :]
-            d_row     = diffs[:, i, :]
-            m_row     = pair_mask[:, i, :]
-            resetval  = resetval_map[i, :]
-            resetsig  = resetsig_map[i, :]
+            sig_row   = SIG_map_scaled[i, :] #readnoise per-pixel
+            d_row     = diffs[:, i, :] #difference for this row
+            m_row     = pair_mask[:, i, :] #mask for valid difference
+            resetval  = resetval_map[i, :] #prior mean for pedestal 
+            resetsig  = resetsig_map[i, :] #sigma for pedestal
 
-            Wrow = d_row.shape[1]
-            row_slope  = np.full(Wrow, np.nan, float)
+            Wrow = d_row.shape[1] #number of columns
+            row_slope  = np.full(Wrow, np.nan, float) #per row arrays for slope
             row_ped    = np.full(Wrow, np.nan, float)
             row_uncert = np.full(Wrow, np.nan, float)
 
@@ -194,12 +205,13 @@ class RampFit(BasePrimitive):
             #Otherwise, seed comes from the robust OLS fallback.
             # 1) Initial seed via fitramp only where well-posed (≥2 diffs). Else OLS seed.
             #The final (pedestal=True) optimization benefits from a decent slope initial guess.
-            seed = np.full(Wrow, np.nan, float)
-            idx_seed_fit = (usable0 >= 2)
-            idx_seed_ols = ~idx_seed_fit
+            seed = np.full(Wrow, np.nan, float) #initial slope guess for each pixel
+            idx_seed_fit = (usable0 >= 2) #fitramp can be used
+            idx_seed_ols = ~idx_seed_fit #otherwise ols
 
             #Use pedestal=False for speed/robustness; countrateguess=None lets fitramp infer it from the data.
             #If something throws, we switch those pixels to OLS seeding.
+            #initial fitramp seed
             if np.any(idx_seed_fit):
                 try:
                     d_sub   = d_row[:, idx_seed_fit]
@@ -211,19 +223,19 @@ class RampFit(BasePrimitive):
                             diffs2use=m_sub,
                             countrateguess=None,
                             rescale=True)
-                    seed[idx_seed_fit] = init_res.countrate
+                    seed[idx_seed_fit] = init_res.countrate #initial slope
                 except Exception:
-                    idx_seed_ols |= idx_seed_fit
+                    idx_seed_ols |= idx_seed_fit #otherwise mark to perform an OLS fit
 
             if np.any(idx_seed_ols):
                 # compute OLS for the whole row once and slice
                 ols_row, _ = self._ols_row_and_uncert(input_read[:, i, :],  # (N,W)
                     base_valid[:, i, :],
                     t, sig_row)
-                seed[idx_seed_ols] = ols_row[idx_seed_ols]
+                seed[idx_seed_ols] = ols_row[idx_seed_ols] #OLS slope
 
             # fill non-finite seeds with OLS
-            bad = ~np.isfinite(seed)
+            bad = ~np.isfinite(seed) #checking any NaN slope values, if yes, do an OLS fit to that pixel
             if np.any(bad):
                 ols_row, _ = self._ols_row_and_uncert(input_read[:, i, :],
                     base_valid[:, i, :],
@@ -233,9 +245,9 @@ class RampFit(BasePrimitive):
             # 2) Jump detection (only where we have ≥1 diff)
             #Likelihood-based cosmic-ray/jump search; returns a binary mask for diffs to keep.
             #Drop diffs that substantially improve χ² when omitted (thresholds ≈ 4.5σ false-positive equivalent).
-            m_row2 = m_row.copy()
+            m_row2 = m_row.copy() #diff mask
             idx_jump = (usable0 >= 1)
-            if np.any(idx_jump):
+            if np.any(idx_jump): #if atleast 1 valid diff
                 try:
                     d_sub   = d_row[:, idx_jump]
                     m_sub   = m_row[:, idx_jump]
@@ -250,13 +262,14 @@ class RampFit(BasePrimitive):
                 except Exception:
                     pass
 
-            usable_final = m_row2.sum(axis=0)
+            usable_final = m_row2.sum(axis=0) #recount usable diff after jump detection
 
             # 3) Final fit with pedestal=True
             # Solvable if:
             #   - usable_final >= 1 AND prior finite, OR
             #   - usable_final >= 2 (solvable even without a prior)
             #This is the high-fidelity fit that jointly estimates pedestal and slope using the full covariance model.
+            #if one diff and a finite prior OR at least two diff without a finite prior
             idx_final_fit = (usable_final >= 1) & (np.isfinite(resetsig) | (usable_final >= 2))
             if np.any(idx_final_fit):
                 try:
@@ -269,13 +282,13 @@ class RampFit(BasePrimitive):
                     with warnings.catch_warnings():
                         warnings.filterwarnings("ignore", category=RuntimeWarning)
                         final_res = fitramp.fit_ramps(d_sub, C_ped, sig_sub,
-                            diffs2use=m_sub,
-                            countrateguess=seed_sub,
-                            resetval=r0_sub, resetsig=s0_sub,
+                            diffs2use=m_sub, #mask
+                            countrateguess=seed_sub, #initial slope guess
+                            resetval=r0_sub, resetsig=s0_sub, #perestal prior
                             rescale=True)
-                    row_slope[idx_final_fit]  = final_res.countrate
-                    row_ped[idx_final_fit]    = final_res.pedestal
-                    row_uncert[idx_final_fit] = final_res.uncert     # <-- from fitramp
+                    row_slope[idx_final_fit]  = final_res.countrate #best-fit slope
+                    row_ped[idx_final_fit]    = final_res.pedestal #best-fit pedestial
+                    row_uncert[idx_final_fit] = final_res.uncert # best-fit slope error
                 except Exception:
                     pass
 

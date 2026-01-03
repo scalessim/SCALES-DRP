@@ -1,7 +1,7 @@
 Installation
 ============
 
-This document guide explains how to install the **SCALES-DRP** pipeline.
+This document guide explains how to install the **SCALES-DRP** pipeline for both user and developer.
 
 .. contents::
    :local:

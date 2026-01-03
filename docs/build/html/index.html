@@ -19,7 +19,7 @@
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Installation" href="Installing.html" /> 
+    <link rel="next" title="Installation" href="Installation.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -44,17 +44,17 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="Installing.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Quick%20Start.html">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Configuration%20Parameters.html">Configuration Parameters</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Running%20the%20SCALES-DRP%20Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Quick_Start.html">Quick Start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Data%20Products.html">Data Products</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Mode%20of%20Pipelines.html">Modes of Pipeline Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html">Updating Documentation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html#updating-text">Updating text</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html">Updating Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html#updating-text">Updating text</a></li>
 <li class="toctree-l1"><a class="reference internal" href="FAQ.html">FAQ</a></li>
 </ul>
 
@@ -84,17 +84,34 @@
              
   <section id="welcome-to-the-scales-drp">
 <h1>Welcome to the SCALES-DRP!<a class="headerlink" href="#welcome-to-the-scales-drp" title="Link to this heading"></a></h1>
-<p>SCALES-DRP is an official data reduction pipeline (DRP) for the Slicer Combined Array of Lenslets for Exoplanet Spectroscopy. This DRP has been developed by the SCALES team 2024 and supported by the W. M. Keck Observatory.</p>
+<p>SCALES (Slicer Combined with Array of Lenslets for Exoplanet Spectroscopy) is a next-generation thermal infrared coronagraphic imager and integral field spectrograph (IFS) for the W. M. Keck Observatory.
+SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has been developed by the SCALES team 2024 and supported by the W. M. Keck Observatory.</p>
 <p>The SCALES-DRP takes raw SCALES images and turns them into spectrally-dispersed datacubes.</p>
+<p>The SCALES-DRP is parallelized, implemented in Python within the Keck-DRP framework, and openly available on <a class="reference external" href="https://github.com/scalessim/SCALES-DRP">GitHub</a>.</p>
+<section id="to-know-more-about-scales">
+<h2>To know more about SCALES<a class="headerlink" href="#to-know-more-about-scales" title="Link to this heading"></a></h2>
+<p>You can find more about SCALES from below publications.</p>
+<blockquote>
+<div><ul class="simple">
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/12184/121840I/Design-of-SCALES--a-2-5-micron-coronagraphic-integral/10.1117/12.2630577.short">paper1</a> : SCALES overview</p></li>
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/12184/2630642/SCALES-on-Keck-optical-design/10.1117/12.2630642.short">paper2</a> : SCALES optical design</p></li>
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/12188/121881U/Design-of-an-IR-imaging-channel-for-the-Keck-Observatory/10.1117/12.2630696.short">paper3</a> : Imaging channel</p></li>
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/11447/1144764/Update-on-the-preliminary-design-of-SCALES--the-Santa/10.1117/12.2562768.short">paper4</a> : Preliminary design of SCALES</p></li>
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/13096/130966W/Performance-analysis-of-SCALES-final-optical-design--end-to/10.1117/12.3019578.short">paper5</a> : Performance analysis of SCALES final optical design: end to end modeling</p></li>
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/12680/2677831/The-slicer-combined-with-array-of-lenslets-for-exoplanet-spectroscopy/10.1117/12.2677831.short">paper6</a> : Science cases and expected outcome</p></li>
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/11447/114474Z/End-to-end-simulation-of-the-SCALES-integral-field-spectrograph/10.1117/12.2562143.short">paper7</a> : scalessim - A SCALES simulation</p></li>
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/13627/136271L/SCALES-DRP--a-data-reduction-pipeline-for-an-upcoming/10.1117/12.3064542.short">paper8</a> : SCALES-DRP</p></li>
+<li><p><a class="reference external" href="https://www.spiedigitallibrary.org/conference-proceedings-of-spie/13627/136271M/Testing-and-characterization-of-monochromator-for-SCALES-calibration-unit/10.1117/12.3065860.short">paper9</a> : SCALES Monochromator calibration unit</p></li>
+</ul>
+</div></blockquote>
+</section>
 <section id="release-1-0">
 <h2>Release 1.0<a class="headerlink" href="#release-1-0" title="Link to this heading"></a></h2>
-<p>We are excited to announce the release version of 1.0.0 of the SCALES-DRP!</p>
+<p>The latest version of 1.0.0 of the SCALES-DRP includes:</p>
 <blockquote>
-<div><p>New Features:</p>
-<ul class="simple">
+<div><ul class="simple">
 <li><p>Simplified installation via pip and conda environment</p></li>
 <li><p>Vacuum to air and heliocentric or barycentric correction</p></li>
-<li><p>Versatile sky subtraction modes</p></li>
 <li><p>Formal support system via GitHub issues</p></li>
 <li><p>Support for Mac intel M2 and M3 chips in Python 3.12</p></li>
 </ul>
@@ -103,60 +120,52 @@
 <p class="admonition-title">Note</p>
 <p>This project is under active development!</p>
 </div>
-</section>
-<section id="contents">
-<h2>Contents<a class="headerlink" href="#contents" title="Link to this heading"></a></h2>
 <div class="toctree-wrapper compound">
 <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="Installing.html">Installation</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Installing.html#environment-and-dependencies">Environment and Dependencies</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Installing.html#installation-steps">Installation Steps</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="Installation.html#environment-and-dependencies">Environment and Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Installation.html#installation-steps">Installation Steps</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="Quick%20Start.html">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Configuration%20Parameters.html">Configuration Parameters</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Configuration%20Parameters.html#lowres-and-medres-sections-of-the-configuration-file">LOWRES and MEDRES sections of the configuration file</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Configuration%20Parameters.html#wavelength-correction-parameters">Wavelength correction parameters</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="Running%20the%20SCALES-DRP%20Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Running%20the%20SCALES-DRP%20Pipeline.html#process-files-file-lists-and-entire-directories">Process files, file lists and entire directories</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Running%20the%20SCALES-DRP%20Pipeline.html#other-command-line-options">Other command line options</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Quick_Start.html">Quick Start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#lowres-and-medres-sections-of-the-configuration-file">LOWRES and MEDRES sections of the configuration file</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#wavelength-correction-parameters">Wavelength correction parameters</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#data-quality-dq-flaging">Data Quality (DQ) Flaging</a></li>
 <li class="toctree-l2"><a class="reference internal" href="Primitives.html#reference-pixel-correction">Reference Pixel Correction</a></li>
 <li class="toctree-l2"><a class="reference internal" href="Primitives.html#f-noise-correction">1/f Noise Correction</a></li>
 <li class="toctree-l2"><a class="reference internal" href="Primitives.html#linearity-correction">Linearity Correction</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#rampfit">RampFit</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#trimoverscan">TrimOverscan</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#makemasterbias">MakeMasterBias</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#flagsaturation">FlagSaturation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#flatfielding">FlatFielding</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#subtractbias">SubtractBias</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#correctgain">CorrectGain</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#optimalextract">OptimalExtract</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#leastextract">LeastExtract</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#skysubtraction">SkySubtraction</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#wavecalib">Wavecalib</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#bad-pixel">Bad pixel</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#readnoise-map">Readnoise map</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#rectification-matrix">Rectification matrix</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#ramp-fitting">Ramp fitting</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#spectral-extraction">Spectral Extraction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#wavelevngth-calibration">Wavelevngth Calibration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#world-coordinate-system-wcs">World Coordinate System (WCS)</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="Data%20Products.html">Data Products</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Mode%20of%20Pipelines.html">Modes of Pipeline Operation</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Mode%20of%20Pipelines.html#quicklook-pipeline">Quicklook Pipeline</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Mode%20of%20Pipelines.html#calibration-pipeline">Calibration Pipeline</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Mode%20of%20Pipelines.html#science-grad-pipeline">Science-Grad Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="Mode_of_Pipelines.html#quicklook-pipeline">Quicklook Pipeline</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Mode_of_Pipelines.html#calibration-pipeline">Calibration Pipeline</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Mode_of_Pipelines.html#science-grad-pipeline">Science-Grad Pipeline</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#process-files-file-lists-and-entire-directories">Process files, file lists and entire directories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#other-command-line-options">Other command line options</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="Versions.html#version-1-0">Version 1.0</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html">Updating Documentation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html#updating-text">Updating text</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html">Updating Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html#updating-text">Updating text</a></li>
 <li class="toctree-l1"><a class="reference internal" href="FAQ.html">FAQ</a></li>
 </ul>
 </div>
@@ -167,7 +176,7 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="Installing.html" class="btn btn-neutral float-right" title="Installation" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="Installation.html" class="btn btn-neutral float-right" title="Installation" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

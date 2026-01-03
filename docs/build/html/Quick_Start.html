@@ -19,8 +19,8 @@
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Configuration Parameters" href="Configuration%20Parameters.html" />
-    <link rel="prev" title="Installation" href="Installing.html" /> 
+    <link rel="next" title="Configuration Parameters" href="Configuration_Parameters.html" />
+    <link rel="prev" title="Installation" href="Installation.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -45,17 +45,17 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="Installing.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Configuration%20Parameters.html">Configuration Parameters</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Running%20the%20SCALES-DRP%20Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Data%20Products.html">Data Products</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Mode%20of%20Pipelines.html">Modes of Pipeline Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html">Updating Documentation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html#updating-text">Updating text</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html">Updating Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html#updating-text">Updating text</a></li>
 <li class="toctree-l1"><a class="reference internal" href="FAQ.html">FAQ</a></li>
 </ul>
 
@@ -75,7 +75,7 @@
       <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
       <li class="breadcrumb-item active">Quick Start</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="_sources/Quick Start.rst.txt" rel="nofollow"> View page source</a>
+            <a href="_sources/Quick_Start.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -86,26 +86,34 @@
   <section id="quick-start">
 <h1>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading"></a></h1>
 <p>The <code class="docutils literal notranslate"><span class="pre">Quick</span> <span class="pre">Start</span></code> will help the users to perform the SCALES data reduction and check the installation process.</p>
-<p>Give a quick look at the <a class="reference internal" href="Configuration%20Parameters.html"><span class="doc">Configuration Parameters</span></a> for the pipeline, contained in the file <code class="docutils literal notranslate"><span class="pre">scalesdrp/config/scales.cfg</span></code></p>
+<p>Give a quick start at the <a class="reference internal" href="Configuration_Parameters.html"><span class="doc">Configuration Parameters</span></a> for the pipeline, contained in the file <code class="docutils literal notranslate"><span class="pre">scalesdrp/config/scales.cfg</span></code></p>
 <p>The assumption is that the user have a directory ( here, data_folder) with SCLAES data (here, file_name.fits) to reduce in the <code class="docutils literal notranslate"><span class="pre">scalesdrp</span></code> <code class="docutils literal notranslate"><span class="pre">conda</span></code> environment created.
 If you have the SCALES IFU data from the <code class="docutils literal notranslate"><span class="pre">low</span> <span class="pre">resolution</span></code> mode, then follow the below commands.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>conda<span class="w"> </span>activate<span class="w"> </span>scalesdrp
 <span class="nb">cd</span><span class="w"> </span>data_folder
-start_scales_reduce<span class="w"> </span>-lr<span class="w"> </span>-f<span class="w"> </span>*.fits<span class="w"> </span>-g
+start_scales_reduce<span class="w"> </span>-lr<span class="w"> </span>-f<span class="w"> </span>file_name.fits
 </pre></div>
 </div>
-<p>The Keck DRP Framework will load and initialize the pipeline, ingest all the <code class="docutils literal notranslate"><span class="pre">lowres</span></code>  files, and then start processing according to the image types in groups in the order required by the pipeline. To do the same for the <code class="docutils literal notranslate"><span class="pre">medres</span></code> mode, data run:</p>
+<p>The Keck DRP Framework will load and initialize the pipeline, ingest the input <code class="docutils literal notranslate"><span class="pre">lowres</span></code>  file, and then start processing according to the input image type. To do the same for the <code class="docutils literal notranslate"><span class="pre">medres</span></code> mode, data run:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>conda<span class="w"> </span>activate<span class="w"> </span>scalesdrp
 <span class="nb">cd</span><span class="w"> </span>data_folder
-start_scales_reduce<span class="w"> </span>-mr<span class="w"> </span>-f<span class="w"> </span>*.fits<span class="w"> </span>-g
+start_scales_reduce<span class="w"> </span>-mr<span class="w"> </span>-f<span class="w"> </span>file_name*.fits
 </pre></div>
 </div>
 <p>Three directories will be created: a <code class="docutils literal notranslate"><span class="pre">redux</span></code> directory with the results of the reduction, a <code class="docutils literal notranslate"><span class="pre">logs</span></code> directory with separate logs for the framework itself and for the DRP, and a <code class="docutils literal notranslate"><span class="pre">plots</span></code> directory containing diagnostic plots.</p>
 <p>For the <code class="docutils literal notranslate"><span class="pre">Imaging</span></code> channel, user can use the following commands.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>conda<span class="w"> </span>activate<span class="w"> </span>scalesdrp
 <span class="nb">cd</span><span class="w"> </span>data_folder
-start_scales_reduce<span class="w"> </span>-imc<span class="w"> </span>-f<span class="w"> </span>*.fits<span class="w"> </span>-g
+start_scales_reduce<span class="w"> </span>-imc<span class="w"> </span>-f<span class="w"> </span>file_name.fits
 </pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>It is important to execute the above commands from the data directory. One can also specify
+the complete path following <code class="docutils literal notranslate"><span class="pre">-d</span></code>. For example:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>start_scales_reduce<span class="w"> </span>-imc<span class="w"> </span>-f<span class="w"> </span>-d<span class="w"> </span>/FULL_PATH<span class="w"> </span>file_name.fits
+</pre></div>
+</div>
 </div>
 </section>
 
@@ -113,8 +121,8 @@ start_scales_reduce<span class="w"> </span>-imc<span class="w"> </span>-f<span c
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="Installing.html" class="btn btn-neutral float-left" title="Installation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="Configuration%20Parameters.html" class="btn btn-neutral float-right" title="Configuration Parameters" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="Installation.html" class="btn btn-neutral float-left" title="Installation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="Configuration_Parameters.html" class="btn btn-neutral float-right" title="Configuration Parameters" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

@@ -23,18 +23,15 @@ We have specific different default parameters for each observation mode. These a
 
 .. code-block:: bash
 
-	bias_min_nframes = 7
-	flat_min_nframes = 6
-	dome_min_nframes = 3
-	twiflat_min_nframes = 1
-	dark_min_nframes = 3
-	arc_min_nframes = 1        # = 3 for [MEDRES]
-	contbars_min_nframes = 1   # = 3 for [MEDRES]
-	minoscanpix = 75           # = 20 for [MEDRES]
-	oscanbuf = 20              # = 5 for [MEDRES]
+	bias_min_nframes = 5 #minimum bias exposures
+	flat_min_nframes = 5 #minimum detector flat exposures
+	lensflat_min_nframes = 5 #minimum lenslet flat exposures
+	dark_min_nframes = 3 #minimum dark exposures
 
-These parameters control the minimum number of bias, internal/dome/twilight flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations.
 
+These parameters control the minimum number of bias, detector/lenslet flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations.
+
+There is similar set of default parameter values which will be used for IMAGING mode of analysis.
 
 
 Wavelength correction parameters

@@ -1,0 +1,10 @@
+-g,group mode, Use group mode: separate files by image type and reduce in the correct order
+-f, frame mode, single input file
+-i, Input files, Pattern to match
+-d, input directory name, give the full path 
+-l,list, file list
+-m, monitor, Continue monitoring the directory after the initial ingestion
+-I, ingest_data_only, Ingest data and terminate
+-w,wait for an event, Continue processing wait for an event to a fixed time
+-W,continuous,Continue processing wait for ever
+

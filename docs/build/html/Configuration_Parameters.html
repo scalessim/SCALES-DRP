@@ -19,8 +19,8 @@
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Running the SCALES-DRP Pipeline" href="Running%20the%20SCALES-DRP%20Pipeline.html" />
-    <link rel="prev" title="Quick Start" href="Quick%20Start.html" /> 
+    <link rel="next" title="Primitives" href="Primitives.html" />
+    <link rel="prev" title="Quick Start" href="Quick_Start.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -45,21 +45,21 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="Installing.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Quick%20Start.html">Quick Start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Quick_Start.html">Quick Start</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Configuration Parameters</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#lowres-and-medres-sections-of-the-configuration-file">LOWRES and MEDRES sections of the configuration file</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#wavelength-correction-parameters">Wavelength correction parameters</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="Running%20the%20SCALES-DRP%20Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Data%20Products.html">Data Products</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Mode%20of%20Pipelines.html">Modes of Pipeline Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html">Updating Documentation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Updating%20Documentation.html#updating-text">Updating text</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html">Updating Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html#updating-text">Updating text</a></li>
 <li class="toctree-l1"><a class="reference internal" href="FAQ.html">FAQ</a></li>
 </ul>
 
@@ -79,7 +79,7 @@
       <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
       <li class="breadcrumb-item active">Configuration Parameters</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="_sources/Configuration Parameters.rst.txt" rel="nofollow"> View page source</a>
+            <a href="_sources/Configuration_Parameters.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -101,18 +101,14 @@
 <section id="lowres-and-medres-sections-of-the-configuration-file">
 <h2>LOWRES and MEDRES sections of the configuration file<a class="headerlink" href="#lowres-and-medres-sections-of-the-configuration-file" title="Link to this heading"></a></h2>
 <p>We have specific different default parameters for each observation mode. These are defined in the config file with <code class="docutils literal notranslate"><span class="pre">[LOWRES]</span></code> and <code class="docutils literal notranslate"><span class="pre">[MEDRES]</span></code> section headers. For example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">bias_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">7</span>
-<span class="nv">flat_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">6</span>
-<span class="nv">dome_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3</span>
-<span class="nv">twiflat_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span>
-<span class="nv">dark_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3</span>
-<span class="nv">arc_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="w">        </span><span class="c1"># = 3 for [MEDRES]</span>
-<span class="nv">contbars_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="w">   </span><span class="c1"># = 3 for [MEDRES]</span>
-<span class="nv">minoscanpix</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">75</span><span class="w">           </span><span class="c1"># = 20 for [MEDRES]</span>
-<span class="nv">oscanbuf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">20</span><span class="w">              </span><span class="c1"># = 5 for [MEDRES]</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">bias_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="c1">#minimum bias exposures</span>
+<span class="nv">flat_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="c1">#minimum detector flat exposures</span>
+<span class="nv">lensflat_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="c1">#minimum lenslet flat exposures</span>
+<span class="nv">dark_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="c1">#minimum dark exposures</span>
 </pre></div>
 </div>
-<p>These parameters control the minimum number of bias, internal/dome/twilight flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations.</p>
+<p>These parameters control the minimum number of bias, detector/lenslet flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations.</p>
+<p>There is similar set of default parameter values which will be used for IMAGING mode of analysis.</p>
 </section>
 <section id="wavelength-correction-parameters">
 <h2>Wavelength correction parameters<a class="headerlink" href="#wavelength-correction-parameters" title="Link to this heading"></a></h2>
@@ -135,8 +131,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="Quick%20Start.html" class="btn btn-neutral float-left" title="Quick Start" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="Running%20the%20SCALES-DRP%20Pipeline.html" class="btn btn-neutral float-right" title="Running the SCALES-DRP Pipeline" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="Quick_Start.html" class="btn btn-neutral float-left" title="Quick Start" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="Primitives.html" class="btn btn-neutral float-right" title="Primitives" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
