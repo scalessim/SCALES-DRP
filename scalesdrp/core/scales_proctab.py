@@ -3,239 +3,244 @@ import os
 import logging
 
 
+from astropy.table import Table, unique
+import os
+import logging
+
+
 class Proctab:
+    """
+    Lightweight processing table for SCALES quicklook/pipeline products.
+
+    Expected header keywords (best-effort):
+      CAMERA   : 'Im' or 'IFS' (we normalize to 'IM'/'IFS')
+      IFSMODE  : string (only meaningful if CAMERA=='IFS')
+      ACQMODE  : e.g. 'UTR', 'CDS'
+      MCLOCK   : e.g. '5.0MHZ'
+      IMTYPE   : 'DARK', 'BIAS', 'OBJECT', ...
+      EXPTIME  : seconds (float)
+      MJD      : float
+      TARGNAME : string (or OBJECT as fallback)
+    """
 
     def __init__(self, logger=None):
-        self.log = logger if logger is not None else logging.getLogger('SCALES')
+        self.log = logger if logger is not None else logging.getLogger("SCALES")
         self.proctab = None
 
+    # -------------------------
+    # helpers
+    # -------------------------
+    @staticmethod
+    def _as_str(val, default="NONE"):
+        if val is None:
+            return default
+        try:
+            s = str(val).strip()
+        except Exception:
+            return default
+        return s if s else default
+
+    @staticmethod
+    def _as_float(val, default=float("nan")):
+        try:
+            if val is None:
+                return default
+            return float(val)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _norm_camera(cam):
+        cam = Proctab._as_str(cam).upper()
+        # accept "IM", "Im", "IMG", etc
+        if cam.startswith("IM"):
+            return "IM"
+        if cam.startswith("IFS"):
+            return "IFS"
+        return cam if cam != "NONE" else "NONE"
+
+    # -------------------------
+    # table i/o
+    # -------------------------
     def new_proctab(self):
-        cnames = ('FRAMENO', 'CID', 'DID', 'TYPE', 'GRPID', 'TTIME', 'OBSMODE',
-                  'IFU','GRAT','GANG','CWAVE','BIN','FILT','MJD',
-                  'STAGE', 'SUFF', 'OFNAME', 'TARGNAME', 'filename')
-        dtypes = ('int32', 'S24', 'int64', 'S9', 'S12', 'float64', 'S4',
-                  'S6','S5','float64','float64','S4','S5','float64',
-                  'int32', 'S5', 'S25', 'S25', 'S25')
-        meta = {'SCALES DRP PROC TABLE': 'new table'}
+        cnames = (
+            "CAMERA", "IFSMODE", "ACQMODE", "MCLOCK",
+            "IMTYPE", "EXPTIME", "MJD", "TARGNAME",
+            "filename", "SUFF", "STAGE"
+        )
+        dtypes = (
+            "U8", "U32", "U16", "U16",
+            "U16", "f8", "f8", "U64",
+            "U256", "U32", "i4"
+        )
+        meta = {"SCALES DRP PROC TABLE": "new table"}
         self.proctab = Table(names=cnames, dtype=dtypes, meta=meta)
-        # prevent string column truncation
-        for col in self.proctab.itercols():
-            if col.dtype.kind in 'SU':
-                self.proctab.replace_column(col.name, col.astype('object'))
 
-    def read_proctab(self, tfil='scales.proc'):
+        # formatting
+        self.proctab["MJD"].format = "15.6f"
+        self.proctab["EXPTIME"].format = "10.3f"
+
+    def read_proctab(self, tfil="scales.proc"):
         if os.path.isfile(tfil):
-            self.log.info("reading proc table file: %s" % tfil)
-            self.proctab = Table.read(tfil, format='ascii.fixed_width')
-            self.proctab.dtypes = ('int32', 'S24', 'int64', 'S9', 'S12',
-                                   'float64', 'S4','S6','S5','float64',
-                                   'float64','S4','S5','float64','int32',
-                                   'S5', 'S25', 'S25', 'S25')
+            self.log.info("reading proc table file: %s", tfil)
+            self.proctab = Table.read(tfil, format="ascii.fixed_width")
         else:
-            self.log.info("proc table file not found: %s" % tfil)
+            self.log.info("proc table file not found: %s (creating new)", tfil)
             self.new_proctab()
-        if len(self.proctab) == 0:
+
+        if self.proctab is None or len(self.proctab) == 0:
             self.new_proctab()
-        # format columns
-        #self.proctab['GANG'].format = '7.2f'
-        #self.proctab['CWAVE'].format = '8.2f'
-        self.proctab['MJD'].format = '15.6f'
-        # prevent string column truncation
-        for col in self.proctab.itercols():
-            if col.dtype.kind in 'SU':
-                self.proctab.replace_column(col.name, col.astype('object'))
 
-    def write_proctab(self, tfil='scales.proc'):
-        if self.proctab is not None:
-            if os.path.isfile(tfil):
-                over_write = True
-            else:
-                over_write = False
+        # Ensure expected columns exist (for backward compatibility)
+        needed = {"CAMERA","IFSMODE","ACQMODE","MCLOCK","IMTYPE","EXPTIME","MJD","TARGNAME","filename","SUFF","STAGE"}
+        missing = [c for c in needed if c not in self.proctab.colnames]
+        if missing:
+            self.log.warning("Proctab missing columns %s; recreating a fresh table.", missing)
+            self.new_proctab()
 
-            self.proctab.write(filename=tfil, format='ascii.fixed_width',
-                               overwrite=over_write)
-            self.log.info("writing proc table file: %s" % tfil)
-        else:
+        self.proctab["MJD"].format = "15.6f"
+        if "EXPTIME" in self.proctab.colnames:
+            self.proctab["EXPTIME"].format = "10.3f"
+
+    def write_proctab(self, tfil="scales.proc"):
+        if self.proctab is None:
             self.log.info("no proc table to write")
+            return
+        self.proctab.write(filename=tfil, format="ascii.fixed_width", overwrite=True)
+        self.log.info("writing proc table file: %s", tfil)
 
-    def update_proctab(self, frame, suffix='raw', newtype=None, filename=""):
-        if filename == "":
-            self.log.error(f"No filename given for {frame.header['OFNAME']}")
-        if frame is not None and self.proctab is not None:
-            stages = {'ramp': 0,
-                      'mbias': 1,
-                      'int': 1,
-                      'intd': 2,
-                      'mcbars': 3,
-                      'marc': 3,
-                      'mflat': 4,
-                      'sflat': 4,
-                      'intf': 4,
-                      'sky': 5,
-                      'intk': 5,
-                      'icube': 6,
-                      'icubed': 7,
-                      'invsens': 8,
-                      'icubes': 8}
-            if suffix in stages:
-                stage = stages[suffix]
-            else:
-                stage = 9
-            if newtype is not None:
-                frame.header['IMTYPE'] = newtype
-            # new row for proc table
-            if frame.header['STATEID'].strip() == '0':
-                frame.header['STATEID'] = 'NONE'
-            if 'GROUPID' not in frame.header:
-                frame.header['GROUPID'] = "NONE"
-            else:
-                grpid = frame.header['GROUPID'].strip()
-                if len(grpid) <= 0:
-                    frame.header['GROUPID'] = "NONE"
-            #    dto = frame.header['DATE-OBS']
-            #    fno = frame.header['FRAMENO']
-            #    frame.header['GROUPID'] = "%s-%s" % (dto, fno)
-            cam = frame.header['OBSMODE'].upper()
-            if 'LOWRES' in cam:
-                grnam = frame.header['BGRATNAM']
-                grang = frame.header['BGRANGLE']
-                cwave = frame.header['BCWAVE']
-                fltnm = frame.header['BFILTNAM']
-            elif 'MEDRES' in cam:
-                grnam = frame.header['RGRATNAM']
-                grang = frame.header['RGRANGLE']
-                cwave = frame.header['RCWAVE']
-                fltnm = None
-            else:
-                grnam = None
-                grang = None
-                cwave = None
-                fltnm = None
-            trgnm = frame.header['TARGNAME'].replace(" ", "")
-            if len(trgnm) <= 0:
-                trgnm = frame.header['OBJECT'].replace(" ", "")
-            new_row = [frame.header['FRAMENO'],
-                       frame.header['STATEID'],
-                       frame.header['CCDCFG'],
-                       frame.header['IMTYPE'],
-                       frame.header['GROUPID'],
-                       frame.header['TTIME'],
-                       cam,
-                       frame.header['IFUNAM'],
-                       grnam,
-                       grang,
-                       cwave,
-                       frame.header['BINNING'],
-                       fltnm,
-                       frame.header['MJD'],
-                       stage,
-                       suffix,
-                       frame.header['OFNAME'],
-                       trgnm,
-                       filename]
+    # -------------------------
+    # update / query
+    # -------------------------
+    def update_proctab(self, frame, suffix="raw", filename="", newtype=None, dedupe_key="filename"):
+        """
+        Add/update a row for the newly written product.
+
+        Parameters
+        ----------
+        frame : object with .header (dict-like)
+        suffix : str
+            pipeline stage suffix label (e.g. 'ql','mbias','mflat','opt_cube',...)
+        filename : str
+            output FITS filename/path just written
+        newtype : str or None
+            optional override of IMTYPE
+        dedupe_key : str
+            column name used to de-duplicate rows. default: 'filename'
+        """
+        if self.proctab is None:
+            self.log.warning("Proctab not initialized; creating new table.")
+            self.new_proctab()
+
+        if frame is None:
+            self.log.warning("No frame provided; skipping proctab update.")
+            return
+
+        hdr = getattr(frame, "header", None)
+        if hdr is None:
+            self.log.warning("Frame has no header; skipping proctab update.")
+            return
+
+        if not filename:
+            self.log.error("No filename given; skipping proctab update.")
+            return
+
+        # stage mapping
+        stages = {
+            "ql": 0,
+            "mbias": 1,
+            "mflat": 4,
+            "lensflat": 4,
+            "mdark": 4,
+            "opt_cube": 6,
+            "chi_cube": 7,
+        }
+        stage = stages.get(suffix, 0)
+
+        # read header values (best effort)
+        camera = self._norm_camera(hdr.get("CAMERA", hdr.get("OBSMODE", "NONE")))
+        ifsmode = self._as_str(hdr.get("IFSMODE", hdr.get("IFUNAM", "NONE")))
+        acqmode = self._as_str(hdr.get("ACQMODE", "NONE"))
+        mclock  = self._as_str(hdr.get("MCLOCK", "NONE"))
+
+        imtype  = self._as_str(newtype if newtype is not None else hdr.get("IMTYPE", "NONE"))
+        exptime = self._as_float(hdr.get("EXPTIME", hdr.get("TTIME", None)), default=float("nan"))
+        mjd     = self._as_float(hdr.get("MJD", None), default=float("nan"))
+
+        targname = self._as_str(hdr.get("TARGNAME", hdr.get("OBJECT", "NONE")))
+        targname = targname.replace(" ", "") if targname != "NONE" else "NONE"
+
+        # rules you requested
+        if camera == "IM":
+            ifsmode = "NONE"
+        elif camera == "IFS":
+            ifsmode = self._as_str(ifsmode, default="NONE")
         else:
-            new_row = None
+            # unknown camera; still keep something consistent
+            if camera == "NONE":
+                camera = "NONE"
+            ifsmode = self._as_str(ifsmode, default="NONE")
+
+        new_row = [
+            camera, ifsmode, acqmode, mclock,
+            imtype, exptime, mjd, targname,
+            self._as_str(filename), self._as_str(suffix), int(stage)
+        ]
+
         self.proctab.add_row(new_row)
-        self.proctab = unique(self.proctab, keys=['CID', 'FRAMENO', 'TYPE'],
-                              keep='last')
-        self.proctab.sort('FRAMENO')
-        self.log.info(
-            f"proctable updated with {frame.header['OFNAME']} and {filename}")
 
-    def search_proctab(self, frame, target_type=None, target_group=None,
-                       nearest=False):
-        if target_type is not None and self.proctab is not None:
-            self.log.info('Looking for %s frames' % target_type)
-            # get relevant mode (lowres or medres)
-            self.log.info('Observing Mode is %s' % frame.header['OBSMODE'])
-            tab = self.proctab[(self.proctab['OBSMODE'] ==
-                                frame.header['OBSMODE'].upper().strip())]
-            # get target type images
-            tab = tab[(self.proctab['TYPE'] == target_type)]
-            self.log.info('Target type is %s' % target_type)
-            # BIASES must have the same CCDCFG
-            if 'BIAS' in target_type:
-                self.log.info('Looking for frames with CCDCFG = %s' %
-                              frame.header['CCDCFG'])
-                tab = tab[(tab['DID'] == int(frame.header['CCDCFG']))]
-                if target_group is not None:
-                    self.log.info('Looking for frames with GRPID = %s' %
-                                  target_group)
-                    tab = tab[(tab['GRPID'] == target_group)]
-            # raw DARKS must have the same CCDCFG and TTIME
-            elif target_type == 'DARK':
-                self.log.info('Looking for frames with CCDCFG = %s and '
-                              'TTIME = %f' % (frame.header['CCDCFG'],
-                                              frame.header['TTIME']))
-                tab = tab[tab['DID'] == int(frame.header['CCDCFG'])]
-                tab = tab[tab['TTIME'] == float(frame.header['TTIME'])]
-                if target_group is not None:
-                    self.log.info('Looking for frames with GRPID = %s' %
-                                  target_group)
-                    tab = tab[tab['GRPID'] == target_group]
-            # MDARKS must have the same CCDCFG, will be scaled to match TTIME
-            elif target_type == 'MDARK':
-                self.log.info('Looking for frames with CCDCFG = %s' %
-                              frame.header['CCDCFG'])
-                tab = tab[(tab['DID'] == int(frame.header['CCDCFG']))]
-            elif target_type == 'OBJECT':
-                self.log.info('Looking for frames with GRPID = %s' %
-                              target_group)
-                tab = tab[tab['GRPID'] == target_group]
-            else:
-                self.log.info('Looking for frames with STATEID = %s (%s)' %
-                              (frame.header['STATEID'],
-                               frame.header['STATENAM']))
-                tab = tab[(tab['CID'] == frame.header['STATEID'])]
-            # Check if nearest entry is requested
-            if nearest and len(tab) > 1:
-                tfno = frame.header['MJD']
-                minoff = 99999
-                trow = None
-                for row in tab:
-                    off = abs(row['MJD'] - tfno)
-                    if off < minoff:
-                        minoff = off
-                        trow = row
-                if trow is not None:
-                    tab = tab[(tab['MJD'] == trow['MJD'])]
-        else:
-            if target_type is None:
-                self.log.warning("No target for proctab")
-            if self.proctab is None:
-                self.log.warning("Proctab is empty")
-            tab = None
+        # de-duplicate
+        if dedupe_key in self.proctab.colnames:
+            self.proctab = unique(self.proctab, keys=[dedupe_key], keep="last")
+
+        # sort (use MJD if present)
+        if "MJD" in self.proctab.colnames:
+            try:
+                self.proctab.sort("MJD")
+            except Exception:
+                pass
+
+        self.log.info("proctab updated: SUFF=%s file=%s", suffix, filename)
+
+
+    def search_proctab(self, frame, target_type=None, nearest=False):
+        """
+        Find rows matching CAMERA (+ optional IMTYPE), optionally nearest in MJD.
+        """
+        if self.proctab is None or len(self.proctab) == 0:
+            self.log.warning("Proctab is empty")
+            return None
+        if frame is None or getattr(frame, "header", None) is None:
+            self.log.warning("No frame/header for proctab search")
+            return None
+
+        hdr = frame.header
+        camera = self._norm_camera(hdr.get("CAMERA", hdr.get("OBSMODE", "NONE")))
+
+        tab = self.proctab[self.proctab["CAMERA"] == camera]
+
+        if target_type is not None:
+            tab = tab[tab["IMTYPE"] == self._as_str(target_type).upper()]
+
+        if nearest and len(tab) > 1 and "MJD" in tab.colnames:
+            tf = self._as_float(hdr.get("MJD", None), default=None)
+            if tf is not None:
+                # pick closest MJD
+                dm = [abs(row["MJD"] - tf) for row in tab]
+                j = int(min(range(len(dm)), key=lambda k: dm[k]))
+                tab = tab[j:j+1]
+
         return tab
 
     def in_proctab(self, frame):
-        # get relevant mode (lowres or medres)
-        tab = self.proctab[(self.proctab['OBSMODE'] ==
-                            frame.header['OBSMODE'].upper().strip())]
-        imno_list = tab['MJD']
-        if frame.header['MJD'] in imno_list:
-            return True
-        else:
+        """
+        Check if frame MJD exists for that CAMERA in table.
+        """
+        if self.proctab is None or frame is None or getattr(frame, "header", None) is None:
             return False
-
-    def last_suffix(self, frame):
-        # get last suffix if currently in proctab
-        # check for master object first
-        tab_mobj = self.proctab[(self.proctab['TYPE'] == 'MOBJ')]
-        tab_mjd = tab_mobj[(tab_mobj['MJD'] == frame.header['MJD'])]
-        tab = tab_mjd[(tab_mjd['FRAMENO'] == frame.header['FRAMENO'])]
-
-        if len(tab) == 1:
-            return tab['SUFF'].value[0]
-        # No master object, so check simple object
-        elif len(tab) <= 0:
-            tab_obj = self.proctab[(self.proctab['TYPE'] == 'OBJECT')]
-            tab_mjd = tab_obj[(tab_obj['MJD'] == frame.header['MJD'])]
-            tab = tab_mjd[(tab_mjd['FRAMENO'] == frame.header['FRAMENO'])]
-            if len(tab) == 1:
-                return tab['SUFF'].value[0]
-            else:
-                return ""
-        else:
-            self.log.warning("Ambiguous entries for frame number %d" %
-                             frame.header['FRAMENO'])
-            return ""
+        camera = self._norm_camera(frame.header.get("CAMERA", frame.header.get("OBSMODE", "NONE")))
+        mjd = self._as_float(frame.header.get("MJD", None), default=None)
+        if mjd is None:
+            return False
+        tab = self.proctab[self.proctab["CAMERA"] == camera]
+        return mjd in set(tab["MJD"])

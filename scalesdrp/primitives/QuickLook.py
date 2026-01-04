@@ -18,8 +18,11 @@ import matplotlib.pyplot as plt
 import time
 from scipy.optimize import leastsq
 from scipy.signal import savgol_filter
-from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
-import matplotlib.pyplot as plt
+
+from scalesdrp.core.scales_proctab import Proctab
+import logging
+log = logging.getLogger("SCALES")
+pt = Proctab(logger=log)
 
 class QuickLook(BasePrimitive):
     """
@@ -30,17 +33,105 @@ class QuickLook(BasePrimitive):
         BasePrimitive.__init__(self, action, context)
         self.logger = context.pipeline_logger
 
-    def fits_writer_steps(self,data,header,output_dir,input_filename,suffix,overwrite=True):
+        if not hasattr(self, "proctab") or self.proctab is None:
+            self.proctab = Proctab(logger=self.logger if hasattr(self, "logger") else logging.getLogger("SCALES"))
+            #log = getattr(self, "logger", None) or logging.getLogger("SCALES")
+            #self.proctab = Proctab(logger=log)
+
+    def fits_writer_steps1(self,data,header,output_dir,input_filename,suffix,overwrite=True):
         base_name = os.path.basename(input_filename)
         file_root, file_ext = os.path.splitext(base_name)
         output_filename = f"{file_root}{suffix}{file_ext}"
-        redux_output_dir = os.path.join(output_dir, 'redux')
+        redux_output_dir = os.path.join(output_dir, 'ql_redux')
         os.makedirs(redux_output_dir, exist_ok=True)
         output_path = os.path.join(redux_output_dir, output_filename)
         hdu = fits.PrimaryHDU(data=data, header=header)
         hdu.writeto(output_path, overwrite=overwrite)
         self.logger.info("+++++++++++ FITS file saved +++++++++++")
         return output_path
+
+
+    def fits_writer_steps(
+        self,
+        data,
+        header,
+        output_dir,
+        input_filename,
+        suffix,
+        overwrite=True,
+        *,
+        frame=None,                 # preferred: Frame object with .header
+        proctab=None,               # Proctab instance (e.g. self.proctab)
+        proctab_path=None,          # optional
+        newtype=None,               # optional override IMTYPE
+    ):
+        # --------------------------------------------------
+        # 1) Build output path
+        # --------------------------------------------------
+        base_name = os.path.basename(input_filename)
+        file_root, file_ext = os.path.splitext(base_name)
+        output_filename = f"{file_root}{suffix}{file_ext}"
+
+        redux_output_dir = os.path.join(output_dir, "ql_redux")
+        os.makedirs(redux_output_dir, exist_ok=True)
+        output_path = os.path.join(redux_output_dir, output_filename)
+
+        # --------------------------------------------------
+        # 2) Write FITS file
+        # --------------------------------------------------
+        hdu = fits.PrimaryHDU(data=data, header=header)
+        hdu.writeto(output_path, overwrite=overwrite)
+        self.logger.info("+++++++++++ FITS file saved +++++++++++: %s", output_path)
+
+        # --------------------------------------------------
+        # 3) Proctab bookkeeping (first-run safe)
+        # --------------------------------------------------
+        if proctab is not None:
+
+            # Decide where the proc table lives
+            if proctab_path is None:
+                proctab_path = os.path.join(redux_output_dir, "ql_scales.proc")
+
+            # ALWAYS: read if exists, else create new
+            try:
+                proctab.read_proctab(proctab_path)
+            except Exception as e:
+                self.logger.warning(
+                    "Could not read proctab (%s); creating a new one: %s",
+                    proctab_path, str(e)
+                )
+                proctab.new_proctab()
+
+            # Choose a frame/header source for the update
+            if frame is not None:
+                use_frame = frame
+            else:
+                # Minimal shim to satisfy update_proctab(frame=...)
+                class _FrameShim:
+                    def __init__(self, hdr):
+                        self.header = hdr
+                use_frame = _FrameShim(header)
+
+            # Update + write (never break pipeline)
+            try:
+                proctab.update_proctab(
+                    use_frame,
+                    suffix=suffix,
+                    filename=output_filename,
+                    newtype=newtype,
+                )
+                proctab.write_proctab(proctab_path)
+                self.logger.info("Proctab updated: %s", proctab_path)
+
+            except Exception as e:
+                self.logger.warning(
+                    "Proctab update failed for %s: %s",
+                    output_path, str(e)
+                )
+
+        return output_path
+
+
 
     def optimal_extract_with_error(self,
         R_transpose: sp.spmatrix, 
@@ -270,6 +361,7 @@ class QuickLook(BasePrimitive):
                 output_dir=output_dir,
                 input_filename=filename,
                 suffix='_ql',
+                proctab=self.proctab,
                 overwrite=True)
 
         if obs_mode == "IFS":
@@ -284,6 +376,7 @@ class QuickLook(BasePrimitive):
                 output_dir=output_dir,
                 input_filename=filename,
                 suffix='_ql',
+                proctab=self.proctab,
                 overwrite=True)
 
             if ifs_mode == "LowRes-K":
@@ -305,7 +398,9 @@ class QuickLook(BasePrimitive):
                         data=cube,
                         header=hdr,
                         output_dir=output_dir,
-                        input_filename=filename,suffix='_ql_cube',
+                        input_filename=filename,
+                        suffix='_ql_cube',
+                        proctab=self.proctab,
                         overwrite=True)
 
             elif ifs_mode == "LowRes-L":
@@ -326,7 +421,9 @@ class QuickLook(BasePrimitive):
                         data=cube,
                         header=hdr,
                         output_dir=output_dir,
-                        input_filename=filename,suffix='_ql_cube',
+                        input_filename=filename,
+                        suffix='_ql_cube',
+                        proctab=self.proctab,
                         overwrite=True)
 
             elif ifs_mode == "LowRes-M":
@@ -347,7 +444,9 @@ class QuickLook(BasePrimitive):
                         data=cube,
                         header=hdr,
                         output_dir=output_dir,
-                        input_filename=filename,suffix='_ql_cube',
+                        input_filename=filename,
+                        suffix='_ql_cube',
+                        proctab=self.proctab,
                         overwrite=True)
 
             elif ifs_mode == "LowRes-SED":
@@ -367,7 +466,9 @@ class QuickLook(BasePrimitive):
                         data=cube,
                         header=hdr,
                         output_dir=output_dir,
-                        input_filename=filename,suffix='_ql_cube',
+                        input_filename=filename,
+                        suffix='_ql_cube',
+                        proctab=self.proctab,
                         overwrite=True)
 
             elif ifs_mode == "LowRes-KL":
@@ -388,7 +489,9 @@ class QuickLook(BasePrimitive):
                         data=cube,
                         header=hdr,
                         output_dir=output_dir,
-                        input_filename=filename,suffix='_ql_cube',
+                        input_filename=filename,
+                        suffix='_ql_cube',
+                        proctab=self.proctab,
                         overwrite=True)
 
             elif ifs_mode == "LowRes-PAH":
@@ -411,6 +514,7 @@ class QuickLook(BasePrimitive):
                         output_dir=output_dir,
                         input_filename=filename,
                         suffix='_ql_cube',
+                        proctab=self.proctab,
                         overwrite=True)
 
             elif ifs_mode == "MedRes-K":
@@ -431,7 +535,9 @@ class QuickLook(BasePrimitive):
                         data=cube,
                         header=hdr,
                         output_dir=output_dir,
-                        input_filename=filename,suffix='_ql_cube',
+                        input_filename=filename,
+                        proctab=self.proctab,
+                        suffix='_ql_cube',
                         overwrite=True)
 
             elif ifs_mode == "MedRes-L":
@@ -452,7 +558,9 @@ class QuickLook(BasePrimitive):
                         data=cube,
                         header=hdr,
                         output_dir=output_dir,
-                        input_filename=filename,suffix='_ql_cube',
+                        input_filename=filename,
+                        proctab=self.proctab,
+                        suffix='_ql_cube',
                         overwrite=True)
 
             elif ifs_mode == "MedRes-M":
@@ -473,7 +581,9 @@ class QuickLook(BasePrimitive):
                         data=cube,
                         header=hdr,
                         output_dir=output_dir,
-                        input_filename=filename,suffix='_ql_cube',
+                        input_filename=filename,
+                        suffix='_ql_cube',
+                        proctab=self.proctab,
                         overwrite=True)
         else:
             self.logger.info("Unknown MODE of observation")

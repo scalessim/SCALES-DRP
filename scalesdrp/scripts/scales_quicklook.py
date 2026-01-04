@@ -9,8 +9,6 @@ from keckdrpframework.config.framework_config import ConfigClass
 from keckdrpframework.models.arguments import Arguments
 from keckdrpframework.utils.drpf_logger import getLogger
 
-
-
 import subprocess
 import time
 import datetime
@@ -76,12 +74,6 @@ def _parse_arguments(in_args: list) -> argparse.Namespace:
     parser.add_argument("-k", "--skipsky", dest='skipsky', action="store_true",
                         default=False, help="Skip sky subtraction")
 
-    parser.add_argument("-lr", "--lowres", dest='lowres', action="store_true",
-                        default=False, help="low resolution mode on!")
-    
-    parser.add_argument("-mr", "--medres", dest='medres', action="store_true",
-                        default=False, help="medium resolution mode on !")
-
     out_args = parser.parse_args(in_args[1:])
     return out_args
 
@@ -110,14 +102,6 @@ def main():
                 pkg, scales_config_file)
             shutil.copy(scales_config_fullpath, os.getcwd())
             print("Copied scales_quicklook.cfg into current dir.  Edit and use with -c")
-        sys.exit(0)
-
-    # make sure user has selected a channel
-    if not args.lowres and not args.medres:
-        print("\nERROR - DRP can process only one channel at a time\n\n"
-              "Please indicate a channel to process:\n"
-              "Either medium-resolution with -mr or --medres or\n"
-              "       low-resolution  with -lr or --lowres\n")
         sys.exit(0)
 
     if args.file_list:
@@ -192,12 +176,7 @@ def main():
         )
         framework.config.instrument.procfile = args.proctab
     else:
-        if args.lowres:
-            proctab = scales_config.LOWRES['procfile']
-        elif args.medres:
-            proctab = scales_config.MEDRES['procfile']
-        else:
-            proctab = scales_config.procfile
+        proctab = scales_config.procfile
         framework.context.pipeline_logger.info(
             "Using proc table file %s" % proctab)
         framework.config.instrument.procfile = proctab
