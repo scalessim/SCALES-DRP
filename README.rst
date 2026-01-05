@@ -1,101 +1,151 @@
-SCALES-DRP: the SCALES data reduction pipeline
-=======================================
+SCALES-DRP: The SCALES Data Reduction Pipeline
+==============================================
 
-Install
-.......
+Installation
+............
 
-The following will create a conda environment called scalesdrp, and activate it.
+The following steps will create and activate a conda environment named
+``scalesdrp``:
+
+::
 
     conda create --name scalesdrp python=3.12
-
     conda activate scalesdrp
 
+Clone the repository and install the package in editable mode:
 
-git clone https://github.com/scalessim/SCALES-DRP.git
+::
 
+    git clone https://github.com/scalessim/SCALES-DRP.git
+    cd SCALES-DRP
+    pip install -e .
 
-=======
-cd SCALES-DRP
+Alternatively, you can install the released version directly from PyPI:
 
-pip install -e.
+::
 
-
-Quick start
-...........
-
-The assumption is that you have a directory containing SCALES data, and that the names of the files are those assigned at the telescope, lr*.fits and mr*.fits.
-
-Next, go to the data directory and run the startup script:
-
-Take a quick look at the configuration parameters for the pipeline, contained in the file SCALES-DRP/scalesdrp/config/scales.cfg
-
-For this first run there's no need to change anything
+    pip install scalesdrp
 
 
-...........................................................
-
-
-Next, go to the data directory (mydata) and run the startup script:
-
-cd data_scales_drp
-
-start_scales_reduce -lr -l target.txt     # science grade pipeline
-start_scales_quicklook -lr -l target.txt  # quicklook pipeline
-
-Where the target.txt has all files to be reduced. Bias and object files.
-
-The daytime calibration will takes place automatically finding the files from a folder. '-d' for directory, followed by the path to the directory, then mention the mode of obseravation. 
-
-
-start_scales_calib -d path-to-folder -lr  # For daytime calibration process
-
-
-Three directories will be created: a redux directory with the results of the reduction, a logs directory with separate logs for the framework itself and for the DRP, and a plots directory containing diagnostic plots. Currently nothing is added to 'logs' and 'plots'.
-
-
-Configuration Parameters
-.......................
-
-A number of reduction parameters can be changed using entries in the configuration file.
-
-
-Low and Medium sections of the configuration file
-.................................................
-Now that the Low-Resolution (LR) channel has been installed, there is a need to specify different default parameters for each channel. 
-These are delineated in the config file with [LR] and [MR] section headers. 
-
-Processing parameters
-
-bias_min_nframes = 7
-flat_min_nframes = 6
-dome_min_nframes = 3
-dark_min_nframes = 3
-arc_min_nframes = 3        
-
-
-
-These parameters control the minimum number of bias, internal/dome/twilight flats and darks that the DRP expects before producing a master calibration. 
-This minimum numbers are different for the MR and LR channels.
-
-
-Running the pipeline
+Running the Pipeline
 ....................
 
-User must specify which channel to process with the -lr for lowres mode or -mr for medres mode.
+The SCALES-DRP consists of three main modules:
 
-reduce_scales -lr -f lr_file.fits
-
-To reduce a lowres file. Here -lr for lowres and -f for file followed by the filename.
-
-reduce_scales -lr -l lr_file.txt
-
-To reduce a list of files together. Here -lr for lowres mode, -l for list followed by the text files with the names of the fits file to reduce. 
+1. **Calibration module**
+2. **Quicklook module**
+3. **Science-grade module**
 
 
+Quicklook Module
+................
+
+The quicklook module is designed for rapid, automated execution during
+observations. It allows users to interactively visualize individual
+exposures and final 3D IFS data cubes using graphical user interfaces
+(GUIs) in near real time.
+
+This module continuously searches for newly arrived files in a specified
+directory and performs minimal data processing within a fraction of a
+second.
+
+- **Imaging mode**: produces a bad-pixel-corrected slope image.
+- **IFS mode**: produces both a bad-pixel-corrected slope image and an
+  optimally extracted 3D IFS cube for science input data.
+
+To execute the quicklook module:
+
+::
+
+    start_scales_quicklook -d FULL_PATH
+
+Here, ``-d`` specifies the directory containing the input data.
+
+This module creates the following output directories:
+
+- ``redux_ql/`` — quicklook reduction outputs
+- ``log/`` — log files containing execution details
 
 
+Calibration Module
+..................
+
+The calibration module is the core of SCALES-DRP. It automatically processes
+daily afternoon calibration data required for science-grade data reduction.
+
+This module performs detailed processing for:
+
+- Darks
+- Bias reads
+- Detector flats
+- Lenslet flats
+- Monochromatic calibration data
+
+The outputs include:
+
+- Master calibration files for darks, bias, and detector flats (for both
+  Imaging and IFS modes)
+- Wavelength-binned master files from monochromatic calibrations
+- Rectification matrices required by the science-grade pipeline
+- Lenslet flat master files and lenslet flat cubes
+
+To execute the calibration module:
+
+::
+
+    start_scales_calib -d FULL_PATH
+
+Here, ``-d`` specifies the directory containing the calibration data.
+
+This module creates the following directories:
+
+- ``redux/`` — calibration reduction outputs
+- ``log/`` — detailed log files
+- ``plot/`` — diagnostic and quality-control plots
 
 
+Science-Grade Module
+....................
 
+The science-grade module performs the most detailed data reduction on
+science observations.
 
+- **Imaging mode**: produces a fully corrected slope image with all
+  detector-level corrections applied.
+- **IFS mode**: produces a fully reduced 3D IFS cube using one or more
+  spectral extraction methods.
 
+For all outputs, associated uncertainty maps and data-quality masks are
+also generated.
+
+To run the science-grade module on a single file
+(make sure you are in the data directory):
+
+::
+
+    start_scales_reduce -f filename.fits
+
+To process all files in a directory:
+
+::
+
+    start_scales_reduce -d FULL_PATH
+
+To process a specific list of files
+(make sure you are in the data directory):
+
+::
+
+    start_scales_reduce -l list.txt
+
+The science-grad module creates the following directories:
+
+- ``redux/`` — calibration reduction outputs
+- ``log/`` — detailed log files
+- ``plot/`` — diagnostic and quality-control plots
+
+Further Documentation
+.....................
+
+More detailed documentation, including pipeline architecture, algorithms,
+and advanced usage, can be found on the SCALES Read the Docs page.

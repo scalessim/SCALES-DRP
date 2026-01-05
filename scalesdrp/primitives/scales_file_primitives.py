@@ -15,12 +15,12 @@ from pathlib import Path
 
 logger = logging.getLogger('SCALES')
 
-red_amp_dict = {'L1': 0, 'L2': 1, 'U1': 2, 'U2': 3}
+ifs_amp_dict = {'L1': 0, 'L2': 1, 'U1': 2, 'U2': 3}
 # gains for slow readout, high gain
-red_amp_gain = {'L1': 1.54, 'L2': 1.551, 'U1': 1.61, 'U2': 1.526}
+ifs_amp_gain = {'L1': 1.54, 'L2': 1.551, 'U1': 1.61, 'U2': 1.526}
 
 # gains for slow readout gainmul by ampid
-blue_amp_gain = {1:  {0: 1.570, 1: 1.600, 2: 1.610, 3: 1.600},
+im_amp_gain = {1:  {0: 1.570, 1: 1.600, 2: 1.610, 3: 1.600},
                  2:  {0: 0.785, 1: 0.800, 2: 0.805, 3: 0.800},
                  5:  {0: 0.314, 1: 0.320, 2: 0.325, 3: 0.319},
                  10: {0: 0.157, 1: 0.160, 2: 0.158, 3: 0.158}}
@@ -160,10 +160,10 @@ class ingest_file(BasePrimitive):
         Returns:
             0 for Blue channel, 1 for Red, and -1 for Unknown.
         """
-        camera = self.get_keyword('OBSMODE').upper()
-        if 'LowRes' in camera:
+        camera = self.get_keyword('CAMERA').upper()
+        if 'Im' in camera:
             return 0
-        elif 'MedRes' in camera:
+        elif 'IFS' in camera:
             return 1
         else:
             return -1
@@ -369,7 +369,7 @@ class ingest_file(BasePrimitive):
 
         namps = self.namps()    # int(self.get_keyword('NVIDINP'))
         # TODO: check namps
-        camera = self.get_keyword('MODE').upper()
+        camera = self.get_keyword('CAMERA').upper()
         ampmode = self.get_keyword('AMPMODE')
         # section lists
         bsec = []
@@ -377,7 +377,7 @@ class ingest_file(BasePrimitive):
         tsec = []
         strides = []
         amps = []
-        if 'LOWRES' in camera:
+        if 'Im' in camera:
             nb = 1    # numbering bias (0 or 1)
             # loop over amps
             for i in range(namps):
@@ -421,7 +421,7 @@ class ingest_file(BasePrimitive):
                     x1 = -1
                     # self.log.info("ERROR - bad amp number: %d" % i)
                 tsec.append((y0, y1, x0, x1))
-        elif 'MEDRES' in camera:
+        elif 'IFS' in camera:
             nb = 0    # numbering bias (0 or 1)
             amp_count = 0
             for amp in red_amp_dict.keys():
@@ -484,7 +484,7 @@ class ingest_file(BasePrimitive):
                 last_file = os.path.join(out_dir,
                                          self.name.split('.fits')[0] + '_' +
                                          out_args.last_suffix + '.fits')
-                if 'icubes' not in out_args.last_suffix:
+                if 'opt_cube' not in out_args.last_suffix:
                     self.logger.info("Ingest stub for %s" % last_file)
                     # ccddata, table = scales_fits_reader(last_file)
                 else:

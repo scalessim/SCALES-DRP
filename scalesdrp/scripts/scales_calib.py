@@ -76,14 +76,6 @@ def _parse_arguments(in_args: list) -> argparse.Namespace:
     # scales specific parameters
     parser.add_argument("-p", "--proctab", dest='proctab', help='Proctab file',
                         default=None)
-    parser.add_argument("-k", "--skipsky", dest='skipsky', action="store_true",
-                        default=False, help="Skip sky subtraction")
-
-    parser.add_argument("-lr", "--lowres", dest='lowres', action="store_true",
-                        default=False, help="low resolution mode on!")
-    
-    parser.add_argument("-mr", "--medres", dest='medres', action="store_true",
-                        default=False, help="medium resolution mode on !")
 
     out_args = parser.parse_args(in_args[1:])
     return out_args
@@ -177,29 +169,10 @@ def main():
             "Using proc table file %s" % args.proctab
         )
         framework.config.instrument.procfile = args.proctab
-    else:
-        if args.lowres:
-            proctab = scales_config.LOWRES['procfile']
-        elif args.medres:
-            proctab = scales_config.MEDRES['procfile']
-        else:
-            proctab = scales_config.procfile
-        framework.context.pipeline_logger.info(
-            "Using proc table file %s" % proctab)
-        framework.config.instrument.procfile = proctab
 
     # initialize the proctab and read it
     framework.context.proctab = Proctab()
     framework.context.proctab.read_proctab(framework.config.instrument.procfile)
-    
-
-    # make sure user has selected a channel
-    if not args.lowres and not args.medres:
-        print("\nERROR - DRP can process only one channel at a time\n\n"
-              "Please indicate a channel to process:\n"
-              "Either medium-resolution with -mr or --medres or\n"
-              "       low-resolution  with -lr or --lowres\n")
-        sys.exit(0)
 
     if args.file_list:
         if '.fits' in args.file_list:
@@ -229,9 +202,7 @@ def main():
     #stop
     framework.append_event('centroid_estimate',args)
     framework.append_event('calib_process_started',args)
-    print('starting framework')
     framework.start()
-    print('done')
 
 
 if __name__ == "__main__":

@@ -16,6 +16,13 @@ import scalesdrp.primitives.bpm_correction as bpm #bpm correction
 from tqdm import tqdm
 from astropy.nddata import StdDevUncertainty
 from scalesdrp.primitives.linearity import DQ_FLAGS
+
+from scalesdrp.core.scales_proctab import Proctab
+import logging
+log = logging.getLogger("SCALES")
+pt = Proctab(logger=log)
+
+
 class RampFit(BasePrimitive):
 
     """
@@ -41,6 +48,8 @@ class RampFit(BasePrimitive):
         BasePrimitive.__init__(self, action, context)
         self.logger = context.pipeline_logger
 
+        if not hasattr(self, "proctab") or self.proctab is None:
+            self.proctab = Proctab(logger=self.logger if hasattr(self, "logger") else logging.getLogger("SCALES"))
     ############## ramp fit for reads less than 5############################
     # per-row OLS slope uncertainty (1σ) using valid reads ---
     def _ols_row_and_uncert(self,row_reads,             # (N, W) counts
@@ -590,6 +599,50 @@ class RampFit(BasePrimitive):
             ramp[..., x0:x1] = sub[..., new_order]
         return ramp
 
+    ######################## proctab ##################################################
+    def proctab_update(
+        self,header,output_dir,input_filename,
+        suffix,frame=None,proctab=None,
+        proctab_path=None,newtype=None):
+
+        base_name = os.path.basename(input_filename)
+        file_root, file_ext = os.path.splitext(base_name)
+        output_filename = f"{file_root}{suffix}{file_ext}"
+        redux_output_dir = output_dir
+        os.makedirs(redux_output_dir, exist_ok=True)
+        output_path = os.path.join(redux_output_dir, output_filename)
+
+        if proctab is not None:
+            if proctab_path is None:
+                proctab_path = os.path.join(redux_output_dir, "scales.proc")
+            try:
+                proctab.read_proctab(proctab_path)
+            except Exception as e:
+                self.logger.warning(
+                    "Could not read proctab (%s); creating a new one: %s",
+                    proctab_path, str(e))
+                proctab.new_proctab()
+
+            if frame is not None:
+                use_frame = frame
+            else:
+                class _FrameShim:
+                    def __init__(self, hdr):
+                        self.header = hdr
+                use_frame = _FrameShim(header)
+            try:
+                proctab.update_proctab(
+                    use_frame,
+                    suffix=suffix,
+                    filename=output_filename,
+                    newtype=newtype)
+                proctab.write_proctab(proctab_path)
+                self.logger.info("Proctab updated: %s", proctab_path)
+
+            except Exception as e:
+                self.logger.warning(
+                    "Proctab update failed for %s: %s",output_path, str(e))
+        return output_path
     ####################################################################################
         
     def _perform(self):
@@ -597,10 +650,10 @@ class RampFit(BasePrimitive):
         imtype = self.action.args.ccddata.header['IMTYPE']
         if imtype =='OBJECT':
             total_exptime = self.action.args.ccddata.header['EXPTIME']
-            obsmode = self.action.args.ccddata.header['OBSMODE']
+            obsmode = self.action.args.ccddata.header['CAMERA']
             calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
         
-            if obsmode =='IMAGING':
+            if obsmode =='Im':
                 SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
 
             elif obsmode =='IFS':
@@ -614,32 +667,32 @@ class RampFit(BasePrimitive):
             sci_im_full_original = reference.reffix_hxrg(sci_im_full_original1, nchans=4)
             self.logger.info("refpix and 1/f correction completed")
 
-            self.logger.info("+++++++++++ linearity correction started +++++++++++")
-            if obsmode =='IMAGING':
-                corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
-                    sci_im_full_original,
-                    linearity_file="linearity_coeffs_img.fits")
+            #self.logger.info("+++++++++++ linearity correction started +++++++++++")
+            #if obsmode =='IMAGING':
+            #    corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
+            #        sci_im_full_original,
+            #        linearity_file="linearity_coeffs_img.fits")
 
-            if obsmode =='IFS':
-                corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
-                sci_im_full_original,
-                linearity_file="linearity_coeffs_img.fits")
+            #if obsmode =='IFS':
+            #    corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
+            #    sci_im_full_original,
+            #    linearity_file="linearity_coeffs_img.fits")
 
             #nim_s = sci_im_full_original.shape[0]
             self.logger.info("+++++++++++ ramp fitting started +++++++++++")
 
             final_slope,final_reset,final_uncert = self.ramp_fit(
-                corrected_input_ramp,
+                sci_im_full_original,
                 total_exptime,
                 SIG_map_scaled,
-                group_dq = groupdq)
+                group_dq = None)
 
             self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
             final_ramp = bpm.apply_full_correction(final_slope,obsmode)
 
             keywords_unique = {
                 key: self.action.args.ccddata.header.get(key)
-                for key in ['OBSMODE', 'IFSMODE', 'MCLOCK']}
+                for key in ['CAMERA', 'IFSMODE', 'MCLOCK']}
 
             m_dark, m_dark_uncert = self.load_single_master_file(keywords_unique, master_type='DARK')
             m_bias, m_bias_uncert = self.load_single_master_file(keywords_unique, master_type='BIAS')
@@ -683,11 +736,21 @@ class RampFit(BasePrimitive):
             self.action.args.ccddata.header['HISTORY'] = log_string
             self.logger.info(log_string)
 
-            scales_fits_writer(self.action.args.ccddata,
+            scales_fits_writer(
+                self.action.args.ccddata,
                 table=self.action.args.table,
                 output_file=self.action.args.name,
                 output_dir=self.config.instrument.output_directory,
                 suffix="L1_ramp")
+
+            self.proctab_update(
+                header=self.action.args.ccddata.header,
+                output_dir=self.config.instrument.output_directory,
+                input_filename=self.action.args.name,
+                suffix="_L1_ramp",
+                frame=None,
+                proctab=self.proctab)
+
             self.logger.info("+++++++++++ slope image FITS file saved +++++++++++")
         else:
             self.logger.info("+++++++++++ No science files detected to process +++++++++++")

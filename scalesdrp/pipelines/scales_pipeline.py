@@ -71,14 +71,7 @@ class Scales_pipeline(BasePipeline):
                 "No processing is possible.")
             return False
 
-        groupid = action.args.groupid
-        camera = action.args.ccddata.header['OBSMODE'].upper()
-        #self.context.pipeline_logger.info("******* GROUPID is %s " %
-        #                                  action.args.groupid)
-        self.context.pipeline_logger.info(
-            "******* STATEID is %s (%s) " %
-            (action.args.ccddata.header["STATENAM"],
-             action.args.ccddata.header["STATEID"]))
+        camera = action.args.ccddata.header['CAMERA'].upper()
         self.context.pipeline_logger.info("******* Observing MODE is %s " % camera)
         if action.args.in_proctab:
             if len(action.args.last_suffix) > 0:
@@ -91,77 +84,7 @@ class Scales_pipeline(BasePipeline):
         if action.args.in_proctab and not context.config.instrument.clobber:
             self.context.pipeline_logger.warn("Pushing noop to queue")
             context.push_event("noop", action.args)
-        elif "BIAS" in action.args.imtype:
-            if action.args.ttime > 0:
-                self.context.pipeline_logger.warn(
-                    f"BIAS frame with exposure time = {action.args.ttime} "
-                    f"> 0. Discarding.")
-                return False
-            bias_args = action.args
-            bias_args.groupid = groupid
-            bias_args.want_type = "BIAS"
-            bias_args.new_type = "MBIAS"
-            bias_args.min_files = context.config.instrument.bias_min_nframes
-            bias_args.new_file_name = "master_bias_%s.fits" % groupid
-            context.push_event("process_bias", bias_args)
-        elif "DARK" in action.args.imtype:
-            dark_args = action.args
-            dark_args.groupid = groupid
-            dark_args.want_type = "DARK"
-            dark_args.new_type = "MDARK"
-            dark_args.min_files = context.config.instrument.dark_min_nframes
-            dark_args.new_file_name = "master_dark_%s.fits" % groupid
-            dark_args.in_directory = "redux"
-            context.push_event("process_dark", dark_args)
-        elif "CONTBARS" in action.args.imtype:
-            contbars_args = action.args
-            contbars_args.groupid = groupid
-            contbars_args.want_type = "CONTBARS"
-            contbars_args.new_type = "MCBARS"
-            contbars_args.min_files = \
-                context.config.instrument.contbars_min_nframes
-            contbars_args.new_file_name = "master_contbars_%s.fits" % groupid
-            contbars_args.in_directory = "redux"
-            context.push_event("process_contbars", contbars_args)
-        elif "FLATLAMP" in action.args.imtype:
-            flat_args = action.args
-            flat_args.groupid = groupid
-            flat_args.want_type = "FLATLAMP"
-            flat_args.stack_type = "SFLAT"
-            flat_args.new_type = "MFLAT"
-            flat_args.min_files = context.config.instrument.flat_min_nframes
-            flat_args.new_file_name = "master_flat_%s.fits" % groupid
-            flat_args.in_directory = "redux"
-            context.push_event("process_flat", flat_args)
-        elif "DOMEFLAT" in action.args.imtype:
-            flat_args = action.args
-            flat_args.groupid = groupid
-            flat_args.want_type = "DOMEFLAT"
-            flat_args.stack_type = "SDOME"
-            flat_args.new_type = "MDOME"
-            flat_args.min_files = context.config.instrument.dome_min_nframes
-            flat_args.new_file_name = "master_flat_%s.fits" % groupid
-            flat_args.in_directory = "redux"
-            context.push_event("process_flat", flat_args)
-        elif "TWIFLAT" in action.args.imtype:
-            flat_args = action.args
-            flat_args.groupid = groupid
-            flat_args.want_type = "TWIFLAT"
-            flat_args.stack_type = "STWIF"
-            flat_args.new_type = "MTWIF"
-            flat_args.min_files = context.config.instrument.twiflat_min_nframes
-            flat_args.new_file_name = "master_flat_%s.fits" % groupid
-            flat_args.in_directory = "redux"
-            context.push_event("process_flat", flat_args)
-        elif "ARCLAMP" in action.args.imtype:
-            arc_args = action.args
-            arc_args.groupid = groupid
-            arc_args.want_type = "ARCLAMP"
-            arc_args.new_type = "MARC"
-            arc_args.min_files = context.config.instrument.arc_min_nframes
-            arc_args.new_file_name = "master_arc_%s.fits" % groupid
-            arc_args.in_directory = "redux"
-            context.push_event("process_arc", arc_args)
+
         elif "OBJECT" in action.args.imtype:
             object_args = action.args
             object_args.new_type = "MOBJ"

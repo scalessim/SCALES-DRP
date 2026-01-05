@@ -30,6 +30,10 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
 from tqdm import tqdm
 from scalesdrp.primitives.linearity import DQ_FLAGS
+from scalesdrp.core.scales_proctab import Proctab
+import logging
+log = logging.getLogger("SCALES")
+pt = Proctab(logger=log)
 
 class StartCalib(BasePrimitive):
     """
@@ -42,32 +46,37 @@ class StartCalib(BasePrimitive):
     def __init__(self, action, context):
         BasePrimitive.__init__(self, action, context)
         self.logger = context.pipeline_logger
-        #print('action arguments in primitive',self.action.args.dirname)
+        if not hasattr(self, "proctab") or self.proctab is None:
+            self.proctab = Proctab(logger=self.logger if hasattr(self, "logger") else logging.getLogger("SCALES"))
 
-    def group_files_by_header(self, dt):
+    def group_files_by_header1(self, dt):
         """
         Groups files in the data table based on observing mode and key header values.
 
         Rules:
         - If OBSMODE == 'IMAGING': group by (OBSMODE, IM-FW-1, IMTYPE, EXPTIME)
         - If OBSMODE in ('LOWRES', 'MEDRES'): group by (OBSMODE, IFSMODE, IMTYPE, EXPTIME)
+        - IMTYPE=='CALUNIT' include WAVELENGTH in grouping
         """
 
-        required_cols = ['OBSMODE', 'IFSMODE', 'IM-FW-1', 'IMTYPE', 'EXPTIME','MCLOCK']
+        required_cols = ['CAMERA', 'IFSMODE', 'ifsfw1nam', 'IMTYPE', 'EXPTIME','MCLOCK']
         missing = [c for c in required_cols if c not in dt.columns]
         if missing:
             self.logger.error(f"Missing required columns: {missing}")
             return []
-
+        if has_calunit and 'MONOWAVE' not in dt.columns:
+            self.logger.error("Missing required column: ['MONOWAVE'] (needed for CALUNIT grouping)")
+            return []
+        
         file_groups = []
 
         # --- Split by observing mode first
-        for mode, mode_df in dt.groupby('OBSMODE'):
-            if mode.upper() == 'IMAGING':
-                group_keys = ['OBSMODE', 'IM-FW-1', 'IMTYPE', 'EXPTIME','MCLOCK']
+        for mode, mode_df in dt.groupby('CAMERA'):
+            if mode.upper() == 'Im':
+                group_keys = ['CAMERA', 'ifsfw1nam', 'IMTYPE', 'EXPTIME','MCLOCK']
                 self.logger.info(f"Grouping IMAGING data by {group_keys}")
             elif mode.upper() =='IFS':
-                group_keys = ['OBSMODE', 'IFSMODE', 'IMTYPE', 'EXPTIME','MCLOCK']
+                group_keys = ['CAMERA', 'IFSMODE', 'IMTYPE', 'EXPTIME','MCLOCK']
                 self.logger.info(f"Grouping {mode} data by {group_keys}")
             else:
                 self.logger.warning(f"Unknown OBSMODE '{mode}'; skipping.")
@@ -82,6 +91,74 @@ class StartCalib(BasePrimitive):
                     'filenames': sub_df.index.tolist()
                 }
                 file_groups.append(group_info)
+
+        if not file_groups:
+            self.logger.warning("No file groups were created.")
+        else:
+            self.logger.info(f"Created {len(file_groups)} groups from data table.")
+
+        return file_groups
+
+    def group_files_by_header(self, dt):
+        """
+        Groups files in the data table based on CAMERA and key header values.
+
+        Rules:
+        - CAMERA == 'Im'  : group by (CAMERA, IM-FW-1, IMTYPE, EXPTIME, MCLOCK)
+        - CAMERA == 'IFS' : group by (CAMERA, IFSMODE, IMTYPE, EXPTIME, MCLOCK)
+        - Additionally, if IMTYPE == 'CALUNIT', include WAVELENGTH in grouping.
+        """
+        # Base required columns
+        required_cols = ['CAMERA', 'IFSMODE', 'ifsfw1nam', 'IMTYPE', 'EXPTIME', 'MCLOCK']
+        missing = [c for c in required_cols if c not in dt.columns]
+        if missing:
+            self.logger.error(f"Missing required columns: {missing}")
+            return []
+
+        # Only require WAVELENGTH if there are CALUNIT rows
+        has_calunit = dt['IMTYPE'].astype(str).str.upper().eq('CALUNIT').any()
+        if has_calunit and 'MONOWAVE' not in dt.columns:
+            self.logger.error("Missing required column: ['MONOWAVE'] (needed for CALUNIT grouping)")
+            return []
+
+        file_groups = []
+
+        # --- Split by camera first
+        for cam, cam_df in dt.groupby('CAMERA'):
+            cam_u = str(cam).upper()
+
+            if cam_u == 'Im':
+                base_keys = ['CAMERA', 'ifsfw1nam', 'IMTYPE', 'EXPTIME', 'MCLOCK']
+                self.logger.info(f"Grouping IM data by {base_keys}")
+            elif cam_u == 'IFS':
+                base_keys = ['CAMERA', 'IFSMODE', 'IMTYPE', 'EXPTIME', 'MCLOCK']
+                self.logger.info(f"Grouping IFS data by {base_keys}")
+            else:
+                self.logger.warning(f"Unknown CAMERA '{cam}'; skipping.")
+                continue
+
+            # Split into CALUNIT vs non-CALUNIT so we can add WAVELENGTH only for CALUNIT
+            imtype_u = cam_df['IMTYPE'].astype(str).str.upper()
+            df_cal = cam_df[imtype_u.eq('CALUNIT')]
+            df_non = cam_df[~imtype_u.eq('CALUNIT')]
+
+            # Non-CALUNIT groups
+            if len(df_non) > 0:
+                for group_params, sub_df in df_non.groupby(base_keys):
+                    file_groups.append({
+                        'params': {k.lower(): v for k, v in zip(base_keys, group_params)},
+                        'filenames': sub_df.index.tolist()
+                    })
+
+            # CALUNIT groups (add WAVELENGTH)
+            if len(df_cal) > 0:
+                cal_keys = base_keys + ['MONOWAVE']
+                self.logger.info(f"Grouping CALUNIT data by {cal_keys}")
+                for group_params, sub_df in df_cal.groupby(cal_keys):
+                    file_groups.append({
+                        'params': {k.lower(): v for k, v in zip(cal_keys, group_params)},
+                        'filenames': sub_df.index.tolist()
+                    })
 
         if not file_groups:
             self.logger.warning("No file groups were created.")
@@ -644,6 +721,51 @@ class StartCalib(BasePrimitive):
         t1 = (end_time1 - start_time1)
         self.logger.info(f"Optimal extraction finished in {t1:.4f} seconds.")
         return optimized_flux, flux_error
+
+
+    def proctab_update(
+        self,header,output_dir,input_filename,
+        suffix,frame=None,proctab=None,
+        proctab_path=None,newtype=None):
+
+        base_name = os.path.basename(input_filename)
+        file_root, file_ext = os.path.splitext(base_name)
+        output_filename = f"{file_root}{suffix}{file_ext}"
+        redux_output_dir = os.path.join(output_dir, "redux")
+        os.makedirs(redux_output_dir, exist_ok=True)
+        output_path = os.path.join(redux_output_dir, output_filename)
+
+        if proctab is not None:
+            if proctab_path is None:
+                proctab_path = os.path.join(redux_output_dir, "scales.proc")
+            try:
+                proctab.read_proctab(proctab_path)
+            except Exception as e:
+                self.logger.warning(
+                    "Could not read proctab (%s); creating a new one: %s",
+                    proctab_path, str(e))
+                proctab.new_proctab()
+
+            if frame is not None:
+                use_frame = frame
+            else:
+                class _FrameShim:
+                    def __init__(self, hdr):
+                        self.header = hdr
+                use_frame = _FrameShim(header)
+            try:
+                proctab.update_proctab(
+                    use_frame,
+                    suffix=suffix,
+                    filename=output_filename,
+                    newtype=newtype)
+                proctab.write_proctab(proctab_path)
+                self.logger.info("Proctab updated: %s", proctab_path)
+
+            except Exception as e:
+                self.logger.warning(
+                    "Proctab update failed for %s: %s",output_path, str(e))
+        return output_path
 ########################################### START MAIN ######################
 
     def _perform(self):
@@ -665,17 +787,17 @@ class StartCalib(BasePrimitive):
 
         processing_order = ['BIAS', 'DARK', 'FLATLAMP','FLATLENS', 'CALUNIT']
         self.logger.info(f"Found groups for IMTYPEs: {list(organized_groups.keys())}")
-        bias_ramps=[]
-        dark_ramps=[]
-        flatlamp_ramps=[]
-        flatlen_ramps=[]
-        calunit_ramps=[]
+        #bias_ramps=[]
+        #dark_ramps=[]
+        #flatlamp_ramps=[]
+        #flatlen_ramps=[]
+        #calunit_ramps=[]
 
-        bias_ramps_uncert=[]
-        dark_ramps_uncert=[]
-        flatlamp_ramps_uncert=[]
-        flatlen_ramps_uncert=[]
-        calunit_ramps_uncert=[]
+        #bias_ramps_uncert=[]
+        #dark_ramps_uncert=[]
+        #flatlamp_ramps_uncert=[]
+        #flatlen_ramps_uncert=[]
+        #calunit_ramps_uncert=[]
 
         for imtype in processing_order:
             if imtype not in organized_groups:
@@ -684,13 +806,23 @@ class StartCalib(BasePrimitive):
             for group in groups_for_this_type:
                 params = group['params']
                 filenames = group['filenames']
-                obsmode = params.get('obsmode', 'UNKNOWN')
+                obsmode = params.get('camera', 'UNKNOWN')
                 ifsmode = params.get('ifsmode', 'N/A')
-                filtername = params.get('im-fw-1', 'N/A')
+                filtername = params.get('ifsfw1nam', 'N/A')
                 exptime = params.get('exptime', 0)
                 mclock = params.get('mclock', 0)
-                self.logger.info(f"Processing {imtype}: {len(filenames)} files "
-                    f"(OBSMODE={obsmode}, IFSMODE={ifsmode}, FILTER={filtername}, EXPTIME={exptime}, MCLOCK={mclock})")
+                wavelength = params.get('monowave', None)
+                #self.logger.info(f"Processing {imtype}: {len(filenames)} files "
+                #    f"(OBSMODE={obsmode}, IFSMODE={ifsmode}, FILTER={filtername}, EXPTIME={exptime}, MCLOCK={mclock})")
+                wl_str = f", WAVELENGTH={wavelength}" if wavelength is not None else ""
+                self.logger.info(
+                    f"Processing {imtype}: {len(filenames)} files "
+                    f"(CAMERA={obsmode}, IFSMODE={ifsmode}, FILTER={filtername},"
+                    f"EXPTIME={exptime}, MCLOCK={mclock}{wl_str})")
+                group_ramps = []
+                group_uncerts = []
+                group_header_for_master = None
+
                 for filename in filenames:
                     try:
                         with fits.open(filename) as hdulist:
@@ -702,7 +834,7 @@ class StartCalib(BasePrimitive):
                         self.logger.error(f"Failed to read {filename}: {e}")
 
                     calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-                    if obsmode =='IMAGING':
+                    if obsmode =='Im':
                         SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
 
                     elif obsmode =='IFS':
@@ -714,23 +846,23 @@ class StartCalib(BasePrimitive):
                     self.logger.info("+++++++++++ ACN & 1/f correction started +++++++++++")
                     sci_im_full_original3 = reference.reffix_hxrg(sci_im_full_original2, nchans=4, fixcol=True)
 
-                    self.logger.info("+++++++++++ linearity correction started +++++++++++")
-                    if obsmode =='IMAGING':
-                        corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
-                            sci_im_full_original3,
-                            linearity_file="linearity_coeffs_img.fits")
+                    #self.logger.info("+++++++++++ linearity correction started +++++++++++")
+                    #if obsmode =='IMAGING':
+                    #    corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
+                    #        sci_im_full_original3,
+                    #        linearity_file="linearity_coeffs_img.fits")
 
-                    if obsmode =='IFS':
-                        corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
-                            sci_im_full_original3,
-                            linearity_file="linearity_coeffs_img.fits")
+                    #if obsmode =='IFS':
+                    #    corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
+                    #        sci_im_full_original3,
+                    #        linearity_file="linearity_coeffs_img.fits")
 
                     self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                     slope,reset,uncert = self.ramp_fit(
-                        corrected_input_ramp,
+                        sci_im_full_original3,
                         readtime,
                         SIG_map_scaled,
-                        group_dq = groupdq)
+                        group_dq = None)
 
                     self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
                     bpm_slope = bpm.apply_full_correction(slope,obsmode)
@@ -745,182 +877,195 @@ class StartCalib(BasePrimitive):
                         overwrite=True,
                         uncert = bpm_slope_uncert)
 
-                                #self.context.proctab.new_proctab()
-                                #name1 = data_header['IMTYPE']
-                                
-                                #self.context.proctab.update_proctab(
-                                #    frame=sci_im_full_original1, suffix="ramp", newtype='name1',
-                                #    filename=data_header['OFNAME'])
+                    self.proctab_update(
+                        header=data_header,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix="_L1_ramp",
+                        frame=None,
+                        proctab=self.proctab)
 
-                                #self.context.proctab.write_proctab(
-                                #    tfil=self.config.instrument.procfile)
-                                
-                    if imtype == 'BIAS':
-                        bias_ramps.append(bpm_slope)
-                        bias_ramps_uncert.append(bpm_slope_uncert)
-                        bias_header = data_header
+                    group_ramps.append(bpm_slope)
+                    group_uncerts.append(bpm_slope_uncert)
+                    if group_header_for_master is None:
+                        group_header_for_master = data_header
+                    self.logger.info("************** next file **************************")
+
+                if len(group_ramps) == 0:
+                    self.logger.warning(f"No valid frames to build master for group {imtype} {params}.")
+                    continue
+
+                master, master_unc = self.build_master_from_stack(
+                    group_ramps,
+                    group_uncerts,
+                    method='mean')
+
+                hdrm = data_header
+                hdrm['HISTORY'] = f"Master {imtype} built from {len(group_ramps)} frames"
+                hdrm['HISTORY'] = f"Group params: CAMERA={obsmode}, IFSMODE={ifsmode},FILTER={filtername}, EXPTIME={exptime}, MCLOCK={mclock}"
+
+                if imtype == 'DARK':            
+                    self.proctab_update(
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix="_mdark",
+                        frame=None,
+                        proctab=self.proctab)
                     
-                    if imtype == 'DARK':
-                        dark_ramps.append(bpm_slope)
-                        dark_ramps_uncert.append(bpm_slope_uncert)
-                        dark_header = data_header
+                    self.fits_writer_steps(
+                        data=master,
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mdark',
+                        overwrite=True,
+                        uncert=master_unc)
+                    self.logger.info("+++++++++++ Creating master dark +++++++++++")
 
-                    if imtype == 'FLATLENS':
-                        flatlen_ramps.append(bpm_slope)
-                        flatlen_ramps_uncert.append(bpm_slope_uncert)
-                        flatlen_header = data_header
-                    
-                    if imtype == 'FLATLAMP':
-                        flatlamp_ramps.append(bpm_slope)
-                        flatlamp_ramps_uncert.append(bpm_slope_uncert)
-                        flatlamp_header = data_header
-                    
-                    if imtype == 'CALUNIT':
-                        calunit_ramps.append(bpm_slope)
-                        calunit_ramps_uncert.append(bpm_slope_uncert)
-                        calunit_header = data_header
+                if imtype == 'BIAS':
+                    self.fits_writer_steps(
+                        data=master,
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mbias',
+                        overwrite=True,
+                        uncert=master_unc)
+                    self.proctab_update(
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix="_mbias",
+                        frame=None,
+                        proctab=self.proctab)
+                    self.logger.info("+++++++++++ Creating master bias +++++++++++")
 
-        if len(dark_ramps) > 0:
-            master_dark, master_dark_uncert = self.build_master_from_stack(
-                dark_ramps,
-                dark_ramps_uncert,
-                method='mean')
-            dark_header['HISTORY'] = 'Master dark file'
-                    
-            self.fits_writer_steps(
-                data=master_dark,
-                header=dark_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mdark',
-                overwrite=True,
-                uncert=master_dark_uncert)
-            self.logger.info("+++++++++++ Creating master dark +++++++++++")
+                if imtype == 'FLATLENS':
+                    self.fits_writer_steps(
+                        data=master,
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mflatlens',
+                        overwrite=True,
+                        uncert=master_unc)
+                    self.proctab_update(
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix="_mflatlens",
+                        frame=None,
+                        proctab=self.proctab)
+                    self.logger.info("+++++++++++ Creating master lenslet flat +++++++++++")
+                    self.logger.info("+++++++++++ Creating master lenslet flat cube +++++++++++")
 
-        if len(bias_ramps) > 0:
-            master_bias, master_bias_uncert = self.build_master_from_stack(
-                bias_ramps,
-                bias_ramps_uncert,
-                method='mean')
-            bias_header['HISTORY'] = 'Master bias file'
-            self.fits_writer_steps(
-                data=master_bias,
-                header=bias_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mbias',
-                overwrite=True,
-                uncert=master_bias_uncert)
-            self.logger.info("+++++++++++ Creating master bias +++++++++++")
-
-        if len(flatlen_ramps) > 0:
-            master_flatlens, master_flatlens_uncert = self.build_master_from_stack(
-                flatlen_ramps,
-                flatlen_ramps_uncert,
-                method='mean')
-            flatlens_header['HISTORY'] = 'Master lenslet flat file'
-            self.fits_writer_steps(
-                data=master_flatlens,
-                header=flatlen_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mflatlens',
-                overwrite=True,
-                uncert=master_flatlen_uncert)
+                    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+                    readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
+                    var_read_vector = (readnoise.flatten().astype(np.float64))**2
+                    GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             
-            self.logger.info("+++++++++++ Creating master lenslet flat +++++++++++")
-            self.logger.info("+++++++++++ Creating master lenslet flat cube +++++++++++")
-
-            calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-            readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
-            var_read_vector = (readnoise.flatten().astype(np.float64))**2
-            GAIN = 1.0#self.action.args.ccddata.header['GAIN']
+                    if ifsmode=='LowRes-K':
+                        R_for_extract = load_npz(calib_path+'K_C2_rectmat_lowres.npz')
+                        R_matrix = load_npz(calib_path+'K_QL_rectmat_lowres.npz')
+                        FLUX_SHAPE_3D = (56, 103, 110)
+                    elif ifsmode=='LowRes-L':
+                        R_for_extract = load_npz(calib_path+'L_C2_rectmat_lowres.npz')
+                        R_matrix = load_npz(calib_path+'L_QL_rectmat_lowres.npz')
+                        FLUX_SHAPE_3D = (56, 103, 110)
+                    elif ifsmode=='LowRes-M':
+                        R_for_extract = load_npz(calib_path+'M_C2_rectmat_lowres.npz')
+                        R_matrix = load_npz(calib_path+'M_QL_rectmat_lowres.npz')
+                        FLUX_SHAPE_3D = (56, 103, 110)
+                    elif ifsmode=='LowRes-SED':
+                        R_for_extract = load_npz(calib_path+'SED_C2_rectmat_lowres.npz')
+                        R_matrix = load_npz(calib_path+'SED_QL_rectmat_lowres.npz')
+                        FLUX_SHAPE_3D = (56, 103, 110)
+                    elif ifsmode=='LowRes-H2O':
+                        R_for_extract = load_npz(calib_path+'H2O_C2_rectmat_lowres.npz')
+                        R_matrix = load_npz(calib_path+'H2O_QL_rectmat_lowres.npz')
+                        FLUX_SHAPE_3D = (56, 103, 110)
+                    elif ifsmode=='LowRes-PAH':
+                        R_for_extract = load_npz(calib_path+'PAH_C2_rectmat_lowres.npz')
+                        R_matrix = load_npz(calib_path+'PAH_QL_rectmat_lowres.npz')
+                        FLUX_SHAPE_3D = (56, 103, 110)
+                    elif ifsmode=='MedRes-K':
+                        R_for_extract = load_npz(calib_path+'K_C2_rectmat_medres.npz')
+                        R_matrix = load_npz(calib_path+'K_QL_rectmat_medres.npz')
+                        FLUX_SHAPE_3D = (1900, 103, 110)
+                    elif ifsmode=='MedRes-L':
+                        R_for_extract = load_npz(calib_path+'L_C2_rectmat_medres.npz')
+                        R_matrix = load_npz(calib_path+'L_QL_rectmat_medres.npz')
+                        FLUX_SHAPE_3D = (1900, 103, 110)
+                    elif ifsmode=='MedRes-M':
+                        R_for_extract = load_npz(calib_path+'M_C2_rectmat_medres.npz')
+                        R_matrix = load_npz(calib_path+'M_QL_rectmat_medres.npz')
+                        FLUX_SHAPE_3D = (1900, 103, 110)
             
-            if ifsmode=='LowRes-K':
-                R_for_extract = load_npz(calib_path+'K_C2_rectmat_lowres.npz')
-                R_matrix = load_npz(calib_path+'K_QL_rectmat_lowres.npz')
-                FLUX_SHAPE_3D = (56, 103, 110)
-            elif ifsmode=='LowRes-L':
-                R_for_extract = load_npz(calib_path+'L_C2_rectmat_lowres.npz')
-                R_matrix = load_npz(calib_path+'L_QL_rectmat_lowres.npz')
-                FLUX_SHAPE_3D = (56, 103, 110)
-            elif ifsmode=='LowRes-M':
-                R_for_extract = load_npz(calib_path+'M_C2_rectmat_lowres.npz')
-                R_matrix = load_npz(calib_path+'M_QL_rectmat_lowres.npz')
-                FLUX_SHAPE_3D = (56, 103, 110)
-            elif ifsmode=='LowRes-SED':
-                R_for_extract = load_npz(calib_path+'SED_C2_rectmat_lowres.npz')
-                R_matrix = load_npz(calib_path+'SED_QL_rectmat_lowres.npz')
-                FLUX_SHAPE_3D = (56, 103, 110)
-            elif ifsmode=='LowRes-H2O':
-                R_for_extract = load_npz(calib_path+'H2O_C2_rectmat_lowres.npz')
-                R_matrix = load_npz(calib_path+'H2O_QL_rectmat_lowres.npz')
-                FLUX_SHAPE_3D = (56, 103, 110)
-            elif ifsmode=='LowRes-PAH':
-                R_for_extract = load_npz(calib_path+'PAH_C2_rectmat_lowres.npz')
-                R_matrix = load_npz(calib_path+'PAH_QL_rectmat_lowres.npz')
-                FLUX_SHAPE_3D = (56, 103, 110)
-            elif ifsmode=='MedRes-K':
-                R_for_extract = load_npz(calib_path+'K_C2_rectmat_medres.npz')
-                R_matrix = load_npz(calib_path+'K_QL_rectmat_medres.npz')
-                FLUX_SHAPE_3D = (1900, 103, 110)
-            elif ifsmode=='MedRes-L':
-                R_for_extract = load_npz(calib_path+'L_C2_rectmat_medres.npz')
-                R_matrix = load_npz(calib_path+'L_QL_rectmat_medres.npz')
-                FLUX_SHAPE_3D = (1900, 103, 110)
-            elif ifsmode=='MedRes-M':
-                R_for_extract = load_npz(calib_path+'M_C2_rectmat_medres.npz')
-                R_matrix = load_npz(calib_path+'M_QL_rectmat_medres.npz')
-                FLUX_SHAPE_3D = (1900, 103, 110)
+                    A_guess_cube,A_guess_cube_err = self.optimal_extract_with_error(
+                        R_matrix,
+                        master_flatlens,
+                        master_flatlen_uncert,
+                        var_read_vector)
+                    A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
+                    A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
+                    self.fits_writer_steps(
+                        data=A_opt,
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_cube_flatlens',
+                        overwrite=True,
+                        uncert=A_opt_err)
+                    self.proctab_update(
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix="_cube_flatlens",
+                        frame=None,
+                        proctab=self.proctab)
             
-            A_guess_cube,A_guess_cube_err = self.optimal_extract_with_error(
-                R_matrix,
-                master_flatlens,
-                master_flatlen_uncert,
-                var_read_vector)
-            A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
-            A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
-            self.fits_writer_steps(
-                data=A_opt,
-                header=flatlen_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_cube_flatlens',
-                overwrite=True,
-                uncert=A_opt_err)
+                if imtype == 'FLATLAMP':
+                    self.fits_writer_steps(
+                        data=master,
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_mflatlamp',
+                        overwrite=True,
+                        uncert=master_unc)
+                    self.proctab_update(
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix="_mflatlamp",
+                        frame=None,
+                        proctab=self.proctab)
+                    self.logger.info("+++++++++++ Creating master detector flat +++++++++++")
 
-        if len(flatlamp_ramps) > 0:
-            master_flatlamp, master_flatlamp_uncert = self.build_master_from_stack(
-                flatlamp_ramps,
-                flatlamp_ramps_uncert,
-                method='mean')
-            flatlamp_header['HISTORY'] = 'Master detector flat file'
-            self.fits_writer_steps(
-                data=master_flatlamp,
-                header=flatlamp_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mflatlamp',
-                overwrite=True,
-                uncert=master_flatlamp_uncert)
-            self.logger.info("+++++++++++ Creating master detector flat +++++++++++")
-
-        if len(calunit_ramps) > 0:
-            master_calunit, master_calunit_uncert = self.build_master_from_stack(
-                calunit_ramps,
-                calunit_ramps_uncert,
-                method='mean')
-            calunit_header['HISTORY'] = 'Master calunit file'
-            self.fits_writer_steps(
-                data=master_calunit,
-                header=calunit_header,
-                output_dir=self.action.args.dirname,
-                input_filename=filename,
-                suffix='_mcalunit',
-                overwrite=True,
-                uncert=master_calunit_uncert)
-            self.logger.info("+++++++++++ Creating master monochromator file +++++++++++")
-        
+                if imtype == 'CALUNIT' and wavelength is not None:
+                    hdrm['HISTORY'] = f"CALUNIT wavelength group: {wavelength}"
+                    wl_val = float(wavelength)
+                    wl_str = f"{wl_val:.3f}".rstrip("0").rstrip(".")
+                    
+                    suffix = f"_{wl_str}_mcalunit"
+                    self.fits_writer_steps(
+                        data=master,
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix=suffix,
+                        overwrite=True,
+                        uncert=master_unc)
+                    self.proctab_update(
+                        header=hdrm,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix=suffix,
+                        frame=None,
+                        proctab=self.proctab)
+                    self.logger.info("+++++++++++ Creating master monochromator file +++++++++++")
+                        
         self.logger.info('+++++++++++++ All available Master calibration files are created ++++++++++++++')
         self.logger.info('+++++++++++++ Ready to process the science exposures ++++++++++++++')
         
