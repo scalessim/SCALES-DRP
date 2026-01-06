@@ -3,3 +3,5 @@ mbias,Master bias
 mdark,Master dark
 mflat,Master detector flat
 mobj, Master object
+opt_cube, IFS 3D cube using optimal extraction
+chi_cube, IFS 3D cube using chi-square extraction

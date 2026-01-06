@@ -30,17 +30,17 @@ Here ``-d`` specifies input file directory followed by the FULL PATH to the dire
 
 .. code-block:: shell
 
-   start_scales_reduce -l input_files.lst
+   start_scales_reduce -l input_files.txt
 
-Here ``-l`` specifies list input mode followed by a file with a list of raw image files (input_files.lst)
+Here ``-l`` specifies list input mode followed by a file with a list of raw image files (input_files.txt)
 
 
 .. Note::
 
-	Please note that all the preliminary calibration files needed to be reduced and 
-	avaialable in the data directory before reducing a science frame for all the exicution mode.  
+	Please note that all the preliminary calibration files needed to be reduced and avaialable in the data directory before reducing a science frame using the ``science-grad`` pipeline.  
 
 
+.. _othercommand:
 
 Other command line options
 --------------------------

@@ -46,7 +46,6 @@
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Quick_Start.html">Quick Start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Primitives</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#reference-pixel-correction">Reference Pixel Correction</a></li>
@@ -79,7 +78,7 @@
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
@@ -115,77 +114,86 @@
   <section id="primitives">
 <h1>Primitives<a class="headerlink" href="#primitives" title="Link to this heading"></a></h1>
 <p>This section gives a brief idea about all the primitives used for <strong>SCALES-DRP</strong> pipeline.
-For Imaging mode, the final output is the ramp-fitted data (2048x2048) and the corresponding error image, and different data quality flags used. For IFS mode, the final output is a datacube
-with two spatial and one spectral axis. Below we explain the individual steps included in the reduction process in the order of execution.</p>
-<p>The SCALES  H2RG detector has four readout channel with both <code class="docutils literal notranslate"><span class="pre">slow</span></code> and <code class="docutils literal notranslate"><span class="pre">fast</span></code> readout modes.
-A odd-even column swapping is required for the <code class="docutils literal notranslate"><span class="pre">fast</span></code> mode of observation, which is executed by the detector server as individual read completes. The raw input read to the DRP is odd-even swapped.</p>
+For Imaging mode, the final output is the ramp-fitted data (2048x2048) and the corresponding error image, and different data quality flags used. For IFS mode, the final output is a ramp fitted data and a datacube with two spatial and one spectral axis along with the associated uncertainty and data quality flags. Below we explain the individual steps included in the reduction process in the order of execution.</p>
+<p>The SCALES  H2RG detector has four readout channel with both <code class="docutils literal notranslate"><span class="pre">slow</span></code> and <code class="docutils literal notranslate"><span class="pre">fast</span></code> readout modes. A odd-even column swapping is required for the <code class="docutils literal notranslate"><span class="pre">fast</span></code> mode of observation, which is executed by the detector server as individual read completes. The raw input read to the DRP is odd-even swapped.</p>
 <p>All the primitive files are exist in:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/primitives
 </pre></div>
 </div>
 <nav class="contents local" id="contents">
 <ul class="simple">
-<li><p><a class="reference internal" href="#reference-pixel-correction" id="id1">Reference Pixel Correction</a></p></li>
-<li><p><a class="reference internal" href="#f-noise-correction" id="id2">1/f Noise Correction</a></p></li>
-<li><p><a class="reference internal" href="#linearity-correction" id="id3">Linearity Correction</a></p>
+<li><p><a class="reference internal" href="#reference-pixel-correction" id="id4">Reference Pixel Correction</a></p></li>
+<li><p><a class="reference internal" href="#f-noise-correction" id="id5">1/f Noise Correction</a></p></li>
+<li><p><a class="reference internal" href="#linearity-correction" id="id6">Linearity Correction</a></p>
 <ul>
-<li><p><a class="reference internal" href="#creating-linearity-coefficients" id="id4">Creating linearity coefficients</a></p></li>
-<li><p><a class="reference internal" href="#applying-linearity-coefficients" id="id5">Applying linearity coefficients</a></p></li>
-<li><p><a class="reference internal" href="#data-quality-flags-dq-flags" id="id6">Data quality flags (DQ flags)</a></p></li>
+<li><p><a class="reference internal" href="#creating-linearity-coefficients" id="id7">Creating linearity coefficients</a></p></li>
+<li><p><a class="reference internal" href="#applying-linearity-coefficients" id="id8">Applying linearity coefficients</a></p></li>
+<li><p><a class="reference internal" href="#data-quality-flags-dq-flags" id="id9">Data quality flags (DQ flags)</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#bad-pixel" id="id7">Bad pixel</a></p>
+<li><p><a class="reference internal" href="#bad-pixel" id="id10">Bad pixel</a></p>
 <ul>
-<li><p><a class="reference internal" href="#creating-a-bpm" id="id8">Creating a BPM</a></p></li>
-<li><p><a class="reference internal" href="#correcting-for-bad-pixels" id="id9">Correcting for bad pixels</a></p></li>
+<li><p><a class="reference internal" href="#creating-a-bpm" id="id11">Creating a BPM</a></p></li>
+<li><p><a class="reference internal" href="#correcting-for-bad-pixels" id="id12">Correcting for bad pixels</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#readnoise-map" id="id10">Readnoise map</a></p></li>
-<li><p><a class="reference internal" href="#rectification-matrix" id="id11">Rectification matrix</a></p></li>
-<li><p><a class="reference internal" href="#ramp-fitting" id="id12">Ramp fitting</a></p>
+<li><p><a class="reference internal" href="#readnoise-map" id="id13">Readnoise map</a></p></li>
+<li><p><a class="reference internal" href="#rectification-matrix" id="id14">Rectification matrix</a></p></li>
+<li><p><a class="reference internal" href="#ramp-fitting" id="id15">Ramp fitting</a></p>
 <ul>
-<li><p><a class="reference internal" href="#bias-and-dark-subtraction" id="id13">Bias and Dark Subtraction</a></p></li>
-<li><p><a class="reference internal" href="#flat-fielding" id="id14">Flat Fielding</a></p></li>
+<li><p><a class="reference internal" href="#bias-and-dark-subtraction" id="id16">Bias and Dark Subtraction</a></p></li>
+<li><p><a class="reference internal" href="#flat-fielding" id="id17">Flat Fielding</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#spectral-extraction" id="id15">Spectral Extraction</a></p>
+<li><p><a class="reference internal" href="#spectral-extraction" id="id18">Spectral Extraction</a></p>
 <ul>
-<li><p><a class="reference internal" href="#optimal-extraction" id="id16">Optimal Extraction</a></p></li>
-<li><p><a class="reference internal" href="#least-square-extraction" id="id17">Least square Extraction</a></p></li>
+<li><p><a class="reference internal" href="#optimal-extraction" id="id19">Optimal Extraction</a></p></li>
+<li><p><a class="reference internal" href="#least-square-extraction" id="id20">Least square Extraction</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#wavelevngth-calibration" id="id18">Wavelevngth Calibration</a></p></li>
-<li><p><a class="reference internal" href="#world-coordinate-system-wcs" id="id19">World Coordinate System (WCS)</a></p></li>
+<li><p><a class="reference internal" href="#wavelevngth-calibration" id="id21">Wavelevngth Calibration</a></p></li>
+<li><p><a class="reference internal" href="#world-coordinate-system-wcs" id="id22">World Coordinate System (WCS)</a></p></li>
 </ul>
 </nav>
 <section id="reference-pixel-correction">
-<span id="referencepixel"></span><h2><a class="toc-backref" href="#id1" role="doc-backlink">Reference Pixel Correction</a><a class="headerlink" href="#reference-pixel-correction" title="Link to this heading"></a></h2>
-<blockquote>
-<div><p><strong>Matches all amplifier outputs of the detector to a common level.</strong></p>
+<span id="referencepixel"></span><h2><a class="toc-backref" href="#id4" role="doc-backlink">Reference Pixel Correction</a><a class="headerlink" href="#reference-pixel-correction" title="Link to this heading"></a></h2>
+<p><strong>Matches all amplifier outputs of the detector to a common level.</strong></p>
 <blockquote>
 <div><p>The primitive subtracts the average of the top and bottom four reference rows
-for each amplifier and individual reads. Calculate the sigma clipped mean value of these reference pixels and subtract it from the each amplifier channel for odd and even column separately. The default average method is <code class="docutils literal notranslate"><span class="pre">mean</span></code> but can be changed to <code class="docutils literal notranslate"><span class="pre">median</span></code> as well.  There is an option to turn the odd/even step off and replace with a single sigma-clipped mean value for all horizontal reference pixels in each amplifier. And the correction is applied to the (2048x2048) image frame including the top-bottom and left-right reference pixels.</p>
+for each amplifier and individual reads. Calculate the sigma clipped mean value of these reference pixels and subtract it from each amplifier channel for odd and even column separately. The default average method is <code class="docutils literal notranslate"><span class="pre">mean</span></code> but can be changed to <code class="docutils literal notranslate"><span class="pre">median</span></code> as well.  There is an option to turn the odd/even step off and replace it with a single sigma-clipped mean value for all horizontal reference pixels in each amplifier. And the correction is applied to the (2048x2048) image frame including the top-bottom and left-right reference pixels.</p>
 </div></blockquote>
-</div></blockquote>
+<figure class="align-center" id="id1">
+<a class="reference internal image-reference" href="_images/read_refpix.png"><img alt="_images/read_refpix.png" src="_images/read_refpix.png" style="width: 600px;" />
+</a>
+<figcaption>
+<p><span class="caption-text">A raw read from the imaging detector illuminated by a source (left), the reference pixel correction estimated using the top and bottom reference pixels (middle) for odd and even columns seperately, and the same read after the reference pixel correction (right).</span><a class="headerlink" href="#id1" title="Link to this image"></a></p>
+</figcaption>
+</figure>
 </section>
 <section id="f-noise-correction">
-<span id="onebyf"></span><h2><a class="toc-backref" href="#id2" role="doc-backlink">1/f Noise Correction</a><a class="headerlink" href="#f-noise-correction" title="Link to this heading"></a></h2>
+<span id="onebyf"></span><h2><a class="toc-backref" href="#id5" role="doc-backlink">1/f Noise Correction</a><a class="headerlink" href="#f-noise-correction" title="Link to this heading"></a></h2>
+<p><strong>Determines 1/f noise and and subtracts it from the image.</strong></p>
 <blockquote>
-<div><p><strong>Determines 1/f noise and and subtracts it from the image.</strong></p>
-<p>The primitive perform a 1/f correction using the left and right four reference pixel columns. Performs an optimal filtering of the vertical reference pixel to reduce 1/f noise (horizontal stripes). A sigma clipped mean value of the reference pixels are estimated estimated across the reads and then global mean value is subtracted from each reference pixels. The residual values are averaged to a single (1,2048) reference pixels and smooths
+<div><p>The primitive perform a 1/f correction using the left and right four reference pixel columns. Performs an optimal filtering of the vertical reference pixel to reduce 1/f noise (horizontal stripes). A sigma clipped mean value of the reference pixels are estimated across the reads and then global mean value is subtracted from each reference pixels. The residual values are averaged to a single (1,2048) reference pixels and smooths
 using FFT (Fast Fourier Transform) and subtracted from the entire data including the top-bottom and left-right reference pixels. The default average method is <code class="docutils literal notranslate"><span class="pre">mean</span></code> but can be changed to <code class="docutils literal notranslate"><span class="pre">median</span></code> as well.  FFT method adapted from Kosarev &amp; Pantos algorithm. This assumes that the data to be filtered/smoothed has been sampled evenly. M. Robberto <a class="reference external" href="http://www.stsci.edu/~robberto/Main/Software/IDL4pipeline/">IDL code</a>. Majority of the python version of the code is adopted from <a class="reference external" href="https://github.com/JarronL/hxrg_ref_pixels/tree/main">Jarron Leisenring</a>.</p>
 </div></blockquote>
+<figure class="align-center" id="id2">
+<a class="reference internal image-reference" href="_images/f_residual.png"><img alt="_images/f_residual.png" src="_images/f_residual.png" style="width: 600px;" />
+</a>
+<figcaption>
+<p><span class="caption-text">The reference pixel corrected read (left), the 1/f noise estimated using the left and right reference pixels (middle), and the 1/f corrected read (right).</span><a class="headerlink" href="#id2" title="Link to this image"></a></p>
+</figcaption>
+</figure>
 </section>
 <section id="linearity-correction">
-<span id="linearity"></span><h2><a class="toc-backref" href="#id3" role="doc-backlink">Linearity Correction</a><a class="headerlink" href="#linearity-correction" title="Link to this heading"></a></h2>
+<span id="linearity"></span><h2><a class="toc-backref" href="#id6" role="doc-backlink">Linearity Correction</a><a class="headerlink" href="#linearity-correction" title="Link to this heading"></a></h2>
+<p><strong>Correct per pixel non-linearity using a pre comupted set of coefficients for individual pixels</strong></p>
 <blockquote>
-<div><p><strong>Correct per pixel non-linearity using a pre comupted set of coefficients for individual pixels</strong></p>
-<p>Linearity correction has two part, creating linearity coefficients for each detector and then applying these coefficients to an input data. A data quality flags (DQ) are created as a by product of linearity correction and will be modified and used in each step of data processing. Let us go through one by one.</p>
+<div><p>Linearity correction has two part, creating linearity coefficients for each detector and then applying these coefficients to an input data. A data quality flags (DQ) are created as a by product of linearity correction and will be modified and used in each step of data processing. Let us go through one by one.</p>
 </div></blockquote>
 <section id="creating-linearity-coefficients">
-<h3><a class="toc-backref" href="#id4" role="doc-backlink">Creating linearity coefficients</a><a class="headerlink" href="#creating-linearity-coefficients" title="Link to this heading"></a></h3>
-<blockquote>
-<div><dl>
+<h3><a class="toc-backref" href="#id7" role="doc-backlink">Creating linearity coefficients</a><a class="headerlink" href="#creating-linearity-coefficients" title="Link to this heading"></a></h3>
+<dl>
 <dt><strong>Per-pixel linearity characterization using a detector flat ramp</strong></dt><dd><blockquote>
 <div><p>We use a detector flat with enough number of reads covering the linear part, non-linear part, and the saturation of each pixel.</p>
 </div></blockquote>
@@ -225,10 +233,9 @@ using FFT (Fast Fourier Transform) and subtracted from the entire data including
 </div>
 </dd>
 </dl>
-</div></blockquote>
 </section>
 <section id="applying-linearity-coefficients">
-<h3><a class="toc-backref" href="#id5" role="doc-backlink">Applying linearity coefficients</a><a class="headerlink" href="#applying-linearity-coefficients" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id8" role="doc-backlink">Applying linearity coefficients</a><a class="headerlink" href="#applying-linearity-coefficients" title="Link to this heading"></a></h3>
 <blockquote>
 <div><p><strong>Apply per-pixel two-segment polynomial linearity correction.</strong></p>
 <blockquote>
@@ -260,10 +267,10 @@ all-NaN) but the low segment is fine:</p>
 </div></blockquote>
 </section>
 <section id="data-quality-flags-dq-flags">
-<h3><a class="toc-backref" href="#id6" role="doc-backlink">Data quality flags (DQ flags)</a><a class="headerlink" href="#data-quality-flags-dq-flags" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id9" role="doc-backlink">Data quality flags (DQ flags)</a><a class="headerlink" href="#data-quality-flags-dq-flags" title="Link to this heading"></a></h3>
+<p><strong>Create DQ flags helpful for data processing</strong></p>
 <blockquote>
-<div><p><strong>Create DQ flags helpful for data processing</strong></p>
-<p>As part of creating linerity coefficients, we also creating different DQ flags and saved to the output as a FITS extension for each pixel. The DQ flags include</p>
+<div><p>As part of creating linerity coefficients, we also creating different DQ flags and saved to the output as a FITS extension for each pixel. The DQ flags include</p>
 <ul class="simple">
 <li><p><strong>Saturation cutoff:</strong> All pixel above the saturation DN values are flagged as saturated.</p></li>
 <li><p><strong>Bad pixel flag:</strong> All kind of bad pixels are flagged to 1 refer.</p></li>
@@ -273,7 +280,7 @@ all-NaN) but the low segment is fine:</p>
 </section>
 </section>
 <section id="bad-pixel">
-<span id="bpm"></span><h2><a class="toc-backref" href="#id7" role="doc-backlink">Bad pixel</a><a class="headerlink" href="#bad-pixel" title="Link to this heading"></a></h2>
+<span id="bpm"></span><h2><a class="toc-backref" href="#id10" role="doc-backlink">Bad pixel</a><a class="headerlink" href="#bad-pixel" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p>The bad pixel correction has two part, creating a bad pixel mask using a set of dark and flat exposures and applying this BPM correction to the input data. The BPMs are not created on a daily basis. The Keck observatory will do a frequent check on the quality of the detector behaviour and update the files as needed. The files are exist in:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/calib/
@@ -281,20 +288,27 @@ all-NaN) but the low segment is fine:</p>
 </div>
 </div></blockquote>
 <section id="creating-a-bpm">
-<h3><a class="toc-backref" href="#id8" role="doc-backlink">Creating a BPM</a><a class="headerlink" href="#creating-a-bpm" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id11" role="doc-backlink">Creating a BPM</a><a class="headerlink" href="#creating-a-bpm" title="Link to this heading"></a></h3>
 <blockquote>
 <div><p>A bad pixel mask (BPM) is generated by identifying pixels that behave abnormally in either time or space. Unstable pixels are found using a temporal criterion: any pixel whose signal fluctuates by more than five sigma across the stack of exposures is flagged. Static hot or cold pixels are found using a spatial criterion: in each individual frame, a pixel is flagged if it deviates by more than five sigma from the median value of its local neighbors, calculated within a 5×5 kernel. The final BPM combines all pixels flagged by either method, which currently totals 1.58% of the imager detector and 1.58% of the IFS detector.</p>
 </div></blockquote>
+<figure class="align-center" id="id3">
+<a class="reference internal image-reference" href="_images/bpm.png"><img alt="_images/bpm.png" src="_images/bpm.png" style="width: 400px;" />
+</a>
+<figcaption>
+<p><span class="caption-text">bad pixel mask for imaging detector (left), and the IFS detector (right).</span><a class="headerlink" href="#id3" title="Link to this image"></a></p>
+</figcaption>
+</figure>
 </section>
 <section id="correcting-for-bad-pixels">
-<h3><a class="toc-backref" href="#id9" role="doc-backlink">Correcting for bad pixels</a><a class="headerlink" href="#correcting-for-bad-pixels" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id12" role="doc-backlink">Correcting for bad pixels</a><a class="headerlink" href="#correcting-for-bad-pixels" title="Link to this heading"></a></h3>
 <blockquote>
 <div><p>A bad pixel correction is applied to individual exposures using two approaches. The first is an iterative median filter of kernel size varying from (3 × 3) to (11 × 11) with a minimum of 0.45% of good neighbors around each bad pixel. The second method is applying an interpolation using a 2D Gaussian kernel with a standard deviation of three sigma.</p>
 </div></blockquote>
 </section>
 </section>
 <section id="readnoise-map">
-<h2><a class="toc-backref" href="#id10" role="doc-backlink">Readnoise map</a><a class="headerlink" href="#readnoise-map" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id13" role="doc-backlink">Readnoise map</a><a class="headerlink" href="#readnoise-map" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p>Read noise map is created using a set of bad pixel corrected bias exposures averaging after removing the DC offset.</p>
 <p>The readnoise maps are not created on a daily basis. The Keck observatory will do a frequent check on the quality of the detector behaviour and update the files as needed. Readnoise map is important for ramp fitting. The readnoise maps for IFS and imager are exist in:</p>
@@ -304,7 +318,7 @@ all-NaN) but the low segment is fine:</p>
 </div></blockquote>
 </section>
 <section id="rectification-matrix">
-<span id="rmatrix"></span><h2><a class="toc-backref" href="#id11" role="doc-backlink">Rectification matrix</a><a class="headerlink" href="#rectification-matrix" title="Link to this heading"></a></h2>
+<span id="rmatrix"></span><h2><a class="toc-backref" href="#id14" role="doc-backlink">Rectification matrix</a><a class="headerlink" href="#rectification-matrix" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p>The SCALES calibration unit includes a monochromator capable of producing selectable, narrowband illumination at any central wavelength between 1 − 5μm. Each monochromatic lamp exposure produces a 2D image containing the point-spread functions (PSFs) from all lenslets, referred to as psflets. The rectification matrix (RM) is constructed empirically from these series of monochromatic calibration lamp exposures that densely sample the instrument’s 2 − 5μm wavelength range. This rectification matrices are important for IFS spectral extraction (refer <a class="reference internal" href="#spectralextract"><span class="std std-ref">Spectral Extraction</span></a>) and wavelength calibration.</p>
 <p>The RM is a linear operator that forms the core of the instrumental model, mapping individual psflets across all wavelengths. This mapping is inherently sparse, since each monochromatic PSF is spatially localized and illuminates approximately a 3×3 box of detector pixels. The RM has dimensions 4194304, Xlenslet ×Ylenslet ×λbin, where 4194304 corresponds to the total number of pixels in the 2048 × 2048 detector, and Xlenslet and Ylenslet represent the number of lenslets in the x and y directions, respectively (approximately 108×108 for low resolution and 17 × 18 for medium resolution).</p>
@@ -316,10 +330,10 @@ all-NaN) but the low segment is fine:</p>
 </div></blockquote>
 </section>
 <section id="ramp-fitting">
-<span id="ramp"></span><h2><a class="toc-backref" href="#id12" role="doc-backlink">Ramp fitting</a><a class="headerlink" href="#ramp-fitting" title="Link to this heading"></a></h2>
+<span id="ramp"></span><h2><a class="toc-backref" href="#id15" role="doc-backlink">Ramp fitting</a><a class="headerlink" href="#ramp-fitting" title="Link to this heading"></a></h2>
+<p><strong>Generate an exposure from a ‘N’ number of reads or from a group of reads.</strong></p>
 <blockquote>
-<div><p><strong>Generate an exposure from a ‘N’ number of reads or from a group of reads.</strong></p>
-<p>We adopt the ramp fitting method - <code class="docutils literal notranslate"><span class="pre">fitramp</span></code> by  <a class="reference external" href="https://github.com/t-brandt/fitramp/tree/main">Brandt et. al. 2024</a> for ramp fitting. This method perform an optimal fit to a pixel’s count rate nondestructively in the presence of both read and photon noise. The method construct a covarience matrix by estimating the difference in the read in a ramp, propagation of the read noise, photon noise and their corelation. And Performs a generalized least squares fit to the differences, using the inverse of the covariance matrix as weights. This gives optimal weight to each difference. The readnoise per pixel is estimated from the <code class="docutils literal notranslate"><span class="pre">bias</span> <span class="pre">frames</span></code>. The jumps are detected iteratively checking the goodness of fit at each possible jump location. More details are presented in <a class="reference external" href="https://iopscience.iop.org/article/10.1088/1538-3873/ad38d9/pdf">paper1</a> and
+<div><p>We adopt the ramp fitting method - <code class="docutils literal notranslate"><span class="pre">fitramp</span></code> by  <a class="reference external" href="https://github.com/t-brandt/fitramp/tree/main">Brandt et. al. 2024</a> for ramp fitting. This method perform an optimal fit to a pixel’s count rate nondestructively in the presence of both read and photon noise. The method construct a covarience matrix by estimating the difference in the read in a ramp, propagation of the read noise, photon noise and their corelation. And Performs a generalized least squares fit to the differences, using the inverse of the covariance matrix as weights. This gives optimal weight to each difference. The readnoise per pixel is estimated from the <code class="docutils literal notranslate"><span class="pre">bias</span> <span class="pre">frames</span></code>. The jumps are detected iteratively checking the goodness of fit at each possible jump location. More details are presented in <a class="reference external" href="https://iopscience.iop.org/article/10.1088/1538-3873/ad38d9/pdf">paper1</a> and
 <a class="reference external" href="https://iopscience.iop.org/article/10.1088/1538-3873/ad38da">paper2</a>.</p>
 <p>We use the saturation mask from the DQ flags to avoid saturated pixels for ramp fitting.</p>
 <p>The ramp fitting primitive produces images—slope (countrate) and pedestal (reset) using <code class="docutils literal notranslate"><span class="pre">fitramp</span></code>. Ramp fitting is the final step for imaging mode after bias, dark, and detector flat correction.</p>
@@ -330,44 +344,44 @@ all-NaN) but the low segment is fine:</p>
 <p>Ramp fitting returns the slope image, associated uncertainty, and the reset value estimated and stored as output FITS extension. As part of this primitive BPM correction, bias or dark subtraction, and detector flat fielding is performed depends on the input datatype.</p>
 </div></blockquote>
 <section id="bias-and-dark-subtraction">
-<h3><a class="toc-backref" href="#id13" role="doc-backlink">Bias and Dark Subtraction</a><a class="headerlink" href="#bias-and-dark-subtraction" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id16" role="doc-backlink">Bias and Dark Subtraction</a><a class="headerlink" href="#bias-and-dark-subtraction" title="Link to this heading"></a></h3>
 <blockquote>
 <div><p>Master bias and master dark files are created during the afternoon calibration process. As part of ramp fitting, the primitive will search for these master files and will subtract it from the input data. More details are included in <a class="reference internal" href="Mode_of_Pipelines.html"><span class="doc">modes of DRP execution</span></a>.</p>
 </div></blockquote>
 </section>
 <section id="flat-fielding">
-<h3><a class="toc-backref" href="#id14" role="doc-backlink">Flat Fielding</a><a class="headerlink" href="#flat-fielding" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id17" role="doc-backlink">Flat Fielding</a><a class="headerlink" href="#flat-fielding" title="Link to this heading"></a></h3>
 <blockquote>
 <div><p>Master detector flat and master lenslet flat cube are created during the afternoon calibration process. As part of ramp fitting, the primitive will search for these master files and will divide it from the input data. More details are included in <a class="reference internal" href="Mode_of_Pipelines.html"><span class="doc">modes of DRP execution</span></a>.</p>
 </div></blockquote>
 </section>
 </section>
 <section id="spectral-extraction">
-<span id="spectralextract"></span><h2><a class="toc-backref" href="#id15" role="doc-backlink">Spectral Extraction</a><a class="headerlink" href="#spectral-extraction" title="Link to this heading"></a></h2>
+<span id="spectralextract"></span><h2><a class="toc-backref" href="#id18" role="doc-backlink">Spectral Extraction</a><a class="headerlink" href="#spectral-extraction" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p>The next general step from ramp image to the final 3D IFS datacube is a spectral extraction after detector flat fielding. The SCALES-DRP implements two main extraction methods, <code class="docutils literal notranslate"><span class="pre">optimal</span> <span class="pre">extraction</span></code> and <code class="docutils literal notranslate"><span class="pre">χ2</span> <span class="pre">extraction</span></code>. Both methods produce a 3D IFS datacube along with a corresponding flux error cube, with dimensions defined by the number of lenslets in each spatial direction and the number of wavelength bins along the spectral axis.</p>
 </div></blockquote>
 <section id="optimal-extraction">
-<span id="optimalextract"></span><h3><a class="toc-backref" href="#id16" role="doc-backlink">Optimal Extraction</a><a class="headerlink" href="#optimal-extraction" title="Link to this heading"></a></h3>
+<span id="optimalextract"></span><h3><a class="toc-backref" href="#id19" role="doc-backlink">Optimal Extraction</a><a class="headerlink" href="#optimal-extraction" title="Link to this heading"></a></h3>
 <blockquote>
 <div><p>The pipeline implements the standard optimal extraction algorithm by <a class="reference external" href="https://ui.adsabs.harvard.edu/abs/1986PASP...98..609H/abstract">Horne</a>. This technique estimates the spectral intensity at each wavelength by weighting the pixels according to the measured line-spread function of the calibration lamp psflet and the associated pixel specific uncertainties. We implemented optimal extraction using a linear algebraic rectification matrix generated using the <a class="reference internal" href="Mode_of_Pipelines.html"><span class="doc">calibration module</span></a>. Each column in the rectification matrix represents the weight of each pixel at each wavelength, measured from a monochromatic calibration lamp dataset. A total variance map is computed for each pixel by combining contributions from photon noise and read noise, ensuring proper weighting of the data during the optimal extraction process. The output errorcube is the error propagation followed in each step of the optimial extraction process.</p>
 </div></blockquote>
 </section>
 <section id="least-square-extraction">
-<span id="leastextract"></span><h3><a class="toc-backref" href="#id17" role="doc-backlink">Least square Extraction</a><a class="headerlink" href="#least-square-extraction" title="Link to this heading"></a></h3>
+<span id="leastextract"></span><h3><a class="toc-backref" href="#id20" role="doc-backlink">Least square Extraction</a><a class="headerlink" href="#least-square-extraction" title="Link to this heading"></a></h3>
 <blockquote>
 <div><p>The χ2 based spectral extraction differs from optimal extraction by fitting the entire two-dimensional data at predefined psflet positions using a rectification matrix of shape (4194304, Xlenslet ×Ylenslet ×λbin ). Each column in the rectification matrix represents the weight of each pixel at each wavelength, measured from a calibration unit dataset. More details about rectification matrix is presented in the <a class="reference internal" href="Mode_of_Pipelines.html"><span class="doc">calibration module</span></a>.  The one-dimensional optimal flux from each psflet is extracted using a forward-modeling technique that formulates the extraction as a linear inverse problem, <code class="docutils literal notranslate"><span class="pre">R</span> <span class="pre">×</span> <span class="pre">A</span> <span class="pre">=</span> <span class="pre">d</span></code>, where R is the rectification matrix, A is the best-fit flux for each psflet as a function of wavelength, and d is the observed 2D detector image. The optimal solution for A is found by minimizing the chi-squared statistic, which represents the variance-weighted sum of squared residuals between the forward-model and the input data. The weights are derived from both detector read noise and signal-dependent photon noise. To ensure a physically plausible result, the optimization is subject to two constraints: a non-negativity constraint on the flux (A ≥ 0), and a dynamic upper bound derived from optimal extraction. his bounded, weighted, non-negative least-squares (BWNNLS) system is solved efficiently using a trust-region reflective algorithm, as implemented in <code class="docutils literal notranslate"><span class="pre">scipy.optimize.lsq-linear</span></code>.</p>
 </div></blockquote>
 </section>
 </section>
 <section id="wavelevngth-calibration">
-<span id="wave"></span><h2><a class="toc-backref" href="#id18" role="doc-backlink">Wavelevngth Calibration</a><a class="headerlink" href="#wavelevngth-calibration" title="Link to this heading"></a></h2>
+<span id="wave"></span><h2><a class="toc-backref" href="#id21" role="doc-backlink">Wavelevngth Calibration</a><a class="headerlink" href="#wavelevngth-calibration" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p>The spectral resolution of each  mode of observation is depends on the number of monochromatic calibration exposures are used to create the rectification matrices (See <a class="reference internal" href="#rmatrix"><span class="std std-ref">Rectification matrix</span></a> for more details).  Currently no interpolation is added to the final wavelength solution.</p>
 </div></blockquote>
 </section>
 <section id="world-coordinate-system-wcs">
-<span id="wcs"></span><h2><a class="toc-backref" href="#id19" role="doc-backlink">World Coordinate System (WCS)</a><a class="headerlink" href="#world-coordinate-system-wcs" title="Link to this heading"></a></h2>
+<span id="wcs"></span><h2><a class="toc-backref" href="#id22" role="doc-backlink">World Coordinate System (WCS)</a><a class="headerlink" href="#world-coordinate-system-wcs" title="Link to this heading"></a></h2>
 <blockquote>
 <div><p>This function constructs a three-dimensional World Coordinate System (WCS) for a generic integral field unit (IFU) data cube. It is designed to be flexible and robust to variations in FITS header conventions by automatically parsing sky coordinates provided in different formats, handling optional or missing keywords, and applying sensible defaults where needed. The resulting WCS maps the spatial dimensions of the cube to right ascension and declination using a tangent-plane projection, and the spectral dimension to wavelength, incorporating the correct pixel scale and detector position angle.</p>
 <p>The function takes as input the shape of the data cube, the FITS header containing observational metadata, a dictionary that maps filter names to their corresponding reference pixel positions on the detector, and a default reference pixel to use when no filter-specific entry is available. Using this information, it determines the reference sky coordinates, spatial and spectral scaling, detector orientation, and reference pixel locations, and returns a fully constructed <code class="docutils literal notranslate"><span class="pre">astropy.wcs.WCS</span></code> object suitable for accurate spatial and spectral coordinate transformations.</p>

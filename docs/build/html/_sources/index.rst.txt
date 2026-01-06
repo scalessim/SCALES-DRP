@@ -41,17 +41,9 @@ The latest version of 1.0.0 of the SCALES-DRP includes:
 
    - Simplified installation via pip and conda environment
 
-   - Vacuum to air and heliocentric or barycentric correction
-
    - Formal support system via GitHub issues
 
    - Support for Mac intel M2 and M3 chips in Python 3.12
-
-
-.. note::
-
-   This project is under active development!
-
 
 
 .. toctree::
@@ -59,7 +51,6 @@ The latest version of 1.0.0 of the SCALES-DRP includes:
    :caption: Contents:
 
    Installation
-   Quick_Start
    Configuration_Parameters
    Primitives
    Mode_of_Pipelines

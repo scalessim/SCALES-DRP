@@ -16,36 +16,22 @@ If you installed the pipeline with ``pip``, the configuration file will not be e
 
 
 
-LOWRES and MEDRES sections of the configuration file
-----------------------------------------------------
+Configuration file
+~~~~~~~~~~~~~~~~~~~
 
-We have specific different default parameters for each observation mode. These are defined in the config file with ``[LOWRES]`` and ``[MEDRES]`` section headers. For example:
+We have default parameters for IFS and Imaging mode of observation. For example:
 
 .. code-block:: bash
 
 	bias_min_nframes = 5 #minimum bias exposures
-	flat_min_nframes = 5 #minimum detector flat exposures
-	lensflat_min_nframes = 5 #minimum lenslet flat exposures
+	flatlamp_min_nframes = 5 #minimum detector flat exposures
+	flatlens_min_nframes = 5 #minimum lenslet flat exposures
 	dark_min_nframes = 3 #minimum dark exposures
 
 
 These parameters control the minimum number of bias, detector/lenslet flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations.
 
-There is similar set of default parameter values which will be used for IMAGING mode of analysis.
 
-
-Wavelength correction parameters
---------------------------------
-
-.. code-block:: bash
-
-	radial_velocity_correction = "heliocentric"
-	air_to_vacuum = True   # Defaults to vacuum wavelengths
-
-These control the refinement of the wavelength solution. You can specify if you want air wavelengths by setting air_to_vacuum to False. You can specify the type of radial velocity correct as one of:
-	- heliocentric
-	- barycentric
-	- none
 
 
 

@@ -46,7 +46,6 @@
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Quick_Start.html">Quick Start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
@@ -100,49 +99,29 @@
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>intb</p></td>
+<tr class="row-even"><td><p>b</p></td>
 <td><p>DN/px</p></td>
-<td><p>overscan subtracted and trimmed bias</p></td>
+<td><p>bias removed</p></td>
 </tr>
-<tr class="row-odd"><td><p>int</p></td>
-<td><p>e-/px</p></td>
-<td><p>reduced output intensity</p></td>
+<tr class="row-odd"><td><p>d</p></td>
+<td><p>DN/px</p></td>
+<td><p>dark current removed</p></td>
 </tr>
-<tr class="row-even"><td><p>intd</p></td>
-<td><p>e-/px</p></td>
-<td><p>dark current/scattered light removed</p></td>
+<tr class="row-even"><td><p>f</p></td>
+<td><p>DN/px</p></td>
+<td><p>detector flat removed</p></td>
 </tr>
-<tr class="row-odd"><td><p>intf</p></td>
-<td><p>e-/px</p></td>
-<td><p>instrumental variations removed</p></td>
+<tr class="row-odd"><td><p>lenf</p></td>
+<td><p>DN/px</p></td>
+<td><p>lenslet flat removed</p></td>
 </tr>
-<tr class="row-even"><td><p>intk</p></td>
-<td><p>e-/px</p></td>
-<td><p>sky subtracted</p></td>
-</tr>
-<tr class="row-odd"><td><p>obj</p></td>
-<td><p>e-/px</p></td>
-<td><p>un-sky subtracted object panel (Nod &amp; Shuffle)</p></td>
-</tr>
-<tr class="row-even"><td><p>sky</p></td>
-<td><p>e-/px</p></td>
-<td><p>sky model image or sky panel (Nod &amp; Shuffle)</p></td>
-</tr>
-<tr class="row-odd"><td><p>opt_cube</p></td>
-<td><p>e-/px</p></td>
+<tr class="row-even"><td><p>opt_cube</p></td>
+<td><p>flux/px</p></td>
 <td><p>data cube from OptimalExtract</p></td>
 </tr>
-<tr class="row-even"><td><p>chi_cube</p></td>
-<td><p>e-/px</p></td>
+<tr class="row-odd"><td><p>chi_cube</p></td>
+<td><p>flux/px</p></td>
 <td><p>data cube from ChisquareExtract</p></td>
-</tr>
-<tr class="row-odd"><td><p>final_cube_opt</p></td>
-<td><p>flux/px</p></td>
-<td><p>Wavelength corrected data cube (OptimalExtract)</p></td>
-</tr>
-<tr class="row-even"><td><p>final_cube_chi</p></td>
-<td><p>flux/px</p></td>
-<td><p>Wavelength corrected data cube (ChisquareExtract)</p></td>
 </tr>
 </tbody>
 </table>
@@ -179,6 +158,14 @@
 </tr>
 <tr class="row-even"><td><p>mobj</p></td>
 <td><p>Master object</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>opt_cube</p></td>
+<td><p>IFS 3D cube using optimal extraction</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>chi_cube</p></td>
+<td><p>IFS 3D cube using chi-square extraction</p></td>
 <td></td>
 </tr>
 </tbody>

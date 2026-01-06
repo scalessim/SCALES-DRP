@@ -2,11 +2,9 @@ Primitives
 ==========
 
 This section gives a brief idea about all the primitives used for **SCALES-DRP** pipeline.
-For Imaging mode, the final output is the ramp-fitted data (2048x2048) and the corresponding error image, and different data quality flags used. For IFS mode, the final output is a datacube
-with two spatial and one spectral axis. Below we explain the individual steps included in the reduction process in the order of execution.
+For Imaging mode, the final output is the ramp-fitted data (2048x2048) and the corresponding error image, and different data quality flags used. For IFS mode, the final output is a ramp fitted data and a datacube with two spatial and one spectral axis along with the associated uncertainty and data quality flags. Below we explain the individual steps included in the reduction process in the order of execution.
 
-The SCALES  H2RG detector has four readout channel with both ``slow`` and ``fast`` readout modes.
-A odd-even column swapping is required for the ``fast`` mode of observation, which is executed by the detector server as individual read completes. The raw input read to the DRP is odd-even swapped. 
+The SCALES  H2RG detector has four readout channel with both ``slow`` and ``fast`` readout modes. A odd-even column swapping is required for the ``fast`` mode of observation, which is executed by the detector server as individual read completes. The raw input read to the DRP is odd-even swapped. 
 
 All the primitive files are exist in:
 
@@ -23,35 +21,47 @@ All the primitive files are exist in:
 
 Reference Pixel Correction
 --------------------------
-   **Matches all amplifier outputs of the detector to a common level.**
+**Matches all amplifier outputs of the detector to a common level.**
 
     The primitive subtracts the average of the top and bottom four reference rows
-    for each amplifier and individual reads. Calculate the sigma clipped mean value of these reference pixels and subtract it from the each amplifier channel for odd and even column separately. The default average method is ``mean`` but can be changed to ``median`` as well.  There is an option to turn the odd/even step off and replace with a single sigma-clipped mean value for all horizontal reference pixels in each amplifier. And the correction is applied to the (2048x2048) image frame including the top-bottom and left-right reference pixels. 
+    for each amplifier and individual reads. Calculate the sigma clipped mean value of these reference pixels and subtract it from each amplifier channel for odd and even column separately. The default average method is ``mean`` but can be changed to ``median`` as well.  There is an option to turn the odd/even step off and replace it with a single sigma-clipped mean value for all horizontal reference pixels in each amplifier. And the correction is applied to the (2048x2048) image frame including the top-bottom and left-right reference pixels. 
 
+.. figure:: /_static/plots/read_refpix.png
+   :width: 600px
+   :align: center
+
+   A raw read from the imaging detector illuminated by a source (left), the reference pixel correction estimated using the top and bottom reference pixels (middle) for odd and even columns seperately, and the same read after the reference pixel correction (right).
 
 .. _onebyf:
 
 1/f Noise Correction
 --------------------
 
-   **Determines 1/f noise and and subtracts it from the image.**
+**Determines 1/f noise and and subtracts it from the image.**
 
-   The primitive perform a 1/f correction using the left and right four reference pixel columns. Performs an optimal filtering of the vertical reference pixel to reduce 1/f noise (horizontal stripes). A sigma clipped mean value of the reference pixels are estimated estimated across the reads and then global mean value is subtracted from each reference pixels. The residual values are averaged to a single (1,2048) reference pixels and smooths
+   The primitive perform a 1/f correction using the left and right four reference pixel columns. Performs an optimal filtering of the vertical reference pixel to reduce 1/f noise (horizontal stripes). A sigma clipped mean value of the reference pixels are estimated across the reads and then global mean value is subtracted from each reference pixels. The residual values are averaged to a single (1,2048) reference pixels and smooths
    using FFT (Fast Fourier Transform) and subtracted from the entire data including the top-bottom and left-right reference pixels. The default average method is ``mean`` but can be changed to ``median`` as well.  FFT method adapted from Kosarev & Pantos algorithm. This assumes that the data to be filtered/smoothed has been sampled evenly. M. Robberto `IDL code  <http://www.stsci.edu/~robberto/Main/Software/IDL4pipeline/>`_. Majority of the python version of the code is adopted from `Jarron Leisenring <https://github.com/JarronL/hxrg_ref_pixels/tree/main>`_.
+
+
+.. figure:: /_static/plots/f_residual.png
+   :width: 600px
+   :align: center
+
+   The reference pixel corrected read (left), the 1/f noise estimated using the left and right reference pixels (middle), and the 1/f corrected read (right).   
 
 .. _linearity:
 
 Linearity Correction
 --------------------
-   **Correct per pixel non-linearity using a pre comupted set of coefficients for individual pixels**
+**Correct per pixel non-linearity using a pre comupted set of coefficients for individual pixels**
 
    Linearity correction has two part, creating linearity coefficients for each detector and then applying these coefficients to an input data. A data quality flags (DQ) are created as a by product of linearity correction and will be modified and used in each step of data processing. Let us go through one by one.
 
 
 Creating linearity coefficients
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-   **Per-pixel linearity characterization using a detector flat ramp**
-      We use a detector flat with enough number of reads covering the linear part, non-linear part, and the saturation of each pixel. 
+**Per-pixel linearity characterization using a detector flat ramp**
+     We use a detector flat with enough number of reads covering the linear part, non-linear part, and the saturation of each pixel. 
     
 
     For each pixel:
@@ -110,7 +120,7 @@ Applying linearity coefficients
 
 Data quality flags (DQ flags)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-   **Create DQ flags helpful for data processing**
+**Create DQ flags helpful for data processing**
 
    As part of creating linerity coefficients, we also creating different DQ flags and saved to the output as a FITS extension for each pixel. The DQ flags include
 
@@ -133,6 +143,11 @@ Creating a BPM
 ~~~~~~~~~~~~~~
     A bad pixel mask (BPM) is generated by identifying pixels that behave abnormally in either time or space. Unstable pixels are found using a temporal criterion: any pixel whose signal fluctuates by more than five sigma across the stack of exposures is flagged. Static hot or cold pixels are found using a spatial criterion: in each individual frame, a pixel is flagged if it deviates by more than five sigma from the median value of its local neighbors, calculated within a 5×5 kernel. The final BPM combines all pixels flagged by either method, which currently totals 1.58% of the imager detector and 1.58% of the IFS detector.
     
+.. figure:: /_static/plots/bpm.png
+   :width: 400px
+   :align: center
+
+   bad pixel mask for imaging detector (left), and the IFS detector (right).  
 
 Correcting for bad pixels
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -168,7 +183,7 @@ Rectification matrix
 
 Ramp fitting
 ------------
-   **Generate an exposure from a 'N' number of reads or from a group of reads.**
+**Generate an exposure from a 'N' number of reads or from a group of reads.**
 
    We adopt the ramp fitting method - ``fitramp`` by  `Brandt et. al. 2024 <https://github.com/t-brandt/fitramp/tree/main>`_ for ramp fitting. This method perform an optimal fit to a pixel’s count rate nondestructively in the presence of both read and photon noise. The method construct a covarience matrix by estimating the difference in the read in a ramp, propagation of the read noise, photon noise and their corelation. And Performs a generalized least squares fit to the differences, using the inverse of the covariance matrix as weights. This gives optimal weight to each difference. The readnoise per pixel is estimated from the ``bias frames``. The jumps are detected iteratively checking the goodness of fit at each possible jump location. More details are presented in `paper1 <https://iopscience.iop.org/article/10.1088/1538-3873/ad38d9/pdf>`_ and 
    `paper2 <https://iopscience.iop.org/article/10.1088/1538-3873/ad38da>`_. 

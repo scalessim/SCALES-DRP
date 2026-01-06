@@ -19,7 +19,7 @@
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Running the SCALES-DRP Pipeline" href="Running_the_SCALES-DRP_Pipeline.html" />
+    <link rel="next" title="More into the DRP Execution" href="Running_the_SCALES-DRP_Pipeline.html" />
     <link rel="prev" title="Primitives" href="Primitives.html" /> 
 </head>
 
@@ -46,7 +46,6 @@
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Quick_Start.html">Quick Start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Modes of DRP Operation &amp; the Execution</a><ul>
@@ -55,7 +54,7 @@
 <li class="toctree-l2"><a class="reference internal" href="#science-grad-pipeline">Science-Grad Pipeline</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">Running the <strong>SCALES-DRP</strong> Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
@@ -90,52 +89,74 @@
              
   <section id="modes-of-drp-operation-the-execution">
 <h1>Modes of DRP Operation &amp; the Execution<a class="headerlink" href="#modes-of-drp-operation-the-execution" title="Link to this heading"></a></h1>
-<blockquote>
-<div><p>The DRP consists of three main modules: (1) a calibration module, (2) a quicklook module, and (3) a science grade module. More details and the <a class="reference internal" href="Primitives.html"><span class="doc">primitives</span></a> included in each modules are given below.</p>
-</div></blockquote>
+<p>The DRP consists of three main modules: (1) a calibration module, (2) a quicklook module, and (3) a science grade module. More details and the <a class="reference internal" href="Primitives.html"><span class="doc">primitives</span></a> included in each modules are given below.</p>
 <section id="quicklook-pipeline">
 <span id="quicklookmodule"></span><h2>Quicklook Pipeline<a class="headerlink" href="#quicklook-pipeline" title="Link to this heading"></a></h2>
 <p>A quicklook module is used for real-time analysis during observations and performs several key steps: <a class="reference internal" href="Primitives.html#referencepixel"><span class="std std-ref">Reference Pixel Correction</span></a>, <a class="reference internal" href="Primitives.html#onebyf"><span class="std std-ref">1/f Noise Correction</span></a> followed by a pixel by pixel ramp fitting using a first-order polynomial.  A rectification based <a class="reference internal" href="Primitives.html#bpm"><span class="std std-ref">Bad pixel</span></a> correction is implemented for fast exection.</p>
-<p>For imaging mode, quicklook will automatically display the raw image and the final bad pixel corrected slope image in leass than few seconds. IFS mode also displays a 3D datacube after a weighted <a class="reference internal" href="Primitives.html#optimalextract"><span class="std std-ref">Optimal Extraction</span></a> using the existing <a class="reference internal" href="Primitives.html#rmatrix"><span class="std std-ref">Rectification matrix</span></a> created using the <a class="reference internal" href="#calibmodule"><span class="std std-ref">Calibration Pipeline</span></a>.</p>
-<p>The quicklook module is designed for automatic rapid execution, which allows users to interactively visualize individual exposures and the final 3D IFS data cubes using GUIs during the observation itself. Usually the execution takes a few seconds to produce the datacube using the weighted <code class="docutils literal notranslate"><span class="pre">Optimal</span> <span class="pre">extraction</span></code>.</p>
+<p>For imaging mode, quicklook will automatically display the raw image and the final bad pixel corrected slope image in leass than a second. IFS mode also displays a 3D datacube after a weighted <a class="reference internal" href="Primitives.html#optimalextract"><span class="std std-ref">Optimal Extraction</span></a> using the existing <a class="reference internal" href="Primitives.html#rmatrix"><span class="std std-ref">Rectification matrix</span></a> created using the <a class="reference internal" href="#calibmodule"><span class="std std-ref">Calibration Pipeline</span></a>.</p>
+<p>The quicklook module is designed for automatic rapid execution, which allows users to interactively visualize individual exposures and the final 3D IFS data cubes using GUIs during the observation itself. Usually the execution takes 2 or 3 seconds to produce the datacube using the weighted <code class="docutils literal notranslate"><span class="pre">Optimal</span> <span class="pre">extraction</span></code> from raw reads.</p>
 <p>The quicklook pipeline will search for newly arrived FITS files in the folder and try to exectute based on the FITS header information. Once the analysis is completed, it will wait for the next FITS file to arrive.</p>
 <p>A user can access the <code class="docutils literal notranslate"><span class="pre">Quicklook</span> <span class="pre">Pipeline</span></code> using the following command.</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>start_scales_quicklook<span class="w"> </span>-m<span class="w"> </span>-W<span class="w"> </span>-d<span class="w"> </span>FULL<span class="w"> </span>PATH
 </pre></div>
 </div>
+<p>Here <code class="docutils literal notranslate"><span class="pre">-m</span></code> indicate monitoring, <code class="docutils literal notranslate"><span class="pre">-W</span></code> indicates wait for ever, and <code class="docutils literal notranslate"><span class="pre">-d</span></code> for directory. More details can seen <a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#othercommand"><span class="std std-ref">here</span></a>.</p>
 </section>
 <section id="calibration-pipeline">
 <span id="calibmodule"></span><h2>Calibration Pipeline<a class="headerlink" href="#calibration-pipeline" title="Link to this heading"></a></h2>
 <p>The calibration module is the core of SCALES-DRP, automatically processing daily afternoon calibration data required for science data processing. Calib module will do a detailed data processing for dark, detector flat, lenslet flat, monochromatic calibration, and bias reads explained in section <a class="reference internal" href="Primitives.html"><span class="doc">primitives</span></a>.</p>
-<p>Master calibration files are created and stored after <a class="reference internal" href="Primitives.html#bpm"><span class="std std-ref">bad pixel correction</span></a>. For lenslet flat exposures, a additional weighted <a class="reference internal" href="Primitives.html#optimalextract"><span class="std std-ref">optimal extraction extraction</span></a> is performed. This module also produces a bad pixel mask (BPM) using a series of flat and dark exposures, estimates the read-noise map from a set of bias exposures.</p>
+<p>Master calibration files are created and stored after <a class="reference internal" href="Primitives.html#bpm"><span class="std std-ref">bad pixel correction</span></a>. For lenslet flat exposures, a additional weighted <a class="reference internal" href="Primitives.html#optimalextract"><span class="std std-ref">optimal extraction extraction</span></a> is performed to create the lenslet flat cube. This module also produces a bad pixel mask (BPM) using a series of flat and dark exposures, estimates the read-noise map from a set of bias exposures.</p>
 <p>The monochromator data will be taken more intermittently as it is expected to remain stable over much longer timescales. The calibration module generates <a class="reference internal" href="Primitives.html#rmatrix"><span class="std std-ref">rectification matrices</span></a> (RM) for <a class="reference internal" href="Primitives.html#spectralextract"><span class="std std-ref">spectral extraction</span></a>, and <a class="reference internal" href="Primitives.html#wave"><span class="std std-ref">wavelength calibration</span></a> using a series of monochromatic calibration lamp exposures. The rectification matrices encode the information of each lenslet PSF (or psflet) across all wavelengths.</p>
 <p>Currently, the full calibration routine takes on the order of minutes to execute on a Mac M3 (128GB) laptop.</p>
+<figure class="align-center" id="id1">
+<a class="reference internal image-reference" href="_images/calib_module_flowchart.png"><img alt="_images/calib_module_flowchart.png" src="_images/calib_module_flowchart.png" style="width: 800px;" />
+</a>
+<figcaption>
+<p><span class="caption-text">A flowchart of the SCLAES-DRP calibration module.</span><a class="headerlink" href="#id1" title="Link to this image"></a></p>
+</figcaption>
+</figure>
 <p>A user can execute the <code class="docutils literal notranslate"><span class="pre">Calibration</span> <span class="pre">Pipeline</span></code> using the following command:</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>start_scales_calib<span class="w"> </span>-d<span class="w"> </span>FULL<span class="w"> </span>PATH
 </pre></div>
 </div>
+<p>where <code class="docutils literal notranslate"><span class="pre">-d</span></code> stands for directory follwed by the full path to the directory with calibration files.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <ul class="simple">
 <li><p>Calibration module should execute before the science-grad module operation. So that all the required calibration files will be readly avaialble for the execution.</p></li>
-<li><p>Start calibration module execution ONLY after completing the afternoon calibration.</p></li>
+<li><p>Start calibration module execution <strong>ONLY</strong> after completing the afternoon calibration.</p></li>
 </ul>
 </div>
 </section>
 <section id="science-grad-pipeline">
 <h2>Science-Grad Pipeline<a class="headerlink" href="#science-grad-pipeline" title="Link to this heading"></a></h2>
 <p>The science module performs detailed detector level corrections explained in section <a class="reference internal" href="Primitives.html"><span class="doc">primitives</span></a>, <a class="reference internal" href="Primitives.html#ramp"><span class="std std-ref">ramp fitting</span></a>, <a class="reference internal" href="Primitives.html#bpm"><span class="std std-ref">bad pixel correction</span></a>, and <a class="reference internal" href="Primitives.html#spectralextract"><span class="std std-ref">spectral extraction</span></a> of the science reads, using outputs from the <a class="reference internal" href="#calibmodule"><span class="std std-ref">calibration module</span></a>  to generate the wavelength-calibrated 3D IFS datacube.</p>
+<figure class="align-center" id="id2">
+<a class="reference internal image-reference" href="_images/science_module_flowchart.png"><img alt="_images/science_module_flowchart.png" src="_images/science_module_flowchart.png" style="width: 800px;" />
+</a>
+<figcaption>
+<p><span class="caption-text">A flowchart of the SCLAES-DRP science-grad module.</span><a class="headerlink" href="#id2" title="Link to this image"></a></p>
+</figcaption>
+</figure>
 <p>A user can execute the <code class="docutils literal notranslate"><span class="pre">science-grad</span> <span class="pre">pipeline</span></code> using the following command:</p>
 <ul>
-<li><p>For execting a single FITS file:</p>
+<li><p>For execting a single FITS file (make sure to execute inside the directory.):</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>start_scales_calib<span class="w"> </span>-f<span class="w"> </span>filenmae.fits
 </pre></div>
 </div>
+<p>Here <code class="docutils literal notranslate"><span class="pre">-f</span></code> stands for a file.</p>
+</li>
+<li><p>For execting a list of FITS file (make sure to execute inside the directory.):</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>start_scales_calib<span class="w"> </span>-l<span class="w"> </span>list.txt
+</pre></div>
+</div>
+<p>Here <code class="docutils literal notranslate"><span class="pre">-l</span></code> stands for a text file with a list of FITS file name to process.</p>
 </li>
 <li><p>For execting for all FITS files in a directory:</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>start_scales_calib<span class="w"> </span>-d<span class="w"> </span>FULL<span class="w"> </span>PATH
 </pre></div>
 </div>
+<p>Here <code class="docutils literal notranslate"><span class="pre">-d</span></code> stands for a the directory.</p>
 </li>
 </ul>
 </section>
@@ -146,7 +167,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="Primitives.html" class="btn btn-neutral float-left" title="Primitives" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="Running_the_SCALES-DRP_Pipeline.html" class="btn btn-neutral float-right" title="Running the SCALES-DRP Pipeline" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="Running_the_SCALES-DRP_Pipeline.html" class="btn btn-neutral float-right" title="More into the DRP Execution" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
