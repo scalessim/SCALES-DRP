@@ -2,7 +2,9 @@
 # Local junk and large calibration binaries
 *.DS_Store
 **/__pycache__/
-**/logs/
 **/settings.json
 **/*.npz
-**/linearity*.fits
+**/*recmat*
+**/*linearity*
+**/logs
+**/*.pyc
