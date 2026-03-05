@@ -2,7 +2,8 @@ from keckdrpframework.primitives.base_primitive import BasePrimitive
 from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
 
 import numpy as np
-import pkg_resources
+from importlib.resources import files
+from pathlib import Path
 import pickle
 from astropy.io import fits
 import warnings
@@ -325,7 +326,8 @@ class SpectralExtract(BasePrimitive):
         path_used, flat, uflat = _try_dir(os.path.join(os.getcwd(), "redux"))
         # 2) pkg calib if not found
         if flat is None:
-            pkg_dir = pkg_resources.resource_filename('scalesdrp', 'calib/')
+            #pkg_dir = pkg_resources.resource_filename('scalesdrp', 'calib/')
+            pkg_dir = str(files("scalesdrp").joinpath("calib"))+ "/"
             path_used, flat, uflat = _try_dir(pkg_dir)
 
         if flat is None:
@@ -535,7 +537,8 @@ class SpectralExtract(BasePrimitive):
                 'MedRes-M': (50, 60),}
 
             SCALES_DEFAULT_CENTER = (54, 54)
-            calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+            #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+            calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
             readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
             #var_read_vector = (readnoise.flatten().astype(np.float64))**2
             sigma_image = self.action.args.ccddata.uncertainty

@@ -2,7 +2,8 @@ import numpy as np
 from astropy.io import fits
 from tqdm import tqdm
 import os
-import pkg_resources
+from importlib.resources import files
+from pathlib import Path
 ############## create polynomial #############################
 
 def characterize_detector_linearity_full(
@@ -640,7 +641,8 @@ def run_linearity_workflow(science_ramp, linearity_file): #best one
     # 2. GROUPDQ from raw saturation (measured DN)
     group_dq_raw = create_group_dq(science_ramp, sat_map_meas)    # (N,H,W)
 
-    calib_path = pkg_resources.resource_filename('scalesdrp', 'calib/')
+    #calib_path = pkg_resources.resource_filename('scalesdrp', 'calib/')
+    calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
     # 3. Linearity correction and calibration-based cutoff
     sat_dn_meas = None
     with fits.open(calib_path+linearity_file) as hdul:

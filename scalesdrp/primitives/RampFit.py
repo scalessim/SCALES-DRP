@@ -8,7 +8,8 @@ from scipy.optimize import leastsq
 import matplotlib.pyplot as plt
 import time
 import os
-import pkg_resources
+from importlib.resources import files
+from pathlib import Path
 from scipy.signal import savgol_filter
 import scalesdrp.primitives.reference as reference #1/f and reference pixel correction
 import scalesdrp.primitives.linearity as linearity #linearity correction
@@ -651,8 +652,8 @@ class RampFit(BasePrimitive):
         if imtype =='OBJECT':
             total_exptime = self.action.args.ccddata.header['EXPTIME']
             obsmode = self.action.args.ccddata.header['CAMERA']
-            calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-        
+            #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+            calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
             if obsmode =='Im':
                 SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
 

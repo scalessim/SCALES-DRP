@@ -16,7 +16,8 @@ import argparse
 import sys
 import traceback
 import os
-import pkg_resources
+from importlib.resources import files
+from pathlib import Path
 import psutil
 import shutil
 
@@ -98,8 +99,9 @@ def main():
             print("Config file scales_quicklook.cfg already exists in current dir")
         else:
             scales_config_file = 'configs/scales_quicklook.cfg'
-            scales_config_fullpath = pkg_resources.resource_filename(
-                pkg, scales_config_file)
+            #scales_config_fullpath = pkg_resources.resource_filename(
+            #    pkg, scales_config_file)
+            scales_config_fullpath = str(files(pkg).joinpath(scales_config_file))
             shutil.copy(scales_config_fullpath, os.getcwd())
             print("Copied scales_quicklook.cfg into current dir.  Edit and use with -c")
         sys.exit(0)
@@ -118,19 +120,20 @@ def main():
     check_directory("plots")
 
     framework_config_file = "configs/framework.cfg"
-    framework_config_fullpath = \
-        pkg_resources.resource_filename(pkg, framework_config_file)
-
+    #framework_config_fullpath = \
+    #    pkg_resources.resource_filename(pkg, framework_config_file)
+    framework_config_fullpath = str(files(pkg).joinpath(framework_config_file))
     framework_logcfg_file = 'configs/logger.cfg'
-    framework_logcfg_fullpath = \
-        pkg_resources.resource_filename(pkg, framework_logcfg_file)
-
+    #framework_logcfg_fullpath = \
+    #    pkg_resources.resource_filename(pkg, framework_logcfg_file)
+    framework_logcfg_fullpath = str(files(pkg).joinpath(framework_logcfg_file))
     # add scales specific config files # make changes here to allow this file
     # to be loaded from the command line
     if args.SCALES_config_file is None:
         scales_config_file = 'configs/scales_quicklook.cfg'
-        scales_config_fullpath = pkg_resources.resource_filename(
-            pkg, scales_config_file)
+        #scales_config_fullpath = pkg_resources.resource_filename(
+        #    pkg, scales_config_file)
+        scales_config_fullpath = str(files(pkg).joinpath(scales_config_file))
         scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
     else:
         # scales_config_fullpath = os.path.abspath(args.scales_config_file)

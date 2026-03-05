@@ -10,7 +10,8 @@ from scipy.stats import median_abs_deviation
 import time
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
-import pkg_resources
+from importlib.resources import files
+from pathlib import Path
 import time
 from scipy import sparse
 
@@ -94,7 +95,8 @@ def apply_full_correction(image_to_correct,obsmode, pass1_kwargs={}):
     Applies the improved full two-pass BPM correction workflow.
     """
     t1=time.time()
-    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+    #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+    calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
 
     if obsmode=='IMAGING':
         master_bpm = fits.getdata(calib_path+'bpm_new_5.fits').astype(bool)
@@ -217,7 +219,8 @@ def generate_bpm_relative(
 #############R.matrix based .npz FILE #########################
 
 def bpm_correction(obsmode):
-    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+    #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+    calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
     if obsmode=='IMAGING':
         bpmap = pyfits.getdata(calib_path+'bpm_new_5.fits')
     elif obsmode=='IFS':

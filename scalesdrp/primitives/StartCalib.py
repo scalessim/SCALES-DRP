@@ -7,9 +7,10 @@ import scalesdrp.primitives.bpm_correction as bpm #bpm correction
 import pandas as pd
 import numpy as np
 import pickle
+from importlib.resources import files
+from pathlib import Path
 from astropy.io import fits
 import warnings
-import pkg_resources
 from scipy import sparse
 import astropy.io.fits as pyfits
 from scipy.optimize import curve_fit
@@ -25,7 +26,6 @@ from scipy.ndimage import median_filter
 from astropy.stats import sigma_clipped_stats
 from astropy.convolution import convolve as astropy_convolve
 from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
-import pkg_resources
 from scipy.ndimage import distance_transform_edt, gaussian_filter
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
 from tqdm import tqdm
@@ -833,7 +833,8 @@ class StartCalib(BasePrimitive):
                     except Exception as e:
                         self.logger.error(f"Failed to read {filename}: {e}")
 
-                    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+                    #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+                    calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
                     if obsmode =='Im':
                         SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
 
@@ -960,7 +961,8 @@ class StartCalib(BasePrimitive):
                     self.logger.info("+++++++++++ Creating master lenslet flat +++++++++++")
                     self.logger.info("+++++++++++ Creating master lenslet flat cube +++++++++++")
 
-                    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+                    #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+                    calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
                     readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
                     var_read_vector = (readnoise.flatten().astype(np.float64))**2
                     GAIN = 1.0#self.action.args.ccddata.header['GAIN']

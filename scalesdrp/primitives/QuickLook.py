@@ -8,7 +8,8 @@ import numpy as np
 from astropy.io import fits
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-import pkg_resources
+from importlib.resources import files
+from pathlib import Path
 import os
 from scipy.optimize import minimize
 from scipy import sparse
@@ -290,7 +291,8 @@ class QuickLook(BasePrimitive):
         output_dir = os.path.dirname(input_data)
         filename = os.path.basename(input_data)
 
-        calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+        calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
+        #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
         SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits') #IFS readnoise map
         read_noise_var = SIG_map_scaled.flatten().astype(np.float64)**2
         with fits.open(input_data) as hdul:
@@ -318,12 +320,12 @@ class QuickLook(BasePrimitive):
                         raise ValueError("No data in primary HDU.")
                     elif data_1.ndim == 2:
                         self.logger.info("Found a single frame.")
-                        data_11 = self.swap_odd_even_columns(data_1,do_swap=True)
-                        slope_filled1 = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
+                        data_11 = self.swap_odd_even_columns(data_1,do_swap=False)
+                        slope_filled1 = reference.reffix_hxrg(data_11, nchans=4, fixcol=False)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
 
                     elif data_1.ndim == 3:
-                        data_11 = self.swap_odd_even_columns(data_1,do_swap=True)
+                        data_11 = self.swap_odd_even_columns(data_1,do_swap=False)
                         img_corr = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
                         slope_filled1 = self.iterative_sigma_weighted_ramp_fit(
@@ -340,7 +342,7 @@ class QuickLook(BasePrimitive):
                     if img2d.ndim != 2 or ramp3d.ndim != 3:
                         raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
 
-                    data_11 = self.swap_odd_even_columns(ramp3d,do_swap=True)
+                    data_11 = self.swap_odd_even_columns(ramp3d,do_swap=False)
                     img_corr = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
                     self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
                     slope_filled1 = self.iterative_sigma_weighted_ramp_fit(

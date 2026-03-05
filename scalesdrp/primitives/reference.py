@@ -3,7 +3,7 @@ import numpy as np
 from astropy.io import fits
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-import pkg_resources
+
 import os
 from scipy.optimize import minimize
 import astropy.io.fits as pyfits
@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import time
 import scalesdrp.primitives.robust as robust
 from scipy.optimize import leastsq
-import pkg_resources
 from scipy.signal import savgol_filter
 
 
@@ -27,14 +26,14 @@ def reffix_hxrg(cube, nchans=4, in_place=False, fixcol=True, **kwargs):
         arr = arr.copy()
 
     # 1) Channel bias (use altcol=False if you're doing ACN next)
-    arr = reffix_amps(arr, nchans=nchans, in_place=True, **kwargs)
+    arr = reffix_amps(arr, nchans=nchans, in_place=False, **kwargs)
 
     # 2) ACN (even/odd row-dependent using side refs)
-    arr = acn_filter(arr, in_place=True, **kwargs)
+    arr = acn_filter(arr, in_place=False, **kwargs)
 
     # 3) 1/f row stripes (side refs, common-mode)
     if fixcol:
-        arr = ref_filter(arr, nchans=nchans, in_place=True, **kwargs)
+        arr = ref_filter(arr, nchans=nchans, in_place=False, **kwargs)
 
     return arr
 
@@ -164,7 +163,7 @@ def calc_avg_amps_old(refs_all, data_shape, nchans=4, altcol=True, mean_func=rob
         return np.array(refs_amps_avg)
 
 ################################## NEW acn ################################        
-def reffix_amps(cube, nchans=4, in_place=True, altcol=False, supermean=False,
+def reffix_amps(cube, nchans=4, in_place=True, altcol=True, supermean=False,
     top_ref=True, bot_ref=True, ntop=4, nbot=4, **kwargs):
     
     """Correct amplifier offsets
@@ -259,7 +258,7 @@ def reffix_amps(cube, nchans=4, in_place=True, altcol=False, supermean=False,
     return cube
 
 
-def calc_avg_amps(refs_all, data_shape, nchans=4, altcol=False,
+def calc_avg_amps(refs_all, data_shape, nchans=4, altcol=True,
                   mean_func=robust.mean, **kwargs):
     """
     Compute average reference values per amplifier.
@@ -297,7 +296,7 @@ def calc_avg_amps(refs_all, data_shape, nchans=4, altcol=False,
             # Even and odd columns within this channel
             refs_ch1 = refs_all[:, :, ich1:ich2-1:2].reshape((nz, -1))  # even
             refs_ch2 = refs_all[:, :, ich1+1:ich2:2].reshape((nz, -1))  # odd
-
+            #shape (nz, nref, chsize/2) ==> (nz, Npixels)
             chavg1 = mean_func(refs_ch1, axis=1)  # (nz,)
             chavg2 = mean_func(refs_ch2, axis=1)  # (nz,)
 
