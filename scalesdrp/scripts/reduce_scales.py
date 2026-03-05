@@ -147,12 +147,13 @@ def main():
 
     framework_logcfg_file = 'configs/logger.cfg'
     framework_logcfg_fullpath = get_resource_path(pkg, framework_logcfg_file)
+    framework_logcfg_fullpath = str(framework_logcfg_fullpath)
 
     # add scales specific config files # make changes here to allow this file
     # to be loaded from the command line
     if args.SCALES_config_file is None:
         scales_config_file = 'configs/scales.cfg'
-        scales_config_fullpath = get_resource_path(pkg, scales_config_file)
+        scales_config_fullpath = str(files(pkg).joinpath(scales_config_file))
         scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
     else:
         scales_config_fullpath = os.path.abspath(args.scales_config_file)
