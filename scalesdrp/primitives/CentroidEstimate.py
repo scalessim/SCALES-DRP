@@ -7,7 +7,6 @@ import pickle
 from astropy.io import fits
 import warnings
 #warnings.filterwarnings("ignore", category=RuntimeWarning)
-import pkg_resources
 from scipy import sparse
 import astropy.io.fits as pyfits
 from scipy.optimize import curve_fit

@@ -8,7 +8,6 @@ import numpy as np
 from astropy.io import fits
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-import pkg_resources
 import os
 from scipy.optimize import minimize
 from scipy import sparse
@@ -20,6 +19,7 @@ from scipy.optimize import leastsq
 from scipy.signal import savgol_filter
 
 from scalesdrp.core.scales_proctab import Proctab
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
@@ -290,8 +290,10 @@ class QuickLook(BasePrimitive):
         output_dir = os.path.dirname(input_data)
         filename = os.path.basename(input_data)
 
-        calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits') #IFS readnoise map
+        package = __name__.split(',')[0]
+        filepath = 'calib/sim_readnoise.fits'
+        calib_path = get_resource_path(package, filepath)
+        SIG_map_scaled = fits.getdata(calib_path) #IFS readnoise map
         read_noise_var = SIG_map_scaled.flatten().astype(np.float64)**2
         with fits.open(input_data) as hdul:
             hdr = hdul[0].header

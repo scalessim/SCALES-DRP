@@ -9,7 +9,6 @@ import numpy as np
 import pickle
 from astropy.io import fits
 import warnings
-import pkg_resources
 from scipy import sparse
 import astropy.io.fits as pyfits
 from scipy.optimize import curve_fit
@@ -25,12 +24,12 @@ from scipy.ndimage import median_filter
 from astropy.stats import sigma_clipped_stats
 from astropy.convolution import convolve as astropy_convolve
 from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
-import pkg_resources
 from scipy.ndimage import distance_transform_edt, gaussian_filter
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
 from tqdm import tqdm
 from scalesdrp.primitives.linearity import DQ_FLAGS
 from scalesdrp.core.scales_proctab import Proctab
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
@@ -833,12 +832,16 @@ class StartCalib(BasePrimitive):
                     except Exception as e:
                         self.logger.error(f"Failed to read {filename}: {e}")
 
-                    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+                    package = __name__.split('.')[0]
                     if obsmode =='Im':
-                        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                        filepath = 'calib/sim_readnoise.fits'
+                        calib_path = get_resource_path(package, filepath)
+                        SIG_map_scaled = fits.getdata(calib_path)
 
                     elif obsmode =='IFS':
-                        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                        filepath = 'calib/sim_readnoise.fits'
+                        calib_path = get_resource_path(package, filepath)
+                        SIG_map_scaled = fits.getdata(calib_path)
 
                     self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1,do_swap=True)
@@ -960,8 +963,10 @@ class StartCalib(BasePrimitive):
                     self.logger.info("+++++++++++ Creating master lenslet flat +++++++++++")
                     self.logger.info("+++++++++++ Creating master lenslet flat cube +++++++++++")
 
-                    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-                    readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
+                    package = __name__.split('.')[0]
+                    filepath = 'calib/sim_readnoise.fits'
+                    calib_path = get_resource_path(package, filepath)
+                    readnoise = fits.getdata(calib_path)
                     var_read_vector = (readnoise.flatten().astype(np.float64))**2
                     GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             

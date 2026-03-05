@@ -9,7 +9,6 @@ from datetime import datetime
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 import os
 import logging
-import pkg_resources
 import subprocess
 from pathlib import Path
 

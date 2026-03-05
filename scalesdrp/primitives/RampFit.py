@@ -8,7 +8,6 @@ from scipy.optimize import leastsq
 import matplotlib.pyplot as plt
 import time
 import os
-import pkg_resources
 from scipy.signal import savgol_filter
 import scalesdrp.primitives.reference as reference #1/f and reference pixel correction
 import scalesdrp.primitives.linearity as linearity #linearity correction
@@ -18,6 +17,7 @@ from astropy.nddata import StdDevUncertainty
 from scalesdrp.primitives.linearity import DQ_FLAGS
 
 from scalesdrp.core.scales_proctab import Proctab
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
@@ -651,13 +651,17 @@ class RampFit(BasePrimitive):
         if imtype =='OBJECT':
             total_exptime = self.action.args.ccddata.header['EXPTIME']
             obsmode = self.action.args.ccddata.header['CAMERA']
-            calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-        
+
+            package = __name__.split('.')[0]
             if obsmode =='Im':
-                SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                filepath = 'calib/sim_readnoise.fits'
+                calib_path = get_resource_path(package, filepath)
+                SIG_map_scaled = fits.getdata(calib_path)
 
             elif obsmode =='IFS':
-                SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                filepath = 'calib/sim_readnoise.fits'
+                calib_path = get_resource_path(package, filepath)
+                SIG_map_scaled = fits.getdata(calib_path)
 
             input_data = self.action.args.ccddata.data
             #print(input_data.shape)

@@ -1,7 +1,7 @@
 import numpy as np
 import os
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 from tqdm import tqdm
-import pkg_resources
 from astropy.io import fits
 import time
 ############# create linearity correction coefficents #################
@@ -532,12 +532,14 @@ def run_linearity_workflow(
     # 2. Build initial DQ (based on RAW saturation)
     group_dq_raw = create_group_dq(science_ramp, sat_map)
 
-    calib_path = pkg_resources.resource_filename('scalesdrp', 'calib/')
+    package = __name__.split('.')[0]
+    filepath = 'calib/%s' % linearity_file
+    linearity_path = get_resource_path.(package, filepath)
 
     sat_dn = None  # will be filled if SATURATION HDU exists
 
     # 3. Apply non-linearity correction + pull SATURATION while file is open
-    with fits.open(calib_path + linearity_file) as hdul:
+    with fits.open(linearity_path) as hdul:
         corrected_ramp, pixel_dq, cutoff_read_map = apply_linearity_correction_twopart_final(
             science_ramp,
             group_dq_raw,

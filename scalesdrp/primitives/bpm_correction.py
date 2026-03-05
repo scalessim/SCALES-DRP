@@ -10,7 +10,7 @@ from scipy.stats import median_abs_deviation
 import time
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
-import pkg_resources
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import time
 from scipy import sparse
 
@@ -94,13 +94,17 @@ def apply_full_correction(image_to_correct,obsmode, pass1_kwargs={}):
     Applies the improved full two-pass BPM correction workflow.
     """
     t1=time.time()
-    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
 
+    package = __name__.split('.')[0]
     if obsmode=='IMAGING':
-        master_bpm = fits.getdata(calib_path+'bpm_new_5.fits').astype(bool)
+        filepath = 'calib/bpm_new_5.fits'
+        calib_path = get_resource_path(package, filepath)
+        master_bpm = fits.getdata(calib_path).astype(bool)
         #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
     else:
-        master_bpm = fits.getdata(calib_path+'cd3_bpm_ifs_5mhz.fits').astype(bool)
+        filepath = 'calib/cd3_bpm_ifs_5mhz.fits'
+        calib_path = get_resource_path(package, filepath)
+        master_bpm = fits.getdata(calib_path).astype(bool)
         #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
 
     corrected_pass1, large_defects_mask = correct_local_defects_pass1_improved(
@@ -217,11 +221,15 @@ def generate_bpm_relative(
 #############R.matrix based .npz FILE #########################
 
 def bpm_correction(obsmode):
-    calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
+    package = __name__.split('.')[0]
     if obsmode=='IMAGING':
-        bpmap = pyfits.getdata(calib_path+'bpm_new_5.fits')
+        filepath = 'calib/bpm_new_5.fits'
+        calib_path = get_resource_path(package, filepath)
+        bpmap = pyfits.getdata(calib_path)
     elif obsmode=='IFS':
-        bpmap = pyfits.getdata(calib_path+'cd3_bpm_ifs_5mhz.fits')
+        filepath = 'calib/cd3_bpm_ifs_5mhz.fits'
+        calib_path = get_resource_path(package, filepath)
+        bpmap = pyfits.getdata(calib_path)
 
     ypix = bpmap.shape[0]
     xpix = bpmap.shape[1]

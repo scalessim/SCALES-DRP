@@ -3,7 +3,6 @@ import numpy as np
 from astropy.io import fits
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-import pkg_resources
 import os
 from scipy.optimize import minimize
 import astropy.io.fits as pyfits
@@ -12,7 +11,6 @@ import matplotlib.pyplot as plt
 import time
 import scalesdrp.primitives.robust as robust
 from scipy.optimize import leastsq
-import pkg_resources
 from scipy.signal import savgol_filter
 
 
