@@ -38,10 +38,10 @@ ref_index        = ">=1.0,<2.0"
 pyregion         = ">=2.0,<3.0"
 
 [tool.poetry.scripts]
-reduce_scales    = "scalesdrp.scripts.reduce_scales:main"
-scales_calib     = "scalesdrp.scripts.scales_calib:main"
-scales_quicklook = "scalesdrp.scripts.scales_quicklook:main"
-start_scales_rti = "scalesdrp.scripts.scales_rti:main"
+start_scales_reduce    = "scalesdrp.scripts.reduce_scales:main"
+start_scales_calib     = "scalesdrp.scripts.scales_calib:main"
+start_scales_quicklook = "scalesdrp.scripts.scales_quicklook:main"
+start_scales_rti       = "scalesdrp.scripts.scales_rti:main"
 
 [build-system]
 requires      = ["poetry-core>=2.0.0,<3.0.0"]
