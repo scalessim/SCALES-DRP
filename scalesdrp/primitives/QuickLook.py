@@ -290,10 +290,10 @@ class QuickLook(BasePrimitive):
         output_dir = os.path.dirname(input_data)
         filename = os.path.basename(input_data)
 
-        package = __name__.split(',')[0]
-        filepath = 'calib/sim_readnoise.fits'
-        calib_path = get_resource_path(package, filepath)
-        SIG_map_scaled = fits.getdata(calib_path) #IFS readnoise map
+        package = __name__.split('.')[0]
+        calname = 'sim_readnoise.fits'
+        calib_path = get_resource_path(package, 'calib/')
+        SIG_map_scaled = fits.getdata(calib_path/calname) #IFS readnoise map
         read_noise_var = SIG_map_scaled.flatten().astype(np.float64)**2
         with fits.open(input_data) as hdul:
             hdr = hdul[0].header
@@ -353,7 +353,7 @@ class QuickLook(BasePrimitive):
 
         if obs_mode == "Im":
             self.logger.info("BPM correction started")
-            rmat = sparse.load_npz(calib_path+'bpmat_img.npz')
+            rmat = sparse.load_npz(calib_path/'bpmat_img.npz')
             slope_filled2 = rmat*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
             slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
@@ -368,7 +368,7 @@ class QuickLook(BasePrimitive):
 
         if obs_mode == "IFS":
             self.logger.info("BPM correction started")
-            rmat = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+            rmat = sparse.load_npz(calib_path/'bpmat_ifs.npz')
             slope_filled2 = rmat*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
             slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
@@ -389,7 +389,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "K_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix = load_npz(calib_path+'K_QL_rectmat_lowres.npz')
+                    R_matrix = load_npz(calib_path/'K_QL_rectmat_lowres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,
@@ -412,7 +412,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "L_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix = load_npz(calib_path+'L_QL_rectmat_lowres.npz')
+                    R_matrix = load_npz(calib_path/'L_QL_rectmat_lowres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,
@@ -435,7 +435,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "M_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix = load_npz(calib_path+'M_QL_rectmat_lowres.npz')
+                    R_matrix = load_npz(calib_path/'M_QL_rectmat_lowres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,
@@ -457,7 +457,7 @@ class QuickLook(BasePrimitive):
                     slope_filled is not None
                     and os.path.exists(os.path.join(calib_path, "SED_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
-                    R_matrix = load_npz(calib_path+'SED_QL_rectmat_lowres.npz')
+                    R_matrix = load_npz(calib_path/'SED_QL_rectmat_lowres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,
@@ -480,7 +480,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "KL_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix = load_npz(calib_path+'KL_QL_rectmat_lowres.npz')
+                    R_matrix = load_npz(calib_path/'KL_QL_rectmat_lowres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,
@@ -503,7 +503,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "PAH_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix = load_npz(calib_path+'PAH_QL_rectmat_lowres.npz')
+                    R_matrix = load_npz(calib_path/'PAH_QL_rectmat_lowres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,
@@ -526,7 +526,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "K_QL_rectmat_medres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix = load_npz(calib_path+'K_QL_rectmat_medres.npz')
+                    R_matrix = load_npz(calib_path/'K_QL_rectmat_medres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,
@@ -549,7 +549,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "L_QL_rectmat_medres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix = load_npz(calib_path+'L_QL_rectmat_medres.npz')
+                    R_matrix = load_npz(calib_path/'L_QL_rectmat_medres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,
@@ -572,7 +572,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "M_QL_rectmat_medres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix = load_npz(calib_path+'M_QL_rectmat_medres.npz')
+                    R_matrix = load_npz(calib_path/'M_QL_rectmat_medres.npz')
                     cube1,error1 = self.optimal_extract_with_error(
                         R_matrix,
                         slope_filled,

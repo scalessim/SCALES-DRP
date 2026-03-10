@@ -836,12 +836,12 @@ class StartCalib(BasePrimitive):
                     if obsmode =='Im':
                         filepath = 'calib/sim_readnoise.fits'
                         calib_path = get_resource_path(package, filepath)
-                        SIG_map_scaled = fits.getdata(calib_path)
+                        SIG_map_scaled = fits.getdata(str(calib_path))
 
                     elif obsmode =='IFS':
                         filepath = 'calib/sim_readnoise.fits'
                         calib_path = get_resource_path(package, filepath)
-                        SIG_map_scaled = fits.getdata(calib_path)
+                        SIG_map_scaled = fits.getdata(str(calib_path))
 
                     self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1,do_swap=True)
@@ -966,7 +966,7 @@ class StartCalib(BasePrimitive):
                     package = __name__.split('.')[0]
                     filepath = 'calib/sim_readnoise.fits'
                     calib_path = get_resource_path(package, filepath)
-                    readnoise = fits.getdata(calib_path)
+                    readnoise = fits.getdata(str(calib_path))
                     var_read_vector = (readnoise.flatten().astype(np.float64))**2
                     GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             

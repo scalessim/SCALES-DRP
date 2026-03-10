@@ -104,16 +104,18 @@ def main():
 
     framework_config_file = "configs/framework.cfg"
     framework_config_fullpath = get_resource_path(pkg, framework_config_file)
+    framework_config_fullpath = str(framework_config_fullpath)
 
     framework_logcfg_file = 'configs/logger.cfg'
     framework_logcfg_fullpath = get_resource_path(pkg, framework_logcfg_file)
+    framework_logcfg_fullpath = str(framework_logcfg_fullpath)
 
     # add scales specific config files # make changes here to allow this file
     # to be loaded from the command line
     if args.SCALES_config_file is None:
         scales_config_file = 'configs/scales_calib.cfg'
         scales_config_fullpath = get_resource_path(pkg, scales_config_file)
-        scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
+        scales_config = ConfigClass(str(scales_config_fullpath), default_section='SCALES')
     else:
         # scales_config_fullpath = os.path.abspath(args.scales_config_file)
         scales_config = ConfigClass(args.SCALES_config_file, default_section='SCALES')
@@ -152,7 +154,7 @@ def main():
         else:
             scales_config_file = 'configs/scales_calib.cfg'
             scales_config_fullpath = get_resource_path(pkg, scales_config_file)
-            shutil.copy(scales_config_fullpath, os.getcwd())
+            shutil.copy(str(scales_config_fullpath), os.getcwd())
             print("Copied scales_calib.cfg into current dir.  Edit and use with -c")
         sys.exit(0)
     

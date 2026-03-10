@@ -3,9 +3,11 @@ import os
 
 def get_resource_path(pkg, path):
     '''Get the full path to a resource file within a package.'''
-    full_path = importlib_resources.files(pkg) / path
+    ref = importlib_resources.files(pkg) / path
 
-    if os.path.exists(full_path):
-        return full_path
-    else:
-        raise FileNotFoundError("Resource file %s not found in package %s" % path, pkg)
+    with importlib_resources.as_file(ref) as full_path:
+        if os.path.exists(full_path):
+            return full_path
+        else:
+            print(f'full path is: {full_path}')
+            raise FileNotFoundError(f"Resource file {path} not found in package {pkg}")
