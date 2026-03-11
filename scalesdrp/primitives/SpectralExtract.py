@@ -327,7 +327,7 @@ class SpectralExtract(BasePrimitive):
         if flat is None:
             package = __name__.split('.')[0]
             filedir = 'calib/'
-            pkg_dir = get_resource_path(filename, filedir)
+            pkg_dir = str(get_resource_path(package, filedir))
             path_used, flat, uflat = _try_dir(pkg_dir)
 
         if flat is None:
@@ -538,9 +538,10 @@ class SpectralExtract(BasePrimitive):
 
             SCALES_DEFAULT_CENTER = (54, 54)
             package = __name__.split('.')[0]
-            filepath = 'calib/sim_readnoise.fits'
-            calib_path = get_resource_path(package, filepath)
-            readnoise = fits.getdata(calib_path)
+            filepath = 'calib/'
+            calfile = 'sim_readnoise.fits'
+            calib_path = str(get_resource_path(package, filepath))+'/'
+            readnoise = fits.getdata(calib_path+calfile)
             #var_read_vector = (readnoise.flatten().astype(np.float64))**2
             sigma_image = self.action.args.ccddata.uncertainty
             var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
