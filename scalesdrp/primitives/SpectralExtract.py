@@ -84,7 +84,7 @@ class SpectralExtract(BasePrimitive):
         self.logger.info(f"Optimal extraction finished in {t1:.4f} seconds.")
         return optimized_flux, flux_error
 
-    ############### chi square extraction #########################
+    ############### chi square extraction ############################
 
     def solve_bounded_weighted_nnls(
         self,
@@ -600,17 +600,17 @@ class SpectralExtract(BasePrimitive):
             A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
             A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
 
-            #A_optimal_nnls = self.solve_bounded_weighted_nnls(
-            #    R_for_extract, data_vector_d, var_read_vector, GAIN, A_guess_vector)
+            A_optimal_nnls = self.solve_bounded_weighted_nnls(
+                R_for_extract, data_vector_d, var_read_vector, GAIN, A_guess_vector)
 
-            #Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
+            Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
 
-            #Amp_chi_square_err = self.calculate_error_flux_cube(
-            #    R_matrix=R_for_extract,
-            #    flux_vector_A=A_optimal_nnls,
-            #    var_read_vector=var_read_vector,
-            #    flux_shape_3d=FLUX_SHAPE_3D,
-            #    gain=GAIN)
+            Amp_chi_square_err = self.calculate_error_flux_cube(
+                R_matrix=R_for_extract,
+                flux_vector_A=A_optimal_nnls,
+                var_read_vector=var_read_vector,
+                flux_shape_3d=FLUX_SHAPE_3D,
+                gain=GAIN)
 
             norm_flatlens,norm_flatlens_uncert = self.load_and_normalize_lenslet_flat(ifsmode)
 
@@ -621,17 +621,18 @@ class SpectralExtract(BasePrimitive):
                 norm_flatlens_uncert,
                 imtype='FLATLENS')
 
-            #Amp_chi_square, Amp_chi_square_err = self.apply_flatlens(
-            #    Amp_chi_square,
-            #    Amp_chi_square_err,
-            #    norm_flatlens,
-            #    norm_flatlens_uncert)
+            Amp_chi_square, Amp_chi_square_err = self.apply_flatlens(
+                Amp_chi_square,
+                Amp_chi_square_err,
+                norm_flatlens,
+                norm_flatlens_uncert,
+                imtype='FLATLENS')
 
-            #chi_rslt = CCDData(
-            #    data=Amp_chi_square,
-            #    uncertainty=StdDevUncertainty(Amp_chi_square_err),
-            #    meta=self.action.args.ccddata.header,
-            #    unit='adu')
+            chi_rslt = CCDData(
+                data=Amp_chi_square,
+                uncertainty=StdDevUncertainty(Amp_chi_square_err),
+                meta=self.action.args.ccddata.header,
+                unit='adu')
 
             opt_rslt = CCDData(
                 data=A_opt,
@@ -656,19 +657,19 @@ class SpectralExtract(BasePrimitive):
             self.logger.info(log_string)
 
 
-            #scales_fits_writer(ccddata = chi_rslt, 
-            #    table=self.action.args.table,
-            #    output_file=self.action.args.name,
-            #    output_dir=self.config.instrument.output_directory,
-            #    suffix="chi_cube")
+            scales_fits_writer(ccddata = chi_rslt, 
+                table=self.action.args.table,
+                output_file=self.action.args.name,
+                output_dir=self.config.instrument.output_directory,
+                suffix="chi_cube")
             
-            #self.proctab_update(
-            #    header=self.action.args.ccddata.header,
-            #    output_dir=self.config.instrument.output_directory,
-            #    input_filename=self.action.args.name,
-            #    suffix="_chi_cube",
-            #    frame=None,
-            #    proctab=self.proctab)
+            self.proctab_update(
+                header=self.action.args.ccddata.header,
+                output_dir=self.config.instrument.output_directory,
+                input_filename=self.action.args.name,
+                suffix="_chi_cube",
+                frame=None,
+                proctab=self.proctab)
 
             scales_fits_writer(ccddata = opt_rslt, 
                 table=self.action.args.table,
@@ -683,9 +684,6 @@ class SpectralExtract(BasePrimitive):
                 suffix="_opt_cube",
                 frame=None,
                 proctab=self.proctab)
-        #self.context.proctab.update_proctab(frame=self.action.args.ccddata, suffix="cube", newtype='OBJECT',
-        #        filename=self.action.args.ccddata.header['OFNAME'])
-        #self.context.proctab.write_proctab(
-        #        tfil=self.config.instrument.procfile)
+
         return self.action.args
     # END: class LeastExtract()
