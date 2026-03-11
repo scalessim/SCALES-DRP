@@ -36,6 +36,7 @@ pandas           = ">=1.3.5,<3.0.0"
 matplotlib       = ">=3.9.2,<3.10.0"
 ref_index        = ">=1.0,<2.0"
 pyregion         = ">=2.0,<3.0"
+tqdm             = ">=4.67.3"
 
 [tool.poetry.scripts]
 <<<<<<< HEAD
