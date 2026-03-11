@@ -655,12 +655,12 @@ class RampFit(BasePrimitive):
             package = __name__.split('.')[0]
             if obsmode =='Im':
                 filepath = 'calib/sim_readnoise.fits'
-                calib_path = get_resource_path(package, filepath)
+                calib_path = str(get_resource_path(package, filepath))
                 SIG_map_scaled = fits.getdata(calib_path)
 
             elif obsmode =='IFS':
                 filepath = 'calib/sim_readnoise.fits'
-                calib_path = get_resource_path(package, filepath)
+                calib_path = str(get_resource_path(package, filepath))
                 SIG_map_scaled = fits.getdata(calib_path)
 
             input_data = self.action.args.ccddata.data
