@@ -325,7 +325,6 @@ class SpectralExtract(BasePrimitive):
         path_used, flat, uflat = _try_dir(os.path.join(os.getcwd(), "redux"))
         # 2) pkg calib if not found
         if flat is None:
-
             package = __name__.split('.')[0]
             filedir = 'calib/'
             pkg_dir = get_resource_path(filename, filedir)

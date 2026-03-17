@@ -12,6 +12,7 @@ import logging
 import importlib
 import subprocess
 from pathlib import Path
+from importlib.metadata import version, PackageNotFoundError
 
 logger = logging.getLogger('SCALES')
 

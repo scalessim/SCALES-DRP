@@ -7,6 +7,8 @@ import scalesdrp.primitives.bpm_correction as bpm #bpm correction
 import pandas as pd
 import numpy as np
 import pickle
+from importlib.resources import files
+from pathlib import Path
 from astropy.io import fits
 import warnings
 from scipy import sparse

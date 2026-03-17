@@ -14,6 +14,8 @@ import traceback
 import os
 import psutil
 import shutil
+from importlib.resources import files
+from pathlib import Path
 
 from scalesdrp.pipelines.scales_pipeline import Scales_pipeline
 from scalesdrp.core.scales_proctab import Proctab
