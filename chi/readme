@@ -1,0 +1,31 @@
+Required input files and path :
+
+In the main_nnls_script.py, there are two input files and the corresponding path to be added.
+
+
+1. data_fits_file = 'A_star_nosky_noshot_nodet.fits' #atached here
+
+2. matrix_file = "512_rectmat_1.npz" #attached here
+
+
+
+main_nnls_script.py : 
+
+	This script sets up the environment, prepares the data, calls the compiled parallel function (defined in .pyx, built by setup.py) and then processes and saves the final results. 
+##############################################################
+setup.py :
+
+	$setup.py build_ext --inplace # to generate the .so/.pyd file 
+
+	*This script takes the Cython code (.pyx) and turns it into a compiled, high-performance binary module (.so or .pyd) 
+	
+
+
+################################################################
+
+nnls_cython_module.pyx : 
+	*This will execute the Parallelization, written in Cython
+	*Imports prange from cython.parallel
+	*Defines solve_nnls_flux_cy: A helper function that wraps the call to scipy.optimize.lsq_linear for a single input data vector. 
+	*Defines run_parallel_nnls_cython: This is the main parallel function using prange
+
