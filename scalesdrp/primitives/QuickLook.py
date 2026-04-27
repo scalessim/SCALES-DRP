@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import time
 from scipy.optimize import leastsq
 from scipy.signal import savgol_filter
-
+import scalesdrp.primitives.bpm_correction as bpm #bpm correction
 from scalesdrp.core.scales_proctab import Proctab
 import logging
 log = logging.getLogger("SCALES")
@@ -353,12 +353,21 @@ class QuickLook(BasePrimitive):
 
         if obs_mode == "Im":
             self.logger.info("BPM correction started")
+            #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+            #transient_mask, local_med, local_sigma, sig = bpm.detect_transient_bad_pixels(
+            #    slope_filled1,
+            #    master_bpm=master_bpm,
+            #    kernel_size=5,
+            #    sigma_thresh=7.0,
+            #    return_diagnostics=True)
+            #final_mask = master_bpm | transient_mask
+            #rmat = bpm.bpm_correction(final_mask)
             rmat = sparse.load_npz(calib_path+'bpmat_img.npz')
             slope_filled2 = rmat*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
             slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
             self.fits_writer_steps(
-                data=slope_filled,
+                data=slope_filled1,
                 header=hdr,
                 output_dir=output_dir,
                 input_filename=filename,
@@ -368,10 +377,22 @@ class QuickLook(BasePrimitive):
 
         if obs_mode == "IFS":
             self.logger.info("BPM correction started")
+            #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
+            #transient_mask, local_med, local_sigma, sig = bpm.detect_transient_bad_pixels(
+            #    slope_filled1,
+            #    master_bpm=master_bpm,
+            #    kernel_size=5,
+            #    sigma_thresh=7.0,
+            #    return_diagnostics=True)
+
+            #final_mask = master_bpm | transient_mask
+
+            #rmat = bpm.bpm_correction(final_mask)
             rmat = sparse.load_npz(calib_path+'bpmat_ifs.npz')
             slope_filled2 = rmat*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
             slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
+
             self.fits_writer_steps(
                 data=slope_filled1,
                 header=hdr,
