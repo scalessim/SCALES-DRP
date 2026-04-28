@@ -321,7 +321,7 @@ class QuickLook(BasePrimitive):
                     elif data_1.ndim == 2:
                         self.logger.info("Found a single frame.")
                         data_11 = self.swap_odd_even_columns(data_1,do_swap=False)
-                        slope_filled1 = reference.reffix_hxrg(data_11, nchans=4, fixcol=False)
+                        slope_filled1 = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
 
                     elif data_1.ndim == 3:
@@ -367,7 +367,7 @@ class QuickLook(BasePrimitive):
             slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
             self.fits_writer_steps(
-                data=slope_filled1,
+                data=slope_filled,
                 header=hdr,
                 output_dir=output_dir,
                 input_filename=filename,
@@ -394,7 +394,7 @@ class QuickLook(BasePrimitive):
             self.logger.info("BPM correction completed")
 
             self.fits_writer_steps(
-                data=slope_filled1,
+                data=slope_filled,
                 header=hdr,
                 output_dir=output_dir,
                 input_filename=filename,
