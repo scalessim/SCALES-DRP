@@ -198,71 +198,269 @@ class SpectralExtract(BasePrimitive):
         except (u.UnitsError, ValueError) as e:
             raise ValueError(f"Could not parse coordinate string '{coord_val}'. Error: {e}")
 
-    def create_wcs_flexible(
+    def create_scales_wcs(
         self,
         cube_shape: tuple,
         header: fits.Header,
-        center_map: dict,
-        default_center_yx: tuple) -> WCS:
+        center_map_is_zero_indexed: bool = True):
         """
-        Creates a standard FITS WCS object for a generic IFU data cube,
-        robustly handling different input formats and keywords.
-        This function automatically parses various RA/Dec formats and provides
-        sensible defaults for optional FITS keywords.
-        Args:
-            cube_shape (tuple): The (n_wave, ny, nx) shape of the data cube.
-            header (fits.Header): The FITS header of the observation.
-            center_map (dict): A case-insensitive dictionary mapping filter names
-            to their (y, x) reference pixel coordinates.
-            default_center_yx (tuple): The default (y, x) reference pixel to use if
-            the filter is not found in the center_map.
-        Returns:
-            astropy.wcs.WCS: A fully constructed WCS object.
-            Raises ValueError if essential keywords are missing.
+        Create PC + CDELT WCS for a SCALES IFS cube.
+
+        Cube shape:
+            cube_shape = (n_wave, ny, nx)
+
+        WCS convention:
+            Axis 1 = RA
+            Axis 2 = DEC
+            Axis 3 = wavelength
+
+        Wavelength unit:
+            CUNIT3 = 'um'
+
+        Pipeline-readable wavelength keywords:
+            WAVSTART = wavelength start in micron
+            WAVEND   = wavelength end in micron
+            DWAVE    = wavelength step in micron/pixel
         """
-        self.logger.info("Creating Flexible WCS for IFU data cube.")
-        required_keys = ['RA', 'DEC', 'PIXSCALE']
-        for key in required_keys:
+        SCALES_PLATE_SCALE_ARCSEC = 0.02
+
+        #order (y,x)
+        center_map = {
+            "LowRes-K": (54, 54),
+            "LowRes-L":   (50, 60),
+            "LowRes-M":   (50, 60),
+            "LowRes-SED":   (50, 60),
+            "LowRes-KL": (50, 60),
+            "LowRes-PAH": (50, 60),
+            "MedRes-K":   (50, 60),
+            "MedRes-L":   (50, 60),
+            "MedRes-M":   (50, 60),
+        }
+
+        default_center_yx = (54, 54)
+
+
+        wave_config_um = {
+            "LowRes-K": {"start": 2.0,  "end": 5.0},
+            "LowRes-L":   {"start": 1.95, "end": 2.45},
+            "LowRes-M":   {"start": 2.9,  "end": 4.15},
+            "LowRes-SED":   {"start": 4.5,  "end": 5.2},
+            "LowRes-KL": {"start": 2.0,  "end": 3.7},
+            "LowRes-PAH": {"start": 3.1,  "end": 3.5},
+            "MedRes-K":   {"start": 2.0,  "end": 2.4},
+            "MedRes-L":   {"start": 2.9,  "end": 4.15},
+            "MedRes-M":   {"start": 4.5,  "end": 5.2},
+        }
+
+        n_wave, ny, nx = cube_shape
+
+        for key in ["RA", "DEC"]:
             if key not in header:
-                raise ValueError(f"Essential FITS keyword '{key}' is missing from the header.")
-        try:
-            crval_ra = self._parse_sky_coord(header['RA'], is_ra=True)
-            crval_dec = self._parse_sky_coord(header['DEC'])
-        except ValueError as e:
-            raise ValueError(f"Failed to create WCS due to coordinate parsing error: {e}")
-        pixel_scale_arcsec = float(header['PIXSCALE'])
-        position_angle_deg = float(header.get('PA', 0.0)) # Default PA to 0 if not present
-        crval_wave = float(header.get('CRVAL1', header.get('CRVAL3', 1.0)))
-        cdelt_wave = float(header.get('CDELT1', header.get('CDELT3', header.get('CD3_3', 1.0))))
-        crpix_wave = float(header.get('CRPIX1', header.get('CRPIX3', 1.0)))
-        cunit_wave = header.get('CUNIT3', header.get('CUNIT1', 'nm'))
-        filter_name = header.get('FILTER', 'default').strip().lower()
+                raise ValueError(f"Essential FITS keyword '{key}' is missing.")
+
+        # convertd ra and dec into degrees
+        crval_ra = self._parse_sky_coord(header["RA"], is_ra=True)
+        crval_dec = self._parse_sky_coord(header["DEC"], is_ra=False)
+
+        # Spatial scale to degrees
+        pixel_scale_deg = SCALES_PLATE_SCALE_ARCSEC / 3600.0
+
+        # Position angle from degrees to radians
+        pa_deg = float(header.get("PA", header.get("PARANG", 0.0)))
+        pa_rad = np.deg2rad(pa_deg)
+
+        cos_pa = np.cos(pa_rad)
+        sin_pa = np.sin(pa_rad)
+
+        # SCALES mode
+        ifs_mode = header.get("IFSMODE", header.get("FILTER", "default")).strip()
+
+        # Reference spatial pixel (IFSMODE name case insensitive)
         center_map_lower = {k.lower(): v for k, v in center_map.items()}
-        crpix_sky_yx = center_map_lower.get(filter_name, default_center_yx)
-        crpix_y, crpix_x = crpix_sky_yx
+        crpix_y, crpix_x = center_map_lower.get(
+            ifs_mode.lower(),
+            default_center_yx,
+        )
+
+        # FITS CRPIX is 1-indexed
+        if center_map_is_zero_indexed:
+            crpix_x += 1
+            crpix_y += 1
+
+        # Wavelength range in microns
+        wave_cfg = wave_config_um.get(ifs_mode)
+
+        if wave_cfg is not None:
+            wavstart_um = float(wave_cfg["start"])
+            wavend_um = float(wave_cfg["end"])
+        else:
+            wavstart_um = float(header.get("WAVSTART", 2.0))
+            wavend_um = float(header.get("WAVEND", wavstart_um + n_wave - 1))
+
+        if n_wave > 1:
+            dwave_um = (wavend_um - wavstart_um) / (n_wave - 1)
+        else:
+            dwave_um = 1.0
+
+        crpix_wave = 1.0
+
+        # --------------------------------------------------
+        # PC + CDELT WCS
+        # --------------------------------------------------
+        # CDELT carries pixel scale.
+        # PC carries rotation and axis coupling.
+        #
+        # Negative CDELT1 follows the usual astronomical convention:
+        # increasing x corresponds to decreasing RA.
+        # --------------------------------------------------
+
         wcs_dict = {
-            'CTYPE1': 'RA---TAN', 'CUNIT1': 'deg', 'CRVAL1': crval_ra,  'CRPIX1': crpix_x,
-            'CTYPE2': 'DEC--TAN', 'CUNIT2': 'deg', 'CRVAL2': crval_dec, 'CRPIX2': crpix_y,
-            'CTYPE3': 'WAVE',     'CUNIT3': cunit_wave,'CRVAL3': crval_wave,'CRPIX3': crpix_wave}
-    
-        scale_deg = pixel_scale_arcsec / 3600.0
-        pa_rad = np.deg2rad(position_angle_deg)
-        cos_pa, sin_pa = np.cos(pa_rad), np.sin(pa_rad)
-    
-        wcs_dict['CDELT1'] = -scale_deg
-        wcs_dict['CDELT2'] = scale_deg
-        wcs_dict['CDELT3'] = cdelt_wave
-    
-        wcs_dict['PC1_1'] = cos_pa
-        wcs_dict['PC1_2'] = -sin_pa
-        wcs_dict['PC2_1'] = sin_pa
-        wcs_dict['PC2_2'] = cos_pa
-        
-        wcs_dict.update({'PC1_3': 0, 'PC2_3': 0, 'PC3_1': 0, 'PC3_2': 0, 'PC3_3': 1})
+            "WCSAXES": 3,
+
+            "CTYPE1": "RA---TAN",#Axis 1 is right ascension with tangent-plane projection.
+            "CTYPE2": "DEC--TAN",#Axis 2 is declination with tangent-plane projection.
+            "CTYPE3": "WAVE", #Axis 3 wavelength
+
+            "CUNIT1": "deg",# RA in degrees
+            "CUNIT2": "deg",# DEC in degrees
+            "CUNIT3": "um", # wavelength in micro meters
+
+            "CRVAL1": crval_ra,#these are the world coordinates of the reference pixel
+            "CRVAL2": crval_dec,
+            "CRVAL3": wavstart_um,
+
+            "CRPIX1": crpix_x,#reference pixel coordinates corresponding to CRVAL
+            "CRPIX2": crpix_y,
+            "CRPIX3": crpix_wave,
+            #The negative sign is standard for RA because increasing image
+            #x usually corresponds to decreasing RA on the sky.
+            "CDELT1": -pixel_scale_deg, #coordinate increment per pixel
+            "CDELT2":  pixel_scale_deg, #dec increaes with y
+            "CDELT3":  dwave_um, #wavelength increment
+
+            "PC1_1": cos_pa, #rotation matrix for the spatial axis
+            "PC1_2": -sin_pa,
+            "PC1_3": 0.0,
+
+            "PC2_1": sin_pa, #rotation matrix for the spatial axis
+            "PC2_2": cos_pa,
+            "PC2_3": 0.0,
+
+            "PC3_1": 0.0, #Spectral PC term
+            "PC3_2": 0.0,
+            "PC3_3": 1.0,
+        }
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", fits.verify.VerifyWarning)
-            w = WCS(wcs_dict, naxis=3)
-        return w
+            wcs = WCS(wcs_dict, naxis=3)
+
+        wave_info = {
+            "IFSMODE": ifs_mode,
+            "WAVSTART": wavstart_um,
+            "WAVEND": wavend_um,
+            "DWAVE": dwave_um,
+            "WAVEUNIT": "um",
+        }
+
+        return wcs, wave_info
+
+    def wcs_header_update(
+        self,
+        data_cube,
+        input_header: fits.Header,
+        wcs: WCS,
+        wave_info: dict,
+    ):
+        """
+        Write SCALES cube with clean WCS.
+
+        Final written spectral WCS is forced to microns so DS9 displays
+        wavelength slider values in um.
+        """
+        SCALES_PLATE_SCALE_ARCSEC =0.02
+        output_header = input_header.copy()
+
+        # Remove old/conflicting WCS first
+        #output_header = remove_old_wcs_keywords(output_header)
+
+        # Add WCS generated by Astropy
+        output_header.update(wcs.to_header())
+
+        # --------------------------------------------------
+        # Force final spectral WCS to microns for DS9 display
+        # --------------------------------------------------
+        output_header["CTYPE3"] = ("WAVE", "Wavelength axis")
+        output_header["CUNIT3"] = ("um", "Wavelength unit")
+        output_header["CRVAL3"] = (
+            float(wave_info["WAVSTART"]),
+            "Reference wavelength in micron",
+        )
+        output_header["CRPIX3"] = (
+            1.0,
+            "Reference wavelength pixel",
+        )
+        output_header["CDELT3"] = (
+            float(wave_info["DWAVE"]),
+            "Wavelength step in micron/pixel",
+        )
+
+        # Stable spectral PC matrix for DS9
+        output_header["PC3_3"] = (1.0, "Spectral axis scale")
+        output_header["PC3_1"] = (0.0, "No spectral-spatial coupling")
+        output_header["PC3_2"] = (0.0, "No spectral-spatial coupling")
+        output_header["PC1_3"] = (0.0, "No spatial-spectral coupling")
+        output_header["PC2_3"] = (0.0, "No spatial-spectral coupling")
+
+        # Remove any CD spectral terms if Astropy added them
+        for key in ["CD3_1", "CD3_2", "CD3_3", "CD1_3", "CD2_3"]:
+            if key in output_header:
+                del output_header[key]
+
+        # --------------------------------------------------
+        # Pipeline-readable metadata
+        # --------------------------------------------------
+        output_header["PIXSCALE"] = (
+            SCALES_PLATE_SCALE_ARCSEC,
+            "SCALES plate scale in arcsec/spaxel",
+        )
+
+        output_header["IFSMODE"] = (
+            wave_info["IFSMODE"],
+            "SCALES IFS observing mode",
+        )
+
+        output_header["WAVSTART"] = (
+            float(wave_info["WAVSTART"]),
+            "Wavelength start in micron",
+        )
+
+        output_header["WAVEND"] = (
+            float(wave_info["WAVEND"]),
+            "Wavelength end in micron",
+        )
+
+        output_header["DWAVE"] = (
+            float(wave_info["DWAVE"]),
+            "Wavelength step in micron/pixel",
+        )
+
+        output_header["WAVEUNIT"] = (
+            "um",
+            "Pipeline wavelength unit",
+        )
+
+        output_header["WCSCORR"] = (
+            True,
+            "WCS keywords written",
+        )
+
+        output_header["WCSTYPE"] = (
+            "INITIAL",
+            "Initial SCALES cube WCS",
+        )
+        self.logger.info("WCS coordinates created")
+        return output_header
 
     ################# search for lenslet flat #######################################
     def load_and_normalize_lenslet_flat(
@@ -627,6 +825,16 @@ class SpectralExtract(BasePrimitive):
                 norm_flatlens_uncert,
                 imtype='FLATLENS')
 
+            wcs, wave_info = self.create_scales_wcs(
+                cube_shape=A_opt.shape,
+                header=self.action.args.ccddata.header)
+            
+            final_header = self.wcs_header_update(
+                data_cube=A_opt,
+                input_header=self.action.args.ccddata.header,
+                wcs=wcs,
+                wave_info=wave_info)
+            
             chi_rslt = CCDData(
                 data=Amp_chi_square,
                 uncertainty=StdDevUncertainty(Amp_chi_square_err),
@@ -641,13 +849,6 @@ class SpectralExtract(BasePrimitive):
 
             self.action.args.ccddata.data = A_opt
 
-            my_wcs = self.create_wcs_flexible(
-                    cube_shape=FLUX_SHAPE_3D,
-                    header=self.action.args.ccddata.header,
-                    center_map=SCALES_CENTER_MAP,
-                    default_center_yx=SCALES_DEFAULT_CENTER)
-
-            final_header = my_wcs.to_header()
             self.action.args.ccddata.header.update(final_header)
 
             log_string = SpectralExtract.__module__
