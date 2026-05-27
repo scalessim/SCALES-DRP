@@ -641,8 +641,10 @@ def run_linearity_workflow(science_ramp, linearity_file): #best one
     group_dq_raw = create_group_dq(science_ramp, sat_map_meas)    # (N,H,W)
 
     package = __name__.split('.')[0]
-    filepath = 'calib/%s' % linearity_file
-    linearity_path = get_resource_path(package, filepath)
+    filepath = 'calib/'
+    calib_path = str(get_resource_path(package, filepath))
+    linearity_path = calib_path+linearity_file
+
     # 3. Linearity correction and calibration-based cutoff
     sat_dn_meas = None
     with fits.open(linearity_path) as hdul:

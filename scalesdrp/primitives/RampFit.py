@@ -654,14 +654,20 @@ class RampFit(BasePrimitive):
 
             package = __name__.split('.')[0]
             if obsmode =='Im':
-                filepath = 'calib/sim_readnoise.fits'
+                simfile = 'sim_readnoise.fits'
+                filepath = 'calib/'
                 calib_path = str(get_resource_path(package, filepath))
-                SIG_map_scaled = fits.getdata(calib_path)
+                SIG_map_scaled = fits.getdata(calib_path+simfile)
+                master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
 
             elif obsmode =='IFS':
-                filepath = 'calib/sim_readnoise.fits'
+                simfile = 'sim_readnoise.fits'
+                filepath = 'calib/'
                 calib_path = str(get_resource_path(package, filepath))
-                SIG_map_scaled = fits.getdata(calib_path)
+                SIG_map_scaled = fits.getdata(calib_path+simfile)
+                master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
+                rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
 
             input_data = self.action.args.ccddata.data
             #print(input_data.shape)
@@ -685,15 +691,29 @@ class RampFit(BasePrimitive):
             #nim_s = sci_im_full_original.shape[0]
             self.logger.info("+++++++++++ ramp fitting started +++++++++++")
 
-            final_slope,final_reset,final_uncert = self.ramp_fit(
+            final_slope,final_reset,uncert = self.ramp_fit(
                 sci_im_full_original,
                 total_exptime,
                 SIG_map_scaled,
                 group_dq = None)
 
             self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
-            final_ramp = bpm.apply_full_correction(final_slope,obsmode)
+            #final_ramp = bpm.apply_full_correction(final_slope,obsmode)
+            #transient_mask, local_med, local_sigma, sig = bpm.detect_transient_bad_pixels(
+            #    final_slope,
+            #    master_bpm=master_bpm,
+            #    kernel_size=5,
+            #    sigma_thresh=7.0,
+            #    return_diagnostics=True)
+            #final_mask = master_bpm | transient_mask
+            #rmat = bpm.bpm_correction(final_mask)
+            final_ramp1 = rmat1*np.matrix(final_slope.flatten().reshape([np.prod(final_slope.shape),1]))
+            final_ramp = np.array(final_ramp1).reshape(final_slope.shape)
+            
+            final_ramp1_uncert = rmat1*np.matrix(uncert.flatten().reshape([np.prod(uncert.shape),1]))
+            final_uncert = np.array(final_ramp1_uncert).reshape(uncert.shape)
 
+            self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
             keywords_unique = {
                 key: self.action.args.ccddata.header.get(key)
                 for key in ['CAMERA', 'IFSMODE', 'MCLOCK']}

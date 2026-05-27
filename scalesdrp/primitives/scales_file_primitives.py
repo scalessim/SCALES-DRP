@@ -9,7 +9,6 @@ from astropy.nddata import StdDevUncertainty
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 import os
 import logging
-import importlib
 import subprocess
 from pathlib import Path
 from importlib.metadata import version, PackageNotFoundError
@@ -887,7 +886,11 @@ def scales_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
 
     if not contains_version:
         # Add setup.py version number to header
-        version = importlib.metadata.version('scalesdrp')
+        try:
+            ver = version("scalesdrp")
+        except PackageNotFoundError:
+            ver = "unknown"
+        #version = pkg_resources.get_distribution('scalesdrp').version
         ccddata.header.add_history(f"scalesdrp version={version}")
 
         # Get string filepath to .git dir, relative to this primitive
