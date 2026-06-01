@@ -642,7 +642,7 @@ def run_linearity_workflow(science_ramp, linearity_file): #best one
 
     package = __name__.split('.')[0]
     filepath = 'calib/'
-    calib_path = str(get_resource_path(package, filepath))
+    calib_path = str(get_resource_path(package, filepath))+'/'
     linearity_path = calib_path+linearity_file
 
     # 3. Linearity correction and calibration-based cutoff

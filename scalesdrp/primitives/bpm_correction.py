@@ -98,14 +98,14 @@ def apply_full_correction(image_to_correct,obsmode, pass1_kwargs={}):
     t1=time.time()
 
     package = __name__.split('.')[0]
-    calib_path = str(get_resource_path(package, filepath))
+    calib_path = str(get_resource_path(package, filepath))+'/'
     if obsmode=='IMAGING':
         filepath = 'bpm_new_5.fits'
         master_bpm = fits.getdata(calib_path).astype(bool)
         #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
     else:
         filepath = 'calib/cd3_bpm_ifs_5mhz.fits'
-        calib_path = get_resource_path(package, filepath)
+        calib_path = get_resource_path(package, filepath)+'/'
         master_bpm = fits.getdata(calib_path).astype(bool)
         #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
 
@@ -537,7 +537,7 @@ def generate_bpm_robust_v2(
 def bpm_correction_v1(bpmap):
     package = __name__.split('.')[0]
     filepath = 'calib/'
-    calib_path = str(get_resource_path(package, filepath))
+    calib_path = str(get_resource_path(package, filepath))+'/'
     if obsmode=='IMAGING':
         calfile = 'calib/bpm_new_5.fits'
         bpmap = pyfits.getdata(calib_path+calfile)

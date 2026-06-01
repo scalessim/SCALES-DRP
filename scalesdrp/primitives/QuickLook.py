@@ -606,7 +606,7 @@ class QuickLook(BasePrimitive):
 
         package = __name__.split('.')[0]
         calname = 'sim_readnoise.fits'
-        calib_path = str(get_resource_path(package, 'calib/'))
+        calib_path = str(get_resource_path(package, 'calib/')) + '/'
         SIG_map_scaled = fits.getdata(calib_path+calname) #IFS readnoise map
         read_noise_var = SIG_map_scaled.flatten().astype(np.float64)**2
         rmat_img = sparse.load_npz(calib_path+'bpmat_img.npz')

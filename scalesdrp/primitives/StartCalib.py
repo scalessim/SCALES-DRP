@@ -838,7 +838,7 @@ class StartCalib(BasePrimitive):
                     if obsmode =='Im':
                         simfile = 'sim_readnoise.fits'
                         filepath = 'calib/'
-                        calib_path = str(get_resource_path(package, filepath))
+                        calib_path = str(get_resource_path(package, filepath))+'/'
                         SIG_map_scaled = fits.getdata(calib_path+simfile)
                         rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                         master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
@@ -846,7 +846,7 @@ class StartCalib(BasePrimitive):
                     elif obsmode =='IFS':
                         simfile = 'sim_readnoise.fits'
                         filepath = 'calib/'
-                        calib_path = str(get_resource_path(package, filepath))
+                        calib_path = str(get_resource_path(package, filepath))+'/'
                         SIG_map_scaled = fits.getdata(calib_path+simfile)
                         rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                         master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
@@ -990,7 +990,7 @@ class StartCalib(BasePrimitive):
                     package = __name__.split('.')[0]
                     simfile = 'sim_readnoise.fits'
                     filepath = 'calib'
-                    calib_path = str(get_resource_path(package, filepath))
+                    calib_path = str(get_resource_path(package, filepath))+'/'
                     readnoise = fits.getdata(calib_path+simfile)
                     var_read_vector = (readnoise.flatten().astype(np.float64))**2
                     GAIN = 1.0#self.action.args.ccddata.header['GAIN']

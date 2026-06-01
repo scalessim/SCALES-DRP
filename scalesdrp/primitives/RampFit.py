@@ -656,7 +656,7 @@ class RampFit(BasePrimitive):
             if obsmode =='Im':
                 simfile = 'sim_readnoise.fits'
                 filepath = 'calib/'
-                calib_path = str(get_resource_path(package, filepath))
+                calib_path = str(get_resource_path(package, filepath)) + '/'
                 SIG_map_scaled = fits.getdata(calib_path+simfile)
                 master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
                 rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
@@ -664,7 +664,7 @@ class RampFit(BasePrimitive):
             elif obsmode =='IFS':
                 simfile = 'sim_readnoise.fits'
                 filepath = 'calib/'
-                calib_path = str(get_resource_path(package, filepath))
+                calib_path = str(get_resource_path(package, filepath)) + '/'
                 SIG_map_scaled = fits.getdata(calib_path+simfile)
                 master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
                 rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
