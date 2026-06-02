@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import time
 import os
 from scipy.signal import savgol_filter
+from scipy import sparse
 import scalesdrp.primitives.reference as reference #1/f and reference pixel correction
 import scalesdrp.primitives.linearity as linearity #linearity correction
 import scalesdrp.primitives.bpm_correction as bpm #bpm correction
