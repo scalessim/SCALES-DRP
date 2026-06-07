@@ -8,10 +8,8 @@ from scipy.optimize import leastsq
 import matplotlib.pyplot as plt
 import time
 import os
-from scipy import sparse
-from importlib.resources import files
-from pathlib import Path
 from scipy.signal import savgol_filter
+from scipy import sparse
 import scalesdrp.primitives.reference as reference #1/f and reference pixel correction
 import scalesdrp.primitives.linearity as linearity #linearity correction
 import scalesdrp.primitives.bpm_correction as bpm #bpm correction
@@ -20,6 +18,7 @@ from astropy.nddata import StdDevUncertainty
 from scalesdrp.primitives.linearity import DQ_FLAGS
 
 from scalesdrp.core.scales_proctab import Proctab
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
@@ -653,16 +652,24 @@ class RampFit(BasePrimitive):
         if imtype =='OBJECT':
             total_exptime = self.action.args.ccddata.header['EXPTIME']
             obsmode = self.action.args.ccddata.header['CAMERA']
-            #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-            calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
+
+            package = __name__.split('.')[0]
             if obsmode =='Im':
-                SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                simfile = 'sim_readnoise.fits'
+                filepath = 'calib/'
+                calib_path = str(get_resource_path(package, filepath)) + '/'
+                SIG_map_scaled = fits.getdata(calib_path+simfile)
                 master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
                 rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+
             elif obsmode =='IFS':
-                SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                simfile = 'sim_readnoise.fits'
+                filepath = 'calib/'
+                calib_path = str(get_resource_path(package, filepath)) + '/'
+                SIG_map_scaled = fits.getdata(calib_path+simfile)
                 master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
                 rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+
             input_data = self.action.args.ccddata.data
             #print(input_data.shape)
             self.logger.info("+++++++++++ odd even column swapping +++++++++++")

@@ -31,6 +31,7 @@ from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
 from tqdm import tqdm
 from scalesdrp.primitives.linearity import DQ_FLAGS
 from scalesdrp.core.scales_proctab import Proctab
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
@@ -833,16 +834,23 @@ class StartCalib(BasePrimitive):
                     except Exception as e:
                         self.logger.error(f"Failed to read {filename}: {e}")
 
-                    #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-                    calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
+                    package = __name__.split('.')[0]
                     if obsmode =='Im':
-                        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                        simfile = 'sim_readnoise.fits'
+                        filepath = 'calib/'
+                        calib_path = str(get_resource_path(package, filepath))+'/'
+                        SIG_map_scaled = fits.getdata(calib_path+simfile)
                         rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                         master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+
                     elif obsmode =='IFS':
-                        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                        simfile = 'sim_readnoise.fits'
+                        filepath = 'calib/'
+                        calib_path = str(get_resource_path(package, filepath))+'/'
+                        SIG_map_scaled = fits.getdata(calib_path+simfile)
                         rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                         master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
+
                     self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1,do_swap=True)
 
@@ -979,9 +987,11 @@ class StartCalib(BasePrimitive):
                     self.logger.info("+++++++++++ Creating master lenslet flat +++++++++++")
                     self.logger.info("+++++++++++ Creating master lenslet flat cube +++++++++++")
 
-                    #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-                    calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
-                    readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
+                    package = __name__.split('.')[0]
+                    simfile = 'sim_readnoise.fits'
+                    filepath = 'calib'
+                    calib_path = str(get_resource_path(package, filepath))+'/'
+                    readnoise = fits.getdata(calib_path+simfile)
                     var_read_vector = (readnoise.flatten().astype(np.float64))**2
                     GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             

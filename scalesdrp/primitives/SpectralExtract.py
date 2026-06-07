@@ -2,8 +2,6 @@ from keckdrpframework.primitives.base_primitive import BasePrimitive
 from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
 
 import numpy as np
-from importlib.resources import files
-from pathlib import Path
 import pickle
 from astropy.io import fits
 import warnings
@@ -22,6 +20,7 @@ from astropy.wcs import WCS
 import os
 
 from scalesdrp.core.scales_proctab import Proctab
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
@@ -524,8 +523,9 @@ class SpectralExtract(BasePrimitive):
         path_used, flat, uflat = _try_dir(os.path.join(os.getcwd(), "redux"))
         # 2) pkg calib if not found
         if flat is None:
-            #pkg_dir = pkg_resources.resource_filename('scalesdrp', 'calib/')
-            pkg_dir = str(files("scalesdrp").joinpath("calib"))+ "/"
+            package = __name__.split('.')[0]
+            filedir = 'calib/'
+            pkg_dir = str(get_resource_path(package, filedir))
             path_used, flat, uflat = _try_dir(pkg_dir)
 
         if flat is None:
@@ -735,9 +735,11 @@ class SpectralExtract(BasePrimitive):
                 'MedRes-M': (50, 60),}
 
             SCALES_DEFAULT_CENTER = (54, 54)
-            #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-            calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
-            readnoise = fits.getdata(calib_path+'sim_readnoise.fits')
+            package = __name__.split('.')[0]
+            filepath = 'calib/'
+            calfile = 'sim_readnoise.fits'
+            calib_path = str(get_resource_path(package, filepath))+'/'
+            readnoise = fits.getdata(calib_path+calfile)
             #var_read_vector = (readnoise.flatten().astype(np.float64))**2
             sigma_image = self.action.args.ccddata.uncertainty
             var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2

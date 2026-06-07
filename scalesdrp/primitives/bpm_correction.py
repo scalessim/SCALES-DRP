@@ -10,8 +10,7 @@ from scipy.stats import median_abs_deviation
 import time
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
-from importlib.resources import files
-from pathlib import Path
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import time
 from scipy import sparse
 from scipy.ndimage import median_filter
@@ -97,14 +96,17 @@ def apply_full_correction(image_to_correct,obsmode, pass1_kwargs={}):
     Applies the improved full two-pass BPM correction workflow.
     """
     t1=time.time()
-    #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-    calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
 
+    package = __name__.split('.')[0]
+    calib_path = str(get_resource_path(package, filepath))+'/'
     if obsmode=='IMAGING':
-        master_bpm = fits.getdata(calib_path+'bpm_new_5.fits').astype(bool)
+        filepath = 'bpm_new_5.fits'
+        master_bpm = fits.getdata(calib_path).astype(bool)
         #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
     else:
-        master_bpm = fits.getdata(calib_path+'cd3_bpm_ifs_5mhz.fits').astype(bool)
+        filepath = 'calib/cd3_bpm_ifs_5mhz.fits'
+        calib_path = get_resource_path(package, filepath)+'/'
+        master_bpm = fits.getdata(calib_path).astype(bool)
         #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
 
     corrected_pass1, large_defects_mask = correct_local_defects_pass1_improved(
@@ -226,7 +228,6 @@ def robust_sigma_from_mad(values, floor=1e-6):
     med = np.nanmedian(values)
     mad = np.nanmedian(np.abs(values - med))
     sigma = 1.4826 * mad
-
     return max(sigma, floor)
 
 
@@ -534,12 +535,16 @@ def generate_bpm_robust_v2(
 #############R.matrix based .npz FILE bpm correction #########################
 
 def bpm_correction_v1(bpmap):
-    #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-    #calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
-    #if obsmode=='IMAGING':
-    #    bpmap = pyfits.getdata(calib_path+'bpm_new_5.fits')
-    #elif obsmode=='IFS':
-    #    bpmap = pyfits.getdata(calib_path+'cd3_bpm_ifs_5mhz.fits')
+    package = __name__.split('.')[0]
+    filepath = 'calib/'
+    calib_path = str(get_resource_path(package, filepath))+'/'
+    if obsmode=='IMAGING':
+        calfile = 'calib/bpm_new_5.fits'
+        bpmap = pyfits.getdata(calib_path+calfile)
+    elif obsmode=='IFS':
+        calfile = 'cd3_bpm_ifs_5mhz.fits'
+        bpmap = pyfits.getdata(calib_path+calfile)
+
 
     ypix = bpmap.shape[0]
     xpix = bpmap.shape[1]

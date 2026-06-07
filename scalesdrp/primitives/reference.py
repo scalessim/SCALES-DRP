@@ -3,7 +3,6 @@ import numpy as np
 from astropy.io import fits
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-
 import os
 from scipy.optimize import minimize
 import astropy.io.fits as pyfits

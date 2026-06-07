@@ -8,8 +8,6 @@ import numpy as np
 from astropy.io import fits
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-from importlib.resources import files
-from pathlib import Path
 import os
 from scipy.optimize import minimize
 from scipy import sparse
@@ -21,6 +19,7 @@ from scipy.optimize import leastsq
 from scipy.signal import savgol_filter
 import scalesdrp.primitives.bpm_correction as bpm #bpm correction
 from scalesdrp.core.scales_proctab import Proctab
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 from astropy.wcs import WCS
 from astropy.coordinates import Angle
@@ -605,9 +604,10 @@ class QuickLook(BasePrimitive):
         output_dir = os.path.dirname(input_data)
         filename = os.path.basename(input_data)
 
-        calib_path = str(files("scalesdrp").joinpath("calib"))+ "/"
-        #calib_path = pkg_resources.resource_filename('scalesdrp','calib/')
-        SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits') #IFS readnoise map
+        package = __name__.split('.')[0]
+        calname = 'sim_readnoise.fits'
+        calib_path = str(get_resource_path(package, 'calib/')) + '/'
+        SIG_map_scaled = fits.getdata(calib_path+calname) #IFS readnoise map
         read_noise_var = SIG_map_scaled.flatten().astype(np.float64)**2
         rmat_img = sparse.load_npz(calib_path+'bpmat_img.npz')
         rmat_ifs = sparse.load_npz(calib_path+'bpmat_ifs.npz')
@@ -647,12 +647,12 @@ class QuickLook(BasePrimitive):
                         raise ValueError("No data in primary HDU.")
                     elif data_1.ndim == 2:
                         self.logger.info("Found a single frame.")
-                        data_11 = self.swap_odd_even_columns(data_1,do_swap=True)
-                        slope_filled1 = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
+                        data_11 = self.swap_odd_even_columns(data_1,do_swap=False)
+                        slope_filled1 = reference.reffix_hxrg(data_11, nchans=4, fixcol=False)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
 
                     elif data_1.ndim == 3:
-                        data_11 = self.swap_odd_even_columns(data_1,do_swap=True)
+                        data_11 = self.swap_odd_even_columns(data_1,do_swap=False)
                         img_corr = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
                         slope_filled1 = self.iterative_sigma_weighted_ramp_fit(
@@ -669,7 +669,7 @@ class QuickLook(BasePrimitive):
                     if img2d.ndim != 2 or ramp3d.ndim != 3:
                         raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
 
-                    data_11 = self.swap_odd_even_columns(ramp3d,do_swap=True)
+                    data_11 = self.swap_odd_even_columns(ramp3d,do_swap=False)
                     img_corr = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
                     self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
                     slope_filled1 = self.iterative_sigma_weighted_ramp_fit(
@@ -679,8 +679,9 @@ class QuickLook(BasePrimitive):
                     self.logger.info(f"Ramp fitting finished in {t1-t0:.2f} seconds.")
 
         if obs_mode == "Im":
-            self.logger.info("BPM correction started")            
-            slope_filled2 = rmat_img*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
+            self.logger.info("BPM correction started")
+            rmat = sparse.load_npz(calib_path+'bpmat_img.npz')
+            slope_filled2 = rmat*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
             slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
             self.fits_writer_steps(
@@ -694,7 +695,8 @@ class QuickLook(BasePrimitive):
 
         if obs_mode == "IFS":
             self.logger.info("BPM correction started")
-            slope_filled2 = rmat_ifs*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
+            rmat = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+            slope_filled2 = rmat*np.matrix(slope_filled1.flatten().reshape([np.prod(slope_filled1.shape),1]))
             slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
 
@@ -715,6 +717,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "K_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
+                    R_matrix_lowres_k = load_npz(calib_path+'K_QL_rectmat_lowres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_lowres_k,
                         slope_filled)
@@ -745,6 +748,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "L_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
+                    R_matrix_lowres_l = load_npz(calib_path+'L_QL_rectmat_lowres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_lowres_l,
                         slope_filled)
@@ -774,7 +778,8 @@ class QuickLook(BasePrimitive):
                     slope_filled is not None
                     and os.path.exists(os.path.join(calib_path, "M_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
-                    
+
+                    R_matrix_lowres_m = load_npz(calib_path+'M_QL_rectmat_lowres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_lowres_m,
                         slope_filled)
@@ -803,7 +808,7 @@ class QuickLook(BasePrimitive):
                     slope_filled is not None
                     and os.path.exists(os.path.join(calib_path, "SED_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
-
+                    R_matrix_lowres_sed = load_npz(calib_path+'SED_QL_rectmat_lowres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_lowres_sed,
                         slope_filled)
@@ -833,6 +838,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "KL_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
+                    R_matrix_lowres_kl = load_npz(calib_path+'KL_QL_rectmat_lowres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_lowres_kl,
                         slope_filled)
@@ -862,6 +868,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "PAH_QL_rectmat_lowres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
+                    R_matrix_lowres_pah = load_npz(calib_path+'PAH_QL_rectmat_lowres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_lowres_pah,
                         slope_filled)
@@ -891,6 +898,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "K_QL_rectmat_medres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
+                    R_matrix_medres_k = load_npz(calib_path+'K_QL_rectmat_medres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_medres_k,
                         slope_filled)
@@ -920,6 +928,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "L_QL_rectmat_medres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
+                    R_matrix_medres_l = load_npz(calib_path+'L_QL_rectmat_medres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_medres_l,
                         slope_filled)
@@ -949,6 +958,7 @@ class QuickLook(BasePrimitive):
                     and os.path.exists(os.path.join(calib_path, "M_QL_rectmat_medres.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
+                    R_matrix_medres_m = load_npz(calib_path+'M_QL_rectmat_medres.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_medres_m,
                         slope_filled)
