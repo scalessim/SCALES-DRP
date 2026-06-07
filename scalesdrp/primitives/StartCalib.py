@@ -77,7 +77,7 @@ class StartCalib(BasePrimitive):
                 group_keys = ['CAMERA', 'ifsfw1nam', 'IMTYPE', 'EXPTIME','MCLOCK']
                 self.logger.info(f"Grouping IMAGING data by {group_keys}")
             elif mode.upper() =='IFS':
-                group_keys = ['CAMERA', 'IFSMODE', 'IMTYPE', 'EXPTIME','MCLOCK']
+                group_keys = ['CAMERA', 'dsprsnam', 'IMTYPE', 'EXPTIME','MCLOCK']
                 self.logger.info(f"Grouping {mode} data by {group_keys}")
             else:
                 self.logger.warning(f"Unknown OBSMODE '{mode}'; skipping.")
@@ -110,7 +110,7 @@ class StartCalib(BasePrimitive):
         - Additionally, if IMTYPE == 'CALUNIT', include WAVELENGTH in grouping.
         """
         # Base required columns
-        required_cols = ['CAMERA', 'IFSMODE', 'ifsfw1nam', 'IMTYPE', 'EXPTIME', 'MCLOCK']
+        required_cols = ['CAMERA', 'MODSLNAM', 'DSPRSNAM', 'IMTYPE', 'EXPTIME', 'MCLOCK']
         missing = [c for c in required_cols if c not in dt.columns]
         if missing:
             self.logger.error(f"Missing required columns: {missing}")
@@ -132,7 +132,7 @@ class StartCalib(BasePrimitive):
                 base_keys = ['CAMERA', 'ifsfw1nam', 'IMTYPE', 'EXPTIME', 'MCLOCK']
                 self.logger.info(f"Grouping IM data by {base_keys}")
             elif cam_u == 'IFS':
-                base_keys = ['CAMERA', 'IFSMODE', 'IMTYPE', 'EXPTIME', 'MCLOCK']
+                base_keys = ['CAMERA', 'DSPRSNAM', 'IMTYPE', 'EXPTIME', 'MCLOCK']
                 self.logger.info(f"Grouping IFS data by {base_keys}")
             else:
                 self.logger.warning(f"Unknown CAMERA '{cam}'; skipping.")
@@ -808,8 +808,8 @@ class StartCalib(BasePrimitive):
                 params = group['params']
                 filenames = group['filenames']
                 obsmode = params.get('camera', 'UNKNOWN')
-                ifsmode = params.get('ifsmode', 'N/A')
-                filtername = params.get('ifsfw1nam', 'N/A')
+                ifsmode = params.get('dsprsnam', 'N/A')
+                filtername = params.get('imgfw2n', 'N/A')
                 exptime = params.get('exptime', 0)
                 mclock = params.get('mclock', 0)
                 wavelength = params.get('monowave', None)
@@ -841,7 +841,7 @@ class StartCalib(BasePrimitive):
                         calib_path = str(get_resource_path(package, filepath))+'/'
                         SIG_map_scaled = fits.getdata(calib_path+simfile)
                         rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
-                        master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                        #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
 
                     elif obsmode =='IFS':
                         simfile = 'sim_readnoise.fits'
@@ -849,10 +849,10 @@ class StartCalib(BasePrimitive):
                         calib_path = str(get_resource_path(package, filepath))+'/'
                         SIG_map_scaled = fits.getdata(calib_path+simfile)
                         rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                        master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
+                        #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
 
-                    self.logger.info("+++++++++++ odd even swapping +++++++++++")
-                    sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1,do_swap=True)
+                    #self.logger.info("+++++++++++ odd even swapping +++++++++++")
+                    sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1,do_swap=False)
 
                     self.logger.info("+++++++++++ ACN & 1/f correction started +++++++++++")
                     sci_im_full_original3 = reference.reffix_hxrg(sci_im_full_original2, nchans=4, fixcol=True)
@@ -900,7 +900,7 @@ class StartCalib(BasePrimitive):
                         header=data_header,
                         output_dir=self.action.args.dirname,
                         input_filename=filename,
-                        suffix='_L1_ramp',
+                        suffix='_L1',
                         overwrite=True,
                         uncert = bpm_slope_uncert)
 
@@ -908,7 +908,7 @@ class StartCalib(BasePrimitive):
                         header=data_header,
                         output_dir=self.action.args.dirname,
                         input_filename=filename,
-                        suffix="_L1_ramp",
+                        suffix="_L1",
                         frame=None,
                         proctab=self.proctab)
 

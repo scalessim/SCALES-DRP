@@ -659,7 +659,7 @@ class RampFit(BasePrimitive):
                 filepath = 'calib/'
                 calib_path = str(get_resource_path(package, filepath)) + '/'
                 SIG_map_scaled = fits.getdata(calib_path+simfile)
-                master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
                 rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
 
             elif obsmode =='IFS':
@@ -667,13 +667,13 @@ class RampFit(BasePrimitive):
                 filepath = 'calib/'
                 calib_path = str(get_resource_path(package, filepath)) + '/'
                 SIG_map_scaled = fits.getdata(calib_path+simfile)
-                master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
+                #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
                 rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
 
             input_data = self.action.args.ccddata.data
             #print(input_data.shape)
-            self.logger.info("+++++++++++ odd even column swapping +++++++++++")
-            sci_im_full_original1 = self.swap_odd_even_columns(input_data,do_swap=True)
+            #self.logger.info("+++++++++++ odd even column swapping +++++++++++")
+            sci_im_full_original1 = self.swap_odd_even_columns(input_data,do_swap=False)
 
             sci_im_full_original = reference.reffix_hxrg(sci_im_full_original1, nchans=4)
             self.logger.info("refpix and 1/f correction completed")
@@ -766,13 +766,13 @@ class RampFit(BasePrimitive):
                 table=self.action.args.table,
                 output_file=self.action.args.name,
                 output_dir=self.config.instrument.output_directory,
-                suffix="L1_ramp")
+                suffix="L1")
 
             self.proctab_update(
                 header=self.action.args.ccddata.header,
                 output_dir=self.config.instrument.output_directory,
                 input_filename=self.action.args.name,
-                suffix="_L1_ramp",
+                suffix="_L1",
                 frame=None,
                 proctab=self.proctab)
 
