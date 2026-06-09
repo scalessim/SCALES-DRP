@@ -573,6 +573,10 @@ class StartCalib(BasePrimitive):
         """
         # --- normalize inputs to arrays ---
         data = np.asarray(data_stack)
+        
+        if data.ndim == 2:
+            return data
+
         if data.ndim == 3:
             N, H, W = data.shape
         elif isinstance(data_stack, (list, tuple)) and np.asarray(data_stack[0]).ndim == 2:

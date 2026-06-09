@@ -1023,7 +1023,7 @@ def calc_col_smooth(refvals, data_shape, perint=False, edge_wrap=False,
     		refvals_smoothed = np.array(refvals_smoothed)
     return refvals_smoothed
     
-def smooth_fft(data, delt, first_deriv=False, second_deriv=False):
+def smooth_fft1(data, delt, first_deriv=False, second_deriv=False):
     """Optimal smoothing algorithm  
     Smoothing algorithm to perform optimal filtering of the 
     vertical reference pixel to reduce 1/f noise (horizontal stripes),
@@ -1153,3 +1153,169 @@ def smooth_fft(data, delt, first_deriv=False, second_deriv=False):
     	return Smoothed_Data  #return the original data, but with high-frequency noise stripped out, 
                               #and only the low-frequency “shape” left, plus the original mean/trend.
 
+
+def smooth_fft(data, delt, first_deriv=False, second_deriv=False):
+    """
+    Optimal FFT smoothing of evenly sampled data.
+
+    Based on the Kosarev & Pantos filtering approach.
+    """
+
+    Dat = np.asarray(data, dtype=float).flatten()
+    N = Dat.size
+
+    if N < 8:
+        if second_deriv:
+            return Dat.copy(), np.zeros_like(Dat), np.zeros_like(Dat)
+        elif first_deriv:
+            return Dat.copy(), np.zeros_like(Dat)
+        else:
+            return Dat.copy()
+
+    Pi2 = 2 * np.pi
+    OMEGA = Pi2 / (N * delt)
+    X = np.arange(N) * delt
+
+    # ------------------------------------------------
+    # Center and remove linear baseline
+    # ------------------------------------------------
+    Dat_m = Dat - np.mean(Dat)
+    SLOPE = (Dat_m[-1] - Dat_m[0]) / max(N - 2, 1)
+    Dat_b = Dat_m - Dat_m[0] - SLOPE * X / delt
+
+    # ------------------------------------------------
+    # FFT and power spectrum
+    # ------------------------------------------------
+    Dat_F = np.fft.rfft(Dat_b)
+    Dat_P = np.abs(Dat_F) ** 2
+
+    nfreq = len(Dat_P)
+    max_j = nfreq - 1
+
+    # ------------------------------------------------
+    # Estimate white-noise floor from N/4 to N/2
+    # ------------------------------------------------
+    i1 = max(1, int((N - 1) / 4))
+    i2 = min(nfreq, int((N - 1) / 2) + 1)
+
+    if i2 <= i1:
+        Noise = np.nanmedian(Dat_P[1:]) if nfreq > 1 else 0.0
+    else:
+        Noise = np.mean(Dat_P[i1:i2])
+
+    if not np.isfinite(Noise) or Noise <= 0:
+        Noise = np.nanmedian(Dat_P[1:]) if nfreq > 1 else 0.0
+
+    if not np.isfinite(Noise) or Noise <= 0:
+        Noise = 1e-30
+
+    # ------------------------------------------------
+    # Find J0 where signal reaches the noise floor
+    # ------------------------------------------------
+    J0 = 2
+    search_max = min(int(N / 4), max_j - 3)
+
+    for i in range(1, search_max + 1):
+        sig0, sig1, sig2, sig3 = Dat_P[i:i + 4]
+
+        if (sig0 < Noise) and ((sig1 < Noise) or (sig2 < Noise) or (sig3 < Noise)):
+            J0 = i
+            break
+
+    J0 = max(1, min(J0, max_j - 1))
+
+    # ------------------------------------------------
+    # Fit straight line to log power spectrum from 1 to J0
+    # ------------------------------------------------
+    ii = np.arange(1, J0 + 1)
+    power = Dat_P[1:J0 + 1]
+
+    power = np.where(power > 0, power, 1e-30)
+    logvals = np.log(power)
+
+    XY = np.sum(ii * logvals)
+    XX = np.sum(ii ** 2)
+    S = np.sum(logvals)
+
+    XM = (2.0 + J0) / 2.0
+    YM = S / J0
+
+    denom = XX - J0 * XM * XM
+
+    if np.isfinite(denom) and abs(denom) > 0:
+        A1 = (XY - J0 * XM * YM) / denom
+    else:
+        A1 = -1.0
+
+    B1 = YM - A1 * XM
+
+    # ------------------------------------------------
+    # Compute J1 and clamp it to valid rFFT range
+    # ------------------------------------------------
+    if np.isfinite(A1) and A1 != 0:
+        J1 = int(np.ceil((np.log(0.01 * Noise) - B1) / A1))
+    else:
+        J1 = J0 + 1
+
+    if J1 < J0:
+        J1 = J0 + 1
+
+    J1 = min(J1, max_j)
+
+    # ------------------------------------------------
+    # Build Kosarev-Pantos filter window
+    # ------------------------------------------------
+    LOPT = np.zeros_like(Dat_P)
+
+    LOPT[0:J0 + 1] = Dat_P[0:J0 + 1] / (Dat_P[0:J0 + 1] + Noise)
+
+    if J1 > J0:
+        i_arr = np.arange(J0 + 1, J1 + 1)
+
+        expo = A1 * i_arr + B1
+        expo = np.clip(expo, -700, 700)
+
+        model = np.exp(expo)
+        LOPT[J0 + 1:J1 + 1] = model / (model + Noise)
+
+    # ------------------------------------------------
+    # Apply filter and optionally compute derivatives
+    # ------------------------------------------------
+    if second_deriv:
+        ndiff = 3
+    elif first_deriv:
+        ndiff = 2
+    else:
+        ndiff = 1
+
+    outputs = []
+
+    for diff in range(ndiff):
+        Fltr_Spectrum = np.zeros_like(Dat_F, dtype=complex)
+
+        i_start = 1
+        n2 = nfreq - 1
+
+        FltrCoef = LOPT[i_start:].astype(np.complex128)
+
+        iW = ((np.arange(n2) + i_start) * OMEGA * 1j) ** diff
+
+        Fltr_Spectrum[i_start:] = Dat_F[i_start:] * FltrCoef * iW
+
+        Fltr_Spectrum[0] = 0 if diff > 0 else Dat_F[0]
+
+        Dat_T = np.fft.irfft(Fltr_Spectrum, n=N)
+
+        if diff == 0:
+            outputs.append(np.real(Dat_T) + Dat[0] + SLOPE * X / delt)
+        elif diff == 1:
+            outputs.append(np.real(Dat_T) + SLOPE / delt)
+        elif diff == 2:
+            outputs.append(np.real(Dat_T))
+
+    if second_deriv:
+        return outputs[0], outputs[1], outputs[2]
+    elif first_deriv:
+        return outputs[0], outputs[1]
+    else:
+        return outputs[0]
