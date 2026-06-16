@@ -184,11 +184,12 @@ class SpectralExtract(BasePrimitive):
             priority to hour-angle parsing for ambiguous strings.
         Returns:
             float: The coordinate value in degrees.
-        """    
+        """
         if isinstance(coord_val, (int, float)):
             return float(coord_val)
         if not isinstance(coord_val, str):
             raise TypeError(f"Coordinate must be a string or number, but got {type(coord_val)}.")
+        
         try:
             if is_ra and ('h' in coord_val.lower() or ':' in coord_val):
                 return Angle(coord_val, unit=u.hourangle).degree
@@ -253,13 +254,12 @@ class SpectralExtract(BasePrimitive):
 
         n_wave, ny, nx = cube_shape
 
-        for key in ["RA", "DEC"]:
-            if key not in header:
-                raise ValueError(f"Essential FITS keyword '{key}' is missing.")
-
         # convertd ra and dec into degrees
-        crval_ra = self._parse_sky_coord(header["RA"], is_ra=True)
-        crval_dec = self._parse_sky_coord(header["DEC"], is_ra=False)
+        ra_str = header.get('RA', '00:00:00.0')
+        dec_str = header.get('DEC', '00:00:00.0')
+
+        crval_ra = self._parse_sky_coord(ra_str, is_ra=True)
+        crval_dec = self._parse_sky_coord(dec_str, is_ra=False)
 
         # Spatial scale to degrees
         pixel_scale_deg = SCALES_PLATE_SCALE_ARCSEC / 3600.0
@@ -799,17 +799,17 @@ class SpectralExtract(BasePrimitive):
             A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
             A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
 
-            A_optimal_nnls = self.solve_bounded_weighted_nnls(
-                R_for_extract, data_vector_d, var_read_vector, GAIN, A_guess_vector)
+            #A_optimal_nnls = self.solve_bounded_weighted_nnls(
+            #    R_for_extract, data_vector_d, var_read_vector, GAIN, A_guess_vector)
 
-            Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
+            #Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
 
-            Amp_chi_square_err = self.calculate_error_flux_cube(
-                R_matrix=R_for_extract,
-                flux_vector_A=A_optimal_nnls,
-                var_read_vector=var_read_vector,
-                flux_shape_3d=FLUX_SHAPE_3D,
-                gain=GAIN)
+            #Amp_chi_square_err = self.calculate_error_flux_cube(
+            #    R_matrix=R_for_extract,
+            #    flux_vector_A=A_optimal_nnls,
+            #    var_read_vector=var_read_vector,
+            #    flux_shape_3d=FLUX_SHAPE_3D,
+            #    gain=GAIN)
 
             norm_flatlens,norm_flatlens_uncert = self.load_and_normalize_lenslet_flat(ifsmode)
 
@@ -820,12 +820,12 @@ class SpectralExtract(BasePrimitive):
                 norm_flatlens_uncert,
                 imtype='FLATLENS')
 
-            Amp_chi_square, Amp_chi_square_err = self.apply_flatlens(
-                Amp_chi_square,
-                Amp_chi_square_err,
-                norm_flatlens,
-                norm_flatlens_uncert,
-                imtype='FLATLENS')
+            #Amp_chi_square, Amp_chi_square_err = self.apply_flatlens(
+            #    Amp_chi_square,
+            #    Amp_chi_square_err,
+            #    norm_flatlens,
+            #    norm_flatlens_uncert,
+            #    imtype='FLATLENS')
 
             wcs, wave_info = self.create_scales_wcs(
                 cube_shape=A_opt.shape,
@@ -837,11 +837,11 @@ class SpectralExtract(BasePrimitive):
                 wcs=wcs,
                 wave_info=wave_info)
             
-            chi_rslt = CCDData(
-                data=Amp_chi_square,
-                uncertainty=StdDevUncertainty(Amp_chi_square_err),
-                meta=self.action.args.ccddata.header,
-                unit='adu')
+            #chi_rslt = CCDData(
+            #    data=Amp_chi_square,
+            #    uncertainty=StdDevUncertainty(Amp_chi_square_err),
+            #    meta=self.action.args.ccddata.header,
+            #    unit='adu')
 
             opt_rslt = CCDData(
                 data=A_opt,
@@ -859,19 +859,19 @@ class SpectralExtract(BasePrimitive):
             self.logger.info(log_string)
 
 
-            scales_fits_writer(ccddata = chi_rslt, 
-                table=self.action.args.table,
-                output_file=self.action.args.name,
-                output_dir=self.config.instrument.output_directory,
-                suffix="chi_cube")
+            #scales_fits_writer(ccddata = chi_rslt, 
+            #    table=self.action.args.table,
+            #    output_file=self.action.args.name,
+            #    output_dir=self.config.instrument.output_directory,
+            #    suffix="chi_cube")
             
-            self.proctab_update(
-                header=self.action.args.ccddata.header,
-                output_dir=self.config.instrument.output_directory,
-                input_filename=self.action.args.name,
-                suffix="_chi_cube",
-                frame=None,
-                proctab=self.proctab)
+            #self.proctab_update(
+            #    header=self.action.args.ccddata.header,
+            #    output_dir=self.config.instrument.output_directory,
+            #    input_filename=self.action.args.name,
+            #    suffix="_chi_cube",
+            #    frame=None,
+            #    proctab=self.proctab)
 
             scales_fits_writer(ccddata = opt_rslt, 
                 table=self.action.args.table,

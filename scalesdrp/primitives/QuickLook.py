@@ -391,8 +391,11 @@ class QuickLook(BasePrimitive):
                 raise ValueError(f"Essential FITS keyword '{key}' is missing.")
 
         # convertd ra and dec into degrees
-        crval_ra = self._parse_sky_coord(header["RA"], is_ra=True)
-        crval_dec = self._parse_sky_coord(header["DEC"], is_ra=False)
+        ra_str = header.get('RA', '00:00:00.0')
+        dec_str = header.get('DEC', '00:00:00.0')
+
+        crval_ra = self._parse_sky_coord(ra_str, is_ra=True)
+        crval_dec = self._parse_sky_coord(dec_str, is_ra=False)
 
         # Spatial scale to degrees
         pixel_scale_deg = SCALES_PLATE_SCALE_ARCSEC / 3600.0
