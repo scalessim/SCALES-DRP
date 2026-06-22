@@ -76,7 +76,7 @@ class SpectralExtract(BasePrimitive):
         R_transpose_squared = R_transpose.power(2)
         denominator = R_transpose_squared @ inverse_variance # Σ R_ki^2 / σ_i^2
         denominator_safe = np.maximum(denominator, 1e-9)
-        optimized_flux = numerator / denominator_safe
+        optimized_flux = numerator #/ denominator_safe
         flux_variance = 1.0 / denominator_safe
         flux_error = np.sqrt(flux_variance)
         end_time1 = time.time()
@@ -776,17 +776,17 @@ class SpectralExtract(BasePrimitive):
                 R_matrix = load_npz(calib_path+'PAH_QL_rectmat_lowres.npz')
                 FLUX_SHAPE_3D = (56, 103, 110)
             elif ifsmode=='MedRes-K':
-                R_for_extract = load_npz(calib_path+'K_C2_rectmat_medres.npz')
-                R_matrix = load_npz(calib_path+'K_QL_rectmat_medres.npz')
-                FLUX_SHAPE_3D = (1900, 103, 110)
+                #R_for_extract = load_npz(calib_path+'K_C2_rectmat_medres.npz')
+                R_matrix = load_npz(calib_path+'ql_rmat_k_260604.npz')
+                FLUX_SHAPE_3D = (169, 17, 18)
             elif ifsmode=='MedRes-L':
                 R_for_extract = load_npz(calib_path+'L_C2_rectmat_medres.npz')
                 R_matrix = load_npz(calib_path+'L_QL_rectmat_medres.npz')
-                FLUX_SHAPE_3D = (1900, 103, 110)
+                FLUX_SHAPE_3D = (1900, 17, 18)
             elif ifsmode=='MedRes-M':
                 R_for_extract = load_npz(calib_path+'M_C2_rectmat_medres.npz')
                 R_matrix = load_npz(calib_path+'M_QL_rectmat_medres.npz')
-                FLUX_SHAPE_3D = (1900, 103, 110)
+                FLUX_SHAPE_3D = (1900, 17, 18)
             
             A_guess_cube,A_guess_cube_err = self.optimal_extract_with_error(
                 R_matrix,

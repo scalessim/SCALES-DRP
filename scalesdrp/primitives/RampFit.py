@@ -332,99 +332,103 @@ class RampFit(BasePrimitive):
 
 
     ####################### getting the master files needed from /redux #####################
-    def load_single_master_file(self,expected_keywords, master_type):
+    def load_single_master_file(self, expected_keywords, master_type):
+        """
+        Load one matching master calibration file from ./redux.
+
+        Matching rules:
+        - IMTYPE is determined from master_type.
+        - CAMERA and MCLOCK must match for all master files.
+        - EXPTIME must match only for DARK.
+        - IFSMODE must match only for FLATLENS.
+        - If no matching file is found, return (None, None).
+        """
+
         base = os.path.join(os.getcwd(), "redux")
         master_type = master_type.upper()
-        obs_mode = (expected_keywords.get("OBSMODE") or "").upper()
-        ifs_mode = (expected_keywords.get("IFSMODE") or "").upper()
 
-        # canonical endings we will search for
+        if not os.path.isdir(base):
+            return (None, None)
+
         tail_map = {
             "DARK": "_mdark.fits",
             "BIAS": "_mbias.fits",
             "FLATLAMP": "_mflatlamp.fits",
-            "FLATLENS": "_mflatlens.fits",}
+            "FLATLENS": "_mflatlens.fits",
+            "LENSFLAT": "_master_lensflat.fits",
+        }
 
-        # lenslet flats keep their long names
-        lenslet_tails = [
-            "LowRes-K_master_lensflat.fits",
-            "LowRes-L_master_lensflat.fits",
-            "LowRes-M_master_lensflat.fits",
-            "LowRes-SED_master_lensflat.fits",
-            "LowRes-H2O_master_lensflat.fits",
-            "LowRes-PAH_master_lensflat.fits",
-            "MedRes-L_master_lensflat.fits",
-            "MedRes-M_master_lensflat.fits",]
+        tail = tail_map.get(master_type)
+        if tail is None:
+            return (None, None)
 
-        if not os.path.isdir(base):
-            return (None,None)
-
-        # collect candidate filenames in redux/
-        all_files = [f for f in os.listdir(base) if f.lower().endswith(".fits")]
-
-        candidates = []
-
-        if master_type == "LENSFLAT":
-            # choose files whose name ends with the matching lenslet flat tail
-            # and then we'll let header matching decide
-            for f in all_files:
-                for tail in lenslet_tails:
-                    if f.endswith(tail):
-                        candidates.append(os.path.join(base, f))
-                        break
-        else:
-            tail = tail_map.get(master_type)
-            if not tail:
-                return None
-            # match anything like "*_master_dark.fits"
-            for f in all_files:
-                if f.endswith(tail):
-                    candidates.append(os.path.join(base, f))
+        candidates = [
+            os.path.join(base, fname)
+            for fname in os.listdir(base)
+            if fname.lower().endswith(".fits") and fname.endswith(tail)
+        ]
 
         if not candidates:
-            return (None,None)
+            return (None, None)
 
-        # now open candidates and check headers
         for path in candidates:
             try:
                 with fits.open(path) as hdul:
                     hdr = hdul[0].header
                     data = hdul[0].data
-                    uncert = hdul['UNCERT'].data
+                    uncert = hdul["UNCERT"].data if "UNCERT" in hdul else None
             except Exception:
                 continue
 
-            # basic type check: IMTYPE in file must match requested master_type
-            # (if file doesn't have IMTYPE, we just skip it)
-            imtype = (hdr.get("IMTYPE") or "").upper()
-            if imtype and imtype != master_type:
-                # not the right kind of master
+            # --------------------------------------------------
+            # IMTYPE check comes from requested master_type
+            # --------------------------------------------------
+            file_imtype = (hdr.get("IMTYPE") or "").upper()
+
+            expected_imtype = master_type
+
+            if file_imtype != expected_imtype:
                 continue
 
-            # for lens flats, also check IFSMODE from header vs expected
-            if master_type == "LENSFLAT":
-                file_ifs = (hdr.get("IFSMODE") or "").upper()
-                if ifs_mode and file_ifs and file_ifs != ifs_mode:
+            mismatch = False
+
+            for key, expected_value in expected_keywords.items():
+                if expected_value is None:
                     continue
 
-            # now check the rest of the expected keywords
-            mismatch = False
-            for key, exp_val in expected_keywords.items():
-                if key in ("IMTYPE", "IMTYPE"):  # user-supplied science header may have different type
+                # IFSMODE only matters for LENSFLAT
+                if key == "IFSMODE" and master_type != "FLATLENS":
                     continue
-                actual_val = hdr.get(key)
-                if actual_val != exp_val and exp_val is not None:
-                    mismatch = True
-                    break
+
+                # EXPTIME only matters for DARK
+                if key == "EXPTIME" and master_type != "DARK":
+                    continue
+
+                actual_value = hdr.get(key)
+
+                if key == "EXPTIME":
+                    try:
+                        if not np.isclose(
+                            float(actual_value),
+                            float(expected_value),
+                            rtol=0,
+                            atol=1e-6,
+                        ):
+                            mismatch = True
+                            break
+                    except Exception:
+                        mismatch = True
+                        break
+                else:
+                    if actual_value != expected_value:
+                        mismatch = True
+                        break
 
             if mismatch:
                 continue
 
-            # if we reach here, this file matches everything we care about
-            return (data,uncert)
-
-        # no candidate matched fully
-        return (None,None)
+            return (data, uncert)
+        return (None, None)
 
     ####################### calib correction #############################
     def apply_calibration(
@@ -717,7 +721,7 @@ class RampFit(BasePrimitive):
             self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
             keywords_unique = {
                 key: self.action.args.ccddata.header.get(key)
-                for key in ['CAMERA', 'IFSMODE', 'MCLOCK']}
+                for key in ['CAMERA','IFSMODE', 'MCLOCK', 'EXPTIME']}
 
             m_dark, m_dark_uncert = self.load_single_master_file(keywords_unique, master_type='DARK')
             m_bias, m_bias_uncert = self.load_single_master_file(keywords_unique, master_type='BIAS')

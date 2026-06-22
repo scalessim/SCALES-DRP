@@ -288,11 +288,12 @@ class QuickLook(BasePrimitive):
 
         self.logger.info("Optimal extraction started")
         t0 = time.time()
-        data_vector = np.asarray(data_image, dtype=np.float32).ravel()
-        numerator = R_transpose @ data_vector
+        optimized_flux = np.array(R_transpose*np.matrix(data_image.reshape([2048*2048,1])))
+        #data_vector = np.asarray(data_image, dtype=np.float32).ravel()
+        #optimized_flux = R_transpose @ data_vector
         #denominator = R2_transpose @ np.ones(data_vector.size, dtype=np.float32)
         #denominator_safe = np.maximum(denominator, 1e-9)
-        optimized_flux = numerator #/ denominator_safe
+        #optimized_flux = numerator #/ denominator_safe
         self.logger.info(f"Optimal extraction finished in {time.time() - t0:.4f} seconds.")
         return optimized_flux
 
@@ -898,15 +899,15 @@ class QuickLook(BasePrimitive):
                 print("IFSMODE is", ifs_mode)
                 if (
                     slope_filled is not None
-                    and os.path.exists(os.path.join(calib_path, "K_QL_rectmat_medres.npz"))
+                    and os.path.exists(os.path.join(calib_path, "ql_rmat_k_260604.npz"))
                     and (obj == "OBJECT" or obj == "FLATLEN")):
 
-                    R_matrix_medres_k = load_npz(calib_path+'K_QL_rectmat_medres.npz')
+                    R_matrix_medres_k = load_npz(calib_path+'ql_rmat_k_260604.npz')
                     cube1 = self.optimal_extract_fast(
                         R_matrix_medres_k,
                         slope_filled)
 
-                    cube= cube1.reshape(1900,18,17)
+                    cube= cube1.reshape(169,17,18)
                     wcs, wave_info = self.create_scales_wcs(
                         cube_shape=cube.shape,
                         header=hdr)
@@ -936,7 +937,7 @@ class QuickLook(BasePrimitive):
                         R_matrix_medres_l,
                         slope_filled)
 
-                    cube= cube1.reshape(1900,18,17)
+                    cube= cube1.reshape(1900,17,18)
                     wcs, wave_info = self.create_scales_wcs(
                         cube_shape=cube.shape,
                         header=hdr)
@@ -966,7 +967,7 @@ class QuickLook(BasePrimitive):
                         R_matrix_medres_m,
                         slope_filled)
 
-                    cube= cube1.reshape(1900,18,17)
+                    cube= cube1.reshape(1900,17,18)
                     wcs, wave_info = self.create_scales_wcs(
                         cube_shape=cube.shape,
                         header=hdr)

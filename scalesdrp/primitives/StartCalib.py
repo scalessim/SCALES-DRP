@@ -899,14 +899,14 @@ class StartCalib(BasePrimitive):
 
                     self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
 
-                    self.fits_writer_steps(
-                        data=bpm_slope,
-                        header=data_header,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix='_L1',
-                        overwrite=True,
-                        uncert = bpm_slope_uncert)
+                    #self.fits_writer_steps(
+                    #    data=bpm_slope,
+                    #    header=data_header,
+                    #    output_dir=self.action.args.dirname,
+                    #    input_filename=filename,
+                    #    suffix='_L1',
+                    #    overwrite=True,
+                    #    uncert = bpm_slope_uncert)
 
                     self.proctab_update(
                         header=data_header,
