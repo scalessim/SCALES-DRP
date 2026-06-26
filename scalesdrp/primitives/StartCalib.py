@@ -971,7 +971,7 @@ class StartCalib(BasePrimitive):
                 master, master_unc = self.build_master_from_stack(
                     group_ramps,
                     group_uncerts,
-                    method='mean')
+                    method='median')
 
                 hdrm = data_header
                 hdrm['HISTORY'] = f"Master {imtype} built from {len(group_ramps)} frames"
