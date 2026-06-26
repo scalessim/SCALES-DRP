@@ -22,7 +22,7 @@ from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
-
+from multiprocessing import Pool
 
 class RampFit(BasePrimitive):
 
@@ -164,6 +164,9 @@ class RampFit(BasePrimitive):
             base_valid &= self._sigma_clip_reads(input_read)
 
         if group_dq is not None:
+            if group_dq.shape != input_read.shape:
+                raise ValueError(f"group_dq must have shape {input_read.shape}, got {group_dq.shape}")
+
             saturated = (group_dq & DQ_FLAGS["SATURATED"]) != 0
             base_valid &= ~saturated
         # differences btw the consequtive reads
@@ -651,56 +654,88 @@ class RampFit(BasePrimitive):
     ####################################################################################
         
     def _perform(self):
-
         imtype = self.action.args.ccddata.header['IMTYPE']
         if imtype =='OBJECT':
             total_exptime = self.action.args.ccddata.header['EXPTIME']
             obsmode = self.action.args.ccddata.header['CAMERA']
-
+            det_config = self.action.args.ccddata.header['MCLOCK']
             package = __name__.split('.')[0]
+            filepath = 'calib/'
+            calib_path = str(get_resource_path(package, filepath)) + '/'
+            det_config = str(det_config).strip()
+
             if obsmode =='Im':
-                simfile = 'sim_readnoise.fits'
-                filepath = 'calib/'
-                calib_path = str(get_resource_path(package, filepath)) + '/'
-                SIG_map_scaled = fits.getdata(calib_path+simfile)
-                #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
-                rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                
+                if det_config =='5.0 MHz': #fast1.0
+                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
+                    #lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
+                    rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                elif det_config =='9.0 MHz': #fast0.6
+                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                    #lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
+                    rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                elif det_config =='20.0 MHz': #slow
+                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                    #lin_coeff = calib_path+"lin_coeffs_img_slow_cd5.fits"
+                    rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                else: #default if MCLCOCK is not specified
+                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                    #lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
+                    rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
 
             elif obsmode =='IFS':
-                simfile = 'sim_readnoise.fits'
-                filepath = 'calib/'
-                calib_path = str(get_resource_path(package, filepath)) + '/'
-                SIG_map_scaled = fits.getdata(calib_path+simfile)
-                #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
-                rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                if det_config =='5.0 MHz': #fast0.6
+                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                    rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                    #lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
+                elif det_config =='9.0 MHz': #fast1.0
+                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                    rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                    #lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
+                elif det_config =='20.0 MHz': #slow
+                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                    rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                    #lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
+                else:
+                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
+                    rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                    #lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
 
             input_data = self.action.args.ccddata.data
             #print(input_data.shape)
             #self.logger.info("+++++++++++ odd even column swapping +++++++++++")
             sci_im_full_original1 = self.swap_odd_even_columns(input_data,do_swap=False)
 
+            self.logger.info("refpix and 1/f correction started")
             sci_im_full_original = reference.reffix_hxrg(sci_im_full_original1, nchans=4)
             self.logger.info("refpix and 1/f correction completed")
 
             #self.logger.info("+++++++++++ linearity correction started +++++++++++")
-            #if obsmode =='IMAGING':
-            #    corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
-            #        sci_im_full_original,
-            #        linearity_file="linearity_coeffs_img.fits")
-
-            #if obsmode =='IFS':
-            #    corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
-            #    sci_im_full_original,
-            #    linearity_file="linearity_coeffs_img.fits")
-
-            #nim_s = sci_im_full_original.shape[0]
+            #corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube(
+            #    input_cube=sci_im_full_original,
+            #    coeff_file=lin_coeff,
+            #    bpm_2d=master_bpm,
+            #    invalid_read_behavior="raw",
+            #    use_goodpix=True,
+            #    return_aux=True)
+            #self.logger.info("+++++++++++ linearity correction finished +++++++++++")
             self.logger.info("+++++++++++ ramp fitting started +++++++++++")
 
             final_slope,final_reset,uncert = self.ramp_fit(
                 sci_im_full_original,
                 total_exptime,
                 SIG_map_scaled,
-                group_dq = None)
+                group_dq = None) #change group_dq=lin_dq
+
+            #self.action.args.ccddata.dq = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
 
             self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
             #final_ramp = bpm.apply_full_correction(final_slope,obsmode)

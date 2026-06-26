@@ -891,7 +891,7 @@ def scales_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
         except PackageNotFoundError:
             ver = "unknown"
         #version = pkg_resources.get_distribution('scalesdrp').version
-        ccddata.header.add_history(f"scalesdrp version={version}")
+        ccddata.header.add_history(f"scalesdrp version={ver}")
 
         # Get string filepath to .git dir, relative to this primitive
         primitive_loc = os.path.dirname(os.path.abspath(__file__))
@@ -926,27 +926,23 @@ def scales_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
         (main_name, extension) = os.path.splitext(out_file)
         out_file = main_name + "_" + suffix + extension
     hdus_to_save = ccddata.to_hdu()
-    # check for flags
-    
-    #flags = getattr(ccddata, "flags", None)
-    #if flags is not None:
-    #    hdus_to_save.append(fits.ImageHDU(flags, name='MORE',
-    #                                      do_not_scale_image_data=True))
-    # check for noskysub
-    #nskysb = getattr(ccddata, "noskysub", None)
+    dq = getattr(ccddata, "dq", None)
+    if dq is not None:
+        dq = np.asarray(dq)
+        if not np.issubdtype(dq.dtype, np.integer):
+            dq = dq.astype(np.uint32)
+        hdu_dq = fits.ImageHDU(
+            dq,
+            name="DQ",
+            do_not_scale_image_data=True)
+        hdu_dq.header["EXTDESC"] = "Data quality bit mask"
+        hdu_dq.header["DQ0"] = "bit 0: no linearity correction"
+        hdu_dq.header["DQ1"] = "bit 1: saturated read"
+        hdu_dq.header["DQ2"] = "bit 2: bad linearity value"
+        hdu_dq.header["DQ3"] = "bit 3: non-monotonic correction"
+        hdu_dq.header["DQ4"] = "bit 4: linearity correction applied"
+        hdus_to_save.append(hdu_dq)
 
-
-    #if nskysb1 is not None:
-    #    if ccddata.noskysub.dtype == np.float64:
-    #        ccddata.noskysub = ccddata.noskysub.astype(np.float32)
-    #    hdus_to_save.append(fits.ImageHDU(nskysb, name='FLUX-LQ'))
-
-
-    # something about the way the original table is written out is wrong
-    # and causes problems.  Leaving it off for now.
-    # if table is not None:
-    #    hdus_to_save.append(table)
-    # log
     logger.info(">>> Saving %d hdus to %s" % (len(hdus_to_save), out_file))
     hdus_to_save.writeto(out_file, overwrite=True)
 

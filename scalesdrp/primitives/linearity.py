@@ -1,746 +1,1351 @@
+from scalesdrp.core.scales_pkg_resources import get_resource_path
+import warnings
 import numpy as np
 from astropy.io import fits
 from tqdm import tqdm
-import os
-from scalesdrp.core.scales_pkg_resources import get_resource_path
-############## create polynomial #############################
 
-def characterize_detector_linearity_full(
+
+def make_linearity_coeffs_final(
     ramp_cube,
-    output_filename="linearity_coeffs_full.fits",
-    low_poly_order=1,          # low segment: keep strictly linear by default
-    high_poly_order=3,         # high segment: allow curvature
-    cutoff_fraction=0.75,
+    bpm_2d=None,
+    output_filename="linearity_coeffs_final.fits",
     *,
-    # basic quality cuts
-    min_dynamic_range=50.0,    # DN; below this, treat pixel as flat / unusable
-    min_points_for_fit=5,      # min valid reads before saturation to attempt ANY fit
-    require_increasing=True,   # reject pixels whose median dY <= 0
-    neg_slope_tolerance=-20.0, # DN/read; treat strongly negative ramps as bad
+    skip_initial_reads=2,
+    low_poly_order=1,
+    high_poly_order=2,
 
-    # saturation detection
-    sat_window=4,              # consecutive low-derivative reads needed to mark saturation
-    sat_frac=0.05,             # sat threshold = sat_frac * median(dy); set to None to disable
+    # Saturation / plateau detection
+    sat_window=3,
+    sat_drop_fraction=0.65,
+    hard_sat_dn=None,
 
-    # baseline refinement via deviation from line
-    initial_frac=0.25,         # use up to 25% of pre-sat signal for provisional line
-    baseline_dev_threshold=0.05,   # fractional deviation that defines non-linear break
-    baseline_safety_fraction=0.90, # use this fraction of break index as safe baseline region
-    min_pred_abs=1.0,          # guard for very small predicted L (to avoid crazy frac_dev)
+    # Nonlinearity break detection
+    linearity_fraction=0.975,
+    min_points_total=10,
+    min_low_points=6,
+    min_high_points=6,
+    fallback_split_fraction=0.75,
 
-    # polynomial sanity limits
-    low_slope_min=0.5,         # acceptable range for COEFFS1 linear term
-    low_slope_max=1.5,
-    high_coeff_limit=1e7       # max |COEFFS2| before we reject that fit
+    # Safety behavior
+    require_real_break=True,
+    allow_single_fit=False,
+    corr_worse_tolerance=1.05,
+
+    # Quality cuts
+    min_dynamic_range=50.0,
+    max_negative_jump_fraction=0.20,
+    negative_jump_sigma=5.0,
+
+    # Fit sanity checks
+    max_coeff_abs=1e8,
+    transition_tolerance=5.0,
+    monotonic_tolerance=-1e-3,
+    max_rms_low=np.inf,
+    max_rms_high=np.inf,
 ):
     """
-    Per-pixel linearity characterization.
+    Create per-pixel linearity correction coefficients.
 
-    For each pixel:
-      1) Detect where the ramp stops increasing (saturation / plateau)
-         using derivatives dy and a sliding window.
-      2) Discard saturated reads; keep only pre-saturation data.
-      3) Fit a provisional linear baseline to a very low-signal core
-         (up to `initial_frac * max(y_valid)`).
-      4) Use this provisional line to compute fractional deviation of all
-         pre-saturation points, and find the first read where the deviation
-         exceeds `baseline_dev_threshold`.
-      5) Define the final baseline region as the reads up to
-         `baseline_safety_fraction * break_index`, and refit a line there.
-      6) Use this final baseline line to define a linearized signal L(t).
-      7) Split (M, L) into two regions using a deviation-based cutoff in L,
-         with a fallback based on `cutoff_fraction` of the sequence length.
-      8) Fit two polynomials:
-            - COEFFS1: low-signal (M -> L), order = low_poly_order
-            - COEFFS2: high-signal (M -> L), order = high_poly_order
-         enforcing extra sanity checks on slopes and coefficient magnitudes.
+    Model:
+        measured DN M  --->  linearized DN L
 
-    Output FITS HDUs:
-      - COEFFS1        (low_poly_order+1, Ny, Nx)
-      - COEFFS2        (high_poly_order+1, Ny, Nx)
-      - CUTOFFS        (Ny, Nx)  cutoff in linearized DN #switch btw polynomial 1&2
-      - SATURATION     (Ny, Nx)  estimated saturation level in measured DN
-      - SLOPE          (Ny, Nx)  baseline linear slope
-      - INTERCEPT      (Ny, Nx)  baseline linear intercept
-      - GOODPIX        (Ny, Nx)  1 if coefficients are considered valid
+    Output convention:
+        COEFFS1 and COEFFS2 are np.polyval-compatible coefficients.
+
+        L = np.polyval(coeffs, M)
+
+    The correction is accepted only if it is finite, monotonic, continuous
+    across the low/high transition, and does not make the ramp less linear.
     """
 
-    ramp = np.asarray(ramp_cube, dtype=float)
-    n_reads, ny, nx = ramp.shape
-    reads = np.arange(n_reads, dtype=float)
+    # -------------------------------------------------
+    # DQ flags
+    # -------------------------------------------------
+    DQ_BPM_INPUT             = 1 << 0
+    DQ_NONFINITE             = 1 << 1
+    DQ_LOW_DYNAMIC_RANGE     = 1 << 2
+    DQ_TOO_FEW_POINTS        = 1 << 3
+    DQ_NEGATIVE_JUMPS        = 1 << 4
+    DQ_NO_SATURATION_FOUND   = 1 << 5
+    DQ_BAD_BASELINE          = 1 << 6
+    DQ_NO_BREAK_FOUND        = 1 << 7
+    DQ_BAD_LOWFIT            = 1 << 8
+    DQ_BAD_HIGHFIT           = 1 << 9
+    DQ_SINGLE_FIT_USED       = 1 << 10
+    DQ_NONMONOTONIC          = 1 << 11
+    DQ_TRANSITION_BAD        = 1 << 12
+    DQ_RMS_TOO_HIGH          = 1 << 13
+    DQ_UNPHYSICAL_CORR       = 1 << 14
 
-    # Allocate outputs
-    coeffs1        = np.full((low_poly_order  + 1, ny, nx), np.nan, dtype=np.float32)
-    coeffs2        = np.full((high_poly_order + 1, ny, nx), np.nan, dtype=np.float32)
-    cutoff_map     = np.full((ny, nx), np.nan, dtype=np.float32) #DN at which fitting switches
-    saturation_map = np.full((ny, nx), np.nan, dtype=np.float32)
-    slope_map      = np.full((ny, nx), np.nan, dtype=np.float32)
-    intercept_map  = np.full((ny, nx), np.nan, dtype=np.float32)
-    goodpix        = np.zeros((ny, nx), dtype=np.uint8)
+    fatal_flags = (
+        DQ_BPM_INPUT |
+        DQ_NONFINITE |
+        DQ_LOW_DYNAMIC_RANGE |
+        DQ_TOO_FEW_POINTS |
+        DQ_NEGATIVE_JUMPS |
+        DQ_BAD_BASELINE |
+        DQ_NONMONOTONIC |
+        DQ_TRANSITION_BAD |
+        DQ_RMS_TOO_HIGH |
+        DQ_UNPHYSICAL_CORR
+    )
+
+    # -------------------------------------------------
+    # Input checks
+    # -------------------------------------------------
+    ramp = np.asarray(ramp_cube, dtype=np.float64)
+
+    if ramp.ndim != 3:
+        raise ValueError("ramp_cube must have shape (n_reads, ny, nx)")
+
+    n_reads, ny, nx = ramp.shape
+    reads = np.arange(n_reads, dtype=np.float64)
+
+    if bpm_2d is None:
+        bpm_2d = np.zeros((ny, nx), dtype=np.uint8)
+    else:
+        bpm_2d = np.asarray(bpm_2d)
+        if bpm_2d.shape != (ny, nx):
+            raise ValueError("bpm_2d must have shape (ny, nx)")
+        bpm_2d = (bpm_2d != 0).astype(np.uint8)
+
+    # -------------------------------------------------
+    # Output arrays
+    # -------------------------------------------------
+    coeffs1 = np.full((low_poly_order + 1, ny, nx), np.nan, dtype=np.float32)
+    coeffs2 = np.full((high_poly_order + 1, ny, nx), np.nan, dtype=np.float32)
+
+    cutoff_m = np.full((ny, nx), np.nan, dtype=np.float32)
+    cutoff_l = np.full((ny, nx), np.nan, dtype=np.float32)
+
+    saturation = np.full((ny, nx), np.nan, dtype=np.float32)
+    sat_index = np.full((ny, nx), -1, dtype=np.int16)
+
+    slope_map = np.full((ny, nx), np.nan, dtype=np.float32)
+    intercept_map = np.full((ny, nx), np.nan, dtype=np.float32)
+
+    break_index = np.full((ny, nx), -1, dtype=np.int16)
+    nvalid_map = np.zeros((ny, nx), dtype=np.int16)
+    nlow_map = np.zeros((ny, nx), dtype=np.int16)
+    nhigh_map = np.zeros((ny, nx), dtype=np.int16)
+
+    rms1_map = np.full((ny, nx), np.nan, dtype=np.float32)
+    rms2_map = np.full((ny, nx), np.nan, dtype=np.float32)
+
+    raw_rms_map = np.full((ny, nx), np.nan, dtype=np.float32)
+    corr_rms_map = np.full((ny, nx), np.nan, dtype=np.float32)
+    improvement_map = np.full((ny, nx), np.nan, dtype=np.float32)
+
+    dq = np.zeros((ny, nx), dtype=np.uint32)
+    goodpix = np.zeros((ny, nx), dtype=np.uint8)
+
+    # -------------------------------------------------
+    # Helper functions
+    # -------------------------------------------------
+    def get_rank_warning():
+        if hasattr(np, "RankWarning"):
+            return np.RankWarning
+        if hasattr(np, "exceptions") and hasattr(np.exceptions, "RankWarning"):
+            return np.exceptions.RankWarning
+        return Warning
+
+    RankWarningClass = get_rank_warning()
 
     def safe_polyfit(x, y, order):
-        """Return polynomial coeffs (descending order) or None if unfit-able."""
-        x = np.asarray(x, float)
-        y = np.asarray(y, float)
-        if x.size <= order:
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+
+        if x.size < order + 2:
             return None
-        if np.nanstd(x) == 0 or np.nanstd(y) == 0:
+
+        if not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
             return None
+
+        if np.nanstd(x) <= 0:
+            return None
+
         try:
-            return np.polyfit(x, y, order).astype(np.float32)
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", RankWarningClass)
+                p = np.polyfit(x, y, order)
         except Exception:
             return None
 
-    # Minimum points for each segment (stricter than global min_points_for_fit)
-    min_low_points  = max(low_poly_order  + 2, 5)
-    min_high_points = max(high_poly_order + 2, 5)
+        if not np.all(np.isfinite(p)):
+            return None
 
-    # ---------- Per-pixel loop ----------
-    for r, c in tqdm(np.ndindex(ny, nx), total=ny * nx, desc="Linearity per pixel"):
+        if np.nanmax(np.abs(p)) > max_coeff_abs:
+            return None
+
+        return p.astype(np.float64)
+
+    def normalized_polyfit_to_original_x(x, y, order):
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+
+        if x.size < order + 2:
+            return None
+
+        x0 = np.nanmean(x)
+        xs = np.nanstd(x)
+
+        if not np.isfinite(x0) or not np.isfinite(xs) or xs <= 0:
+            return None
+
+        xn = (x - x0) / xs
+        pn = safe_polyfit(xn, y, order)
+
+        if pn is None:
+            return None
+
+        poly_n = np.poly1d(pn)
+        xpoly = np.poly1d([1.0 / xs, -x0 / xs])
+        p_orig = poly_n(xpoly).c
+
+        if not np.all(np.isfinite(p_orig)):
+            return None
+
+        if np.nanmax(np.abs(p_orig)) > max_coeff_abs:
+            return None
+
+        return p_orig.astype(np.float64)
+
+    def rms_to_line(y):
+        y = np.asarray(y, dtype=np.float64)
+        t = np.arange(y.size, dtype=np.float64)
+        m = np.isfinite(y)
+
+        if np.count_nonzero(m) < 3:
+            return np.nan
+
+        p = np.polyfit(t[m], y[m], 1)
+        model = np.polyval(p, t[m])
+        return float(np.sqrt(np.mean((y[m] - model) ** 2)))
+
+    def rms_resid(p, x, y):
+        if p is None:
+            return np.nan
+
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+
+        if x.size == 0:
+            return np.nan
+
+        model = np.polyval(p, x)
+        return float(np.sqrt(np.nanmean((y - model) ** 2)))
+
+    def monotonic_ok(p, xmin, xmax, ngrid=128):
+        if p is None:
+            return False
+
+        if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
+            return False
+
+        grid = np.linspace(xmin, xmax, ngrid)
+        vals = np.polyval(p, grid)
+
+        if not np.all(np.isfinite(vals)):
+            return False
+
+        return np.all(np.diff(vals) > monotonic_tolerance)
+
+    def apply_piecewise(y, p1, p2, cm):
+        y = np.asarray(y, dtype=np.float64)
+        out = np.full_like(y, np.nan, dtype=np.float64)
+
+        has_p1 = p1 is not None and np.all(np.isfinite(p1))
+        has_p2 = p2 is not None and np.all(np.isfinite(p2))
+
+        if not has_p1:
+            return out
+
+        low = y <= cm
+        out[low] = np.polyval(p1, y[low])
+
+        if has_p2:
+            out[~low] = np.polyval(p2, y[~low])
+        else:
+            out[~low] = np.polyval(p1, y[~low])
+
+        return out
+
+    # -------------------------------------------------
+    # Main per-pixel loop
+    # -------------------------------------------------
+    for r, c in tqdm(np.ndindex(ny, nx), total=ny * nx, desc="Linearity coeffs"):
+
+        if bpm_2d[r, c] != 0:
+            dq[r, c] |= DQ_BPM_INPUT
+            continue
+
         y_all = ramp[:, r, c]
+        finite = np.isfinite(y_all)
 
-        # 1) Basic finite check
-        mask_fin = np.isfinite(y_all)
-        if not np.any(mask_fin):
+        if np.count_nonzero(finite) < min_points_total:
+            dq[r, c] |= DQ_NONFINITE
             continue
 
-        t = reads[mask_fin]
-        y = y_all[mask_fin]
-        if y.size < 2:
+        t = reads[finite]
+        y = y_all[finite]
+
+        if skip_initial_reads > 0:
+            if y.size <= skip_initial_reads + min_points_total:
+                dq[r, c] |= DQ_TOO_FEW_POINTS
+                continue
+
+            t = t[skip_initial_reads:]
+            y = y[skip_initial_reads:]
+
+        if y.size < min_points_total:
+            dq[r, c] |= DQ_TOO_FEW_POINTS
             continue
 
-        # 2) Dynamic range check
-        dr = np.nanmax(y) - np.nanmin(y)
-        if dr < min_dynamic_range:
+        if np.nanmax(y) - np.nanmin(y) < min_dynamic_range:
+            dq[r, c] |= DQ_LOW_DYNAMIC_RANGE
             continue
 
-        # 3) Derivatives
         dy = np.diff(y)
-        if dy.size == 0:
+
+        if dy.size < sat_window:
+            dq[r, c] |= DQ_TOO_FEW_POINTS
             continue
 
-        # 3a) Strongly negative jumps → unstable pixel
-        neg_mask = dy < neg_slope_tolerance
-        if np.mean(neg_mask) > 0.3:
+        med_dy = np.nanmedian(dy)
+        mad_dy = 1.4826 * np.nanmedian(np.abs(dy - med_dy))
+
+        if not np.isfinite(mad_dy) or mad_dy <= 0:
+            mad_dy = max(abs(med_dy), 1.0)
+
+        neg_thresh = -negative_jump_sigma * mad_dy
+        neg_frac = np.mean(dy < neg_thresh)
+
+        if neg_frac > max_negative_jump_fraction:
+            dq[r, c] |= DQ_NEGATIVE_JUMPS
             continue
 
-        # 3b) Require overall increasing ramp if requested
-        if require_increasing and np.nanmedian(dy) <= 0:
-            continue
+        # -------------------------------------------------
+        # Saturation / plateau detection
+        # -------------------------------------------------
+        sat_i = None
 
-        # 4) Saturation / plateau detection
-        sat_index = None
-        if sat_frac is not None and dy.size >= sat_window:
-            baseline_slope_est = np.nanmedian(dy)
-            if baseline_slope_est > 0:
-                sat_thresh = sat_frac * baseline_slope_est
-                for i in range(dy.size - sat_window + 1):
-                    window_dy = dy[i:i + sat_window]
-                    if np.all(window_dy < sat_thresh):
-                        sat_index = i + 1  # plateau begins at read i+1
+        if hard_sat_dn is not None:
+            hard_hits = np.where(y >= hard_sat_dn)[0]
+            if hard_hits.size > 0:
+                sat_i = int(hard_hits[0])
+
+        if sat_i is None:
+            n_early = max(3, min(len(dy), len(dy) // 4))
+            early_slope = np.nanmedian(dy[:n_early])
+
+            if np.isfinite(early_slope) and early_slope > 0:
+                flat_thresh = sat_drop_fraction * early_slope
+
+                for i in range(len(dy) - sat_window + 1):
+                    local_slope = np.nanmedian(dy[i:i + sat_window])
+                    if local_slope < flat_thresh:
+                        sat_i = i + 1
                         break
 
-        # 5) Pre-saturation valid data
-        if sat_index is not None:
-            t_valid = t[:sat_index]
-            y_valid = y[:sat_index]
-            saturation_map[r, c] = y[sat_index]
-        else: #otherwise use all points
+        if sat_i is None:
+            dq[r, c] |= DQ_NO_SATURATION_FOUND
             t_valid = t
             y_valid = y
-            saturation_map[r, c] = y[-1]
-
-        if y_valid.size < min_points_for_fit:
-            continue
-
-        # ---------- Baseline fit (two-stage) ----------
-
-        # 5a) Provisional line from a low-signal core (<= initial_frac * max)
-        max_y_valid = np.nanmax(y_valid)
-        if not np.isfinite(max_y_valid):
-            continue
-
-        initial_cut = initial_frac * max_y_valid # 25% of max
-        core_mask = y_valid <= initial_cut
-        if np.count_nonzero(core_mask) >= 2:
-            t_lin0 = t_valid[core_mask]
-            y_lin0 = y_valid[core_mask]
+            sat_index[r, c] = -1
+            saturation[r, c] = y[-1]
         else:
-            n_lin0 = min(10, y_valid.size)
-            t_lin0 = t_valid[:n_lin0]
-            y_lin0 = y_valid[:n_lin0]
+            sat_i = int(np.clip(sat_i, 1, len(y) - 1))
+            t_valid = t[:sat_i]
+            y_valid = y[:sat_i]
+            sat_index[r, c] = sat_i
+            saturation[r, c] = y[sat_i]
 
-        if t_lin0.size < 2:
+        nvalid = len(y_valid)
+        nvalid_map[r, c] = nvalid
+
+        if nvalid < min_points_total:
+            dq[r, c] |= DQ_TOO_FEW_POINTS
             continue
 
-        a0, b0 = np.polyfit(t_lin0, y_lin0, 1)
-        if a0 <= 0:
+        # -------------------------------------------------
+        # Anchored baseline line
+        # -------------------------------------------------
+        t0 = t_valid[0]
+        y0 = y_valid[0]
+
+        tt = t_valid - t0
+        yy = y_valid - y0
+
+        denom = np.sum(tt ** 2)
+
+        if denom <= 0 or not np.isfinite(denom):
+            dq[r, c] |= DQ_BAD_BASELINE
             continue
 
-        # 5b) Fractional deviation across all pre-sat points
-        #min_pred_abs=1 will take care of division by small values
-        L_prov = a0 * t_valid + b0
-        denom_dev = np.maximum(np.abs(L_prov), min_pred_abs)
-        frac_dev = np.abs((y_valid - L_prov) / denom_dev)
+        slope = np.sum(tt * yy) / denom
+        intercept = y0 - slope * t0
 
-        # 5c) First read where non-linearity exceeds threshold 5%
-        over = np.where(frac_dev > baseline_dev_threshold)[0]
-        #neaver exceeds 5%, then low limit set to the end of the read
-        if over.size == 0:
-            idx_break = y_valid.size
+        if not np.isfinite(slope) or slope <= 0:
+            dq[r, c] |= DQ_BAD_BASELINE
+            continue
+
+        L_valid = slope * t_valid + intercept
+
+        if not np.all(np.isfinite(L_valid)):
+            dq[r, c] |= DQ_BAD_BASELINE
+            continue
+
+        slope_map[r, c] = slope
+        intercept_map[r, c] = intercept
+
+        # -------------------------------------------------
+        # Break detection
+        # -------------------------------------------------
+        denom_L = np.maximum(np.abs(L_valid), 1.0)
+        ratio = y_valid / denom_L
+
+        candidates = np.where(ratio < linearity_fraction)[0]
+
+        if candidates.size > 0:
+            idx_break = int(candidates[0])
         else:
-            idx_break = int(over[0])
+            idx_break = nvalid
+            dq[r, c] |= DQ_NO_BREAK_FOUND
 
-        # 5d) Final baseline region as safety fraction of break index
-        if idx_break <= 2: #fallback to single linear fit of 10 reads if idx_break<2
-            idx_baseline_end = min(10, y_valid.size)
-        else: #90% of the stright line
-            idx_baseline_end = int(baseline_safety_fraction * idx_break)
-            idx_baseline_end = max(2, min(idx_baseline_end, y_valid.size))
+        break_index[r, c] = idx_break
 
-        t_lin = t_valid[:idx_baseline_end]
-        y_lin = y_valid[:idx_baseline_end]
-        if t_lin.size < 2:
+        if require_real_break and idx_break >= nvalid:
             continue
 
-        # 5e) Final baseline slope & intercept
-        a, b = np.polyfit(t_lin, y_lin, 1)
-        if a <= 0:
-            continue
-
-        slope_map[r, c]     = a
-        intercept_map[r, c] = b
-
-        # 6) Linearized signal for all pre-sat points
-        L_valid = a * t_valid + b
-
-        # 7) Cutoff in L space for low/high segments
-        L_max = np.nanmax(L_valid)
-        if not np.isfinite(L_max):
-            continue
-
-        resid = y_valid - L_valid
-        denom_L = np.maximum(np.abs(L_valid), min_pred_abs)
-        rel_err = np.abs(resid / denom_L)
-
-        # deviation-based cutoff index (5%)
-        over2 = np.where(rel_err > baseline_dev_threshold)[0]
-        if over2.size:
-            cutoff_index = int(over2[0])
+        # -------------------------------------------------
+        # Split low/high regions
+        # -------------------------------------------------
+        if idx_break < nvalid:
+            split = idx_break
         else:
-            # fallback: use a fraction of the sequence length
-            cutoff_index = int(cutoff_fraction * len(L_valid))
+            split = int(fallback_split_fraction * nvalid)
 
-        # Clamp cutoff index to avoid extremely early or late splits
-        #at least 5 points in the lower polynomial
-        #at least 1 for higher order
-        nL = len(y_valid)
-        cutoff_index = max(5, cutoff_index)
-        cutoff_index = min(nL - 1, cutoff_index)
+        if nvalid >= min_low_points + min_high_points:
+            split = max(min_low_points, split)
+            split = min(nvalid - min_high_points, split)
+        else:
+            dq[r, c] |= DQ_TOO_FEW_POINTS
+            continue
 
-        cutoff_M = y_valid[cutoff_index]
-        cutoff_map[r, c] = cutoff_M
+        M_low = y_valid[:split]
+        L_low = L_valid[:split]
 
-        low_mask  = L_valid <= cutoff_M
-        high_mask = ~low_mask
+        M_high = y_valid[split:]
+        L_high = L_valid[split:]
 
-        M_low,  L_low  = y_valid[low_mask],  L_valid[low_mask]
-        M_high, L_high = y_valid[high_mask], L_valid[high_mask]
+        if len(M_low) < min_low_points or len(M_high) < min_high_points:
+            dq[r, c] |= DQ_TOO_FEW_POINTS
+            continue
 
-        # 8) Polynomial fits M -> L with segment-specific point requirements
-        p1 = None
-        p2 = None
+        nlow_map[r, c] = len(M_low)
+        nhigh_map[r, c] = len(M_high)
 
-        # --- Low segment ---
-        if M_low.size >= min_low_points:
-            p1 = safe_polyfit(M_low, L_low, low_poly_order)
+        cutoff_m[r, c] = y_valid[split]
+        cutoff_l[r, c] = L_valid[split]
 
-            # enforce near-identity slope at low DN
-            if p1 is not None and low_poly_order >= 1:
-                # Poly coeffs: [a_n, ..., a2, a1, a0]
-                a1_low = p1[-2]  # linear term
-                if (not np.isfinite(a1_low) or
-                        a1_low < low_slope_min or
-                        a1_low > low_slope_max): #0.5<a1<1.5
-                    p1 = None
+        # -------------------------------------------------
+        # Polynomial fits: measured DN -> linearized DN
+        # -------------------------------------------------
+        p1 = normalized_polyfit_to_original_x(M_low, L_low, low_poly_order)
+        p2 = normalized_polyfit_to_original_x(M_high, L_high, high_poly_order)
 
-        # --- High segment ---
-        if M_high.size >= min_high_points:
-            p2 = safe_polyfit(M_high, L_high, high_poly_order)
-            if p2 is not None:
-                if np.max(np.abs(p2)) > high_coeff_limit: #above 1e7
-                    p2 = None
+        if p1 is None:
+            dq[r, c] |= DQ_BAD_LOWFIT
 
-        # If both fail, try a single global fit as last resort
+        if p2 is None:
+            dq[r, c] |= DQ_BAD_HIGHFIT
+
+        if p1 is None and p2 is None and allow_single_fit:
+            p_single = normalized_polyfit_to_original_x(y_valid, L_valid, low_poly_order)
+            if p_single is not None:
+                p1 = p_single
+                dq[r, c] |= DQ_SINGLE_FIT_USED
+
         if p1 is None and p2 is None:
-            p_global = safe_polyfit(y_valid, L_valid, low_poly_order)
-            if p_global is None:
+            continue
+
+        # -------------------------------------------------
+        # Transition continuity
+        # -------------------------------------------------
+        if p1 is not None and p2 is not None:
+            mcut = float(cutoff_m[r, c])
+            y1 = np.polyval(p1, mcut)
+            y2 = np.polyval(p2, mcut)
+
+            if np.isfinite(y1) and np.isfinite(y2):
+                jump = y2 - y1
+                p2 = p2.copy()
+                p2[-1] -= jump
+
+                y2_new = np.polyval(p2, mcut)
+
+                if not np.isfinite(y2_new) or abs(y2_new - y1) > transition_tolerance:
+                    dq[r, c] |= DQ_TRANSITION_BAD
+                    p2 = None
+            else:
+                dq[r, c] |= DQ_TRANSITION_BAD
+                p2 = None
+
+        # -------------------------------------------------
+        # Monotonicity checks
+        # -------------------------------------------------
+        if p1 is not None:
+            if not monotonic_ok(p1, np.nanmin(M_low), np.nanmax(M_low)):
+                dq[r, c] |= DQ_NONMONOTONIC
+                p1 = None
+
+        if p2 is not None:
+            if not monotonic_ok(p2, np.nanmin(M_high), np.nanmax(M_high)):
+                dq[r, c] |= DQ_NONMONOTONIC
+                p2 = None
+
+        if p1 is None and p2 is None:
+            continue
+
+        # -------------------------------------------------
+        # Fit residual checks
+        # -------------------------------------------------
+        if p1 is not None:
+            rms1 = rms_resid(p1, M_low, L_low)
+            rms1_map[r, c] = rms1
+
+            if np.isfinite(rms1) and rms1 > max_rms_low:
+                dq[r, c] |= DQ_RMS_TOO_HIGH
                 continue
-            coeffs1[:, r, c] = p_global
-        else:
-            if p1 is not None:
-                coeffs1[:, r, c] = p1
-            if p2 is not None:
-                coeffs2[:, r, c] = p2
 
-        goodpix[r, c] = 1
+        if p2 is not None:
+            rms2 = rms_resid(p2, M_high, L_high)
+            rms2_map[r, c] = rms2
 
-    # ---------- Pack FITS ----------
-    primary_hdu = fits.PrimaryHDU()
-    primary_hdu.header['COMMENT'] = (
-        "Per-pixel non-linearity coefficients (measured->linear) "
-        "with deviation-based baseline fitting and segment sanity checks."
-    )
+            if np.isfinite(rms2) and rms2 > max_rms_high:
+                dq[r, c] |= DQ_RMS_TOO_HIGH
+                continue
+
+        # -------------------------------------------------
+        # Final safety test: do not make ramp worse
+        # -------------------------------------------------
+        y_corr = apply_piecewise(y_valid, p1, p2, cutoff_m[r, c])
+
+        if not np.all(np.isfinite(y_corr)):
+            dq[r, c] |= DQ_UNPHYSICAL_CORR
+            continue
+
+        raw_rms = rms_to_line(y_valid)
+        corr_rms = rms_to_line(y_corr)
+
+        raw_rms_map[r, c] = raw_rms
+        corr_rms_map[r, c] = corr_rms
+
+        if np.isfinite(raw_rms) and np.isfinite(corr_rms) and corr_rms > 0:
+            improvement_map[r, c] = raw_rms / corr_rms
+
+        dycorr = np.diff(y_corr)
+
+        if np.any(dycorr < -max(1.0, 5.0 * mad_dy)):
+            dq[r, c] |= DQ_UNPHYSICAL_CORR
+            continue
+
+        if np.isfinite(raw_rms) and np.isfinite(corr_rms):
+            if corr_rms > corr_worse_tolerance * raw_rms:
+                dq[r, c] |= DQ_UNPHYSICAL_CORR
+                continue
+
+        # -------------------------------------------------
+        # Store accepted coefficients
+        # -------------------------------------------------
+        if p1 is not None:
+            coeffs1[:, r, c] = p1.astype(np.float32)
+
+        if p2 is not None:
+            coeffs2[:, r, c] = p2.astype(np.float32)
+
+        if (dq[r, c] & fatal_flags) == 0:
+            goodpix[r, c] = 1
+
+    # -------------------------------------------------
+    # Write FITS
+    # -------------------------------------------------
+    phdu = fits.PrimaryHDU()
+    hdr = phdu.header
+
+    hdr["COMMENT"] = "Linearity correction coefficients: measured DN -> linearized DN"
+    hdr["SKIPRD"] = int(skip_initial_reads)
+    hdr["LINFRAC"] = float(linearity_fraction)
+    hdr["SATDROP"] = float(sat_drop_fraction)
+    hdr["SATWIN"] = int(sat_window)
+    hdr["LOWORD"] = int(low_poly_order)
+    hdr["HIWORD"] = int(high_poly_order)
+    hdr["MINPTS"] = int(min_points_total)
+    hdr["MINLOW"] = int(min_low_points)
+    hdr["MINHIGH"] = int(min_high_points)
+    hdr["FALLSPL"] = float(fallback_split_fraction)
+    hdr["REQBRK"] = bool(require_real_break)
+    hdr["SINGLE"] = bool(allow_single_fit)
+    hdr["CWORSE"] = float(corr_worse_tolerance)
+
+    hdr["DQ0"] = "1<<0 BPM input"
+    hdr["DQ1"] = "1<<1 nonfinite"
+    hdr["DQ2"] = "1<<2 low dynamic range"
+    hdr["DQ3"] = "1<<3 too few points"
+    hdr["DQ4"] = "1<<4 negative jumps"
+    hdr["DQ5"] = "1<<5 no saturation found"
+    hdr["DQ6"] = "1<<6 bad baseline"
+    hdr["DQ7"] = "1<<7 no break found"
+    hdr["DQ8"] = "1<<8 bad low fit"
+    hdr["DQ9"] = "1<<9 bad high fit"
+    hdr["DQ10"] = "1<<10 single fit fallback"
+    hdr["DQ11"] = "1<<11 nonmonotonic"
+    hdr["DQ12"] = "1<<12 bad transition"
+    hdr["DQ13"] = "1<<13 RMS too high"
+    hdr["DQ14"] = "1<<14 unphysical correction"
 
     hdul = fits.HDUList([
-        primary_hdu,
-        fits.ImageHDU(coeffs1,        name="COEFFS1"),
-        fits.ImageHDU(coeffs2,        name="COEFFS2"),
-        fits.ImageHDU(cutoff_map,     name="CUTOFFS"),
-        fits.ImageHDU(saturation_map, name="SATURATION"),
-        fits.ImageHDU(slope_map,      name="SLOPE"),
-        fits.ImageHDU(intercept_map,  name="INTERCEPT"),
-        fits.ImageHDU(goodpix,        name="GOODPIX"),
+        phdu,
+        fits.ImageHDU(coeffs1, name="COEFFS1"),
+        fits.ImageHDU(coeffs2, name="COEFFS2"),
+        fits.ImageHDU(cutoff_m, name="CUTOFF_M"),
+        fits.ImageHDU(cutoff_l, name="CUTOFF_L"),
+        fits.ImageHDU(saturation, name="SATURATION"),
+        fits.ImageHDU(sat_index, name="SAT_INDEX"),
+        fits.ImageHDU(slope_map, name="SLOPE"),
+        fits.ImageHDU(intercept_map, name="INTERCEPT"),
+        fits.ImageHDU(break_index, name="BREAK_INDEX"),
+        fits.ImageHDU(nvalid_map, name="NVALID"),
+        fits.ImageHDU(nlow_map, name="NLOW"),
+        fits.ImageHDU(nhigh_map, name="NHIGH"),
+        fits.ImageHDU(rms1_map, name="RMS1"),
+        fits.ImageHDU(rms2_map, name="RMS2"),
+        fits.ImageHDU(raw_rms_map, name="RAW_RMS"),
+        fits.ImageHDU(corr_rms_map, name="CORR_RMS"),
+        fits.ImageHDU(improvement_map, name="IMPROVE"),
+        fits.ImageHDU(dq, name="DQ"),
+        fits.ImageHDU(goodpix, name="GOODPIX"),
+        fits.ImageHDU(bpm_2d.astype(np.uint8), name="BPM_INPUT"),
     ])
 
     hdul.writeto(output_filename, overwrite=True)
     return hdul
 
-################ how to execute ########################################################
-#where ramp is a cube of read from where we are creating the coefficients
-#linearity_hdul =  characterize_detector_linearity_full(
-#    ramp_cube = ramp,
-#    output_filename="linearity_coeffs_img_full_order3.fits")
+
+#hdul = make_linearity_coeffs_final(
+#    lin_input,
+#    bpm_2d=bpm,
+#    output_filename="lin_coeffs_img_fast0.6_cd5.fits",
+#    skip_initial_reads=2,
+#    linearity_fraction=0.975,
+#    sat_drop_fraction=0.65,
+#    high_poly_order=2)
 
 
-############# linearity correction  #############################################
-
+##################### correct ########################################
+# ----------------------------------------------------------------------
+# Linearity DQ bit definitions
+# ----------------------------------------------------------------------
+LIN_NO_CORR      = 1 << 0   # no valid linearity correction for this pixel/read
+LIN_SATURATED    = 1 << 1   # read is at/after SAT_INDEX
+LIN_BAD_VALUE    = 1 << 2   # correction produced NaN/inf
+LIN_NONMONOTONIC = 1 << 3   # correction made valid ramp non-monotonic
+LIN_APPLIED      = 1 << 4   # linearity correction applied to this read
 
 DQ_FLAGS = {
-    'GOOD': 0,
-    'DO_NOT_USE': 1,
-    'SATURATED': 2,
-    'NO_LIN_CORR': 1024,
+    "DO_NOT_USE": 1 << 0,      # input BPM / unusable pixel
+    "NO_LIN_CORR": 1 << 1,     # no valid linearity correction
+    "SATURATED": 1 << 2,       # read is at/after SAT_INDEX
+    "BAD_LIN_CORR": 1 << 3,    # correction produced invalid value
+    "LIN_NONMONO": 1 << 4,     # correction made ramp non-monotonic
+    "LIN_APPLIED": 1 << 5,     # correction applied successfully
 }
 
-
-def _polyval_stack(coeffs_desc, x3d):
-    """
-    coeffs_desc: (P+1, H, W)
-    x3d:         (N, H, W) #input read
-    returns:     (N, H, W)
-    """
-    P, H, W = coeffs_desc.shape
-    #starting with the highest order polynomial
-    y = np.broadcast_to(coeffs_desc[0], x3d.shape).astype(np.float32)
-    for j in range(1, P):
-        y = y * x3d + coeffs_desc[j]
-    return y
-
-def create_saturation_map_by_slope(science_ramp,
-                                   slope_threshold=2.0,
-                                   window=3):
-    """
-    Estimate saturation level per pixel using the raw ramp derivative.
-    Returns sat_map (H, W) in *measured DN*.
-
-    For each pixel, we:
-      - compute dy = diff(y)
-      - smooth dy with a boxcar of length `window`
-      - find the first index where smoothed dy < slope_threshold
-      - take the corresponding y-level as the saturation DN
-    """
-    N, H, W = science_ramp.shape
-    sat_map = np.full((H, W), np.inf, dtype=np.float32)
-
-    kernel = np.ones(window, dtype=np.float32) / float(window)
-
-    for r in range(H):
-        for c in range(W):
-            y = science_ramp[:, r, c]
-            dy = np.diff(y)
-            if dy.size < window:
-                continue
-
-            sm = np.convolve(dy, kernel, mode="valid")
-            flat = np.where(sm < slope_threshold)[0] #first index where sm < slope_threshold
-            if flat.size:
-                idx = flat[0] + window
-                if 0 <= idx < N:
-                    sat_map[r, c] = y[idx] #DN value where the pixel stops increasing
-
-    return sat_map
-
-
-def create_group_dq(science_ramp, sat_map):
-    """
-    Build GROUPDQ flags using a per-pixel saturation DN map.
-    mark all reads from first saturated one as SATURATED
-    Parameters
-    ----------
-    science_ramp : (N, H, W) in measured DN
-    sat_map      : (H, W) saturation DN (measured), or +inf for "never"
-
-    Returns
-    -------
-    gdq : (N, H, W), uint16
-        SATURATED bit set from the first read where M >= sat_map onward.
-    """
-    N, H, W = science_ramp.shape
-    gdq = np.zeros((N, H, W), dtype=np.uint16)
-
-    # broadcast sat_map to (N,H,W)
-    sat_mask = science_ramp >= sat_map[None, :, :]  # True where measured DN >= sat DN
-
-    # mark immediately
-    gdq[sat_mask] |= DQ_FLAGS["SATURATED"]
-
-    # IF THE previous read as saturated, mark all the later ones too
-    for i in range(1, N):
-        prev_sat = (gdq[i - 1] & DQ_FLAGS["SATURATED"]) != 0 
-        gdq[i, prev_sat] |= DQ_FLAGS["SATURATED"]
-
-    return gdq
-
-def enforce_cutoff_in_groupdq(group_dq, cutoff_read_map):
-    """
-    Ensure that reads >= cutoff_read_map[row, col] are marked SATURATED in GROUPDQ.
-    """
-    N, H, W = group_dq.shape
-    out = group_dq.copy()
-
-    for r in range(H):
-        for c in range(W):
-            k = cutoff_read_map[r, c]
-            if 0 <= k < N:
-                out[k:, r, c] |= DQ_FLAGS["SATURATED"]
-    return out
-
-def apply_linearity_correction_twopart_final(
-    science_ramp,
-    group_dq,
-    linearity_hdul,
+def apply_linearity_coeffs_to_cube(
+    input_cube,
+    coeff_file,
+    bpm_2d=None,
     *,
-    coeff2_max=1e8,          # max |COEFFS2| above this => don't use high segment
+    invalid_read_behavior="raw",
+    use_goodpix=True,
+    check_finite=True,
+    check_monotonic=True,
+    monotonic_tolerance=-1e-3,
+    return_aux=False,
 ):
     """
-    Apply per-pixel two-segment polynomial linearity correction.
+    Apply measured-DN -> linearized-DN correction to a cube of reads.
 
-    Calibration file must contain:
-      - COEFFS1 : (P1+1, H, W)  low-signal polynomial  (measured -> linear)
-      - COEFFS2 : (P2+1, H, W)  high-signal polynomial (measured -> linear)
-      - CUTOFFS : (H, W)        *measured* DN where we prefer COEFFS2 over COEFFS1
-      - GOODPIX : (H, W) bool   1 = good coefficients (optional, assumed True)
-      - (optional) CUTOFF_READ : (H, W) int16
-            pre-computed per-pixel read cutoff index (0..N-1)
+    The correction model is:
 
-    Behaviour
-    ---------
-    * CUTOFFS is **only** used as a threshold in measured DN to decide between
-      low vs high polynomial. It is NOT used to compute a read index.
+        M -> L
 
-    * The read-index cutoff map is:
-        - CUTOFF_READ HDU if present, else
-        - first read where GROUPDQ has SATURATED bit set for that pixel;
-          if no read is SATURATED, cutoff_read_map = N-1.
+    where M is the measured DN and L is the linearized DN.
 
-    * Pixels with *no usable low segment* (COEFFS1 all-NaN, or cutoff NaN,
-      or GOODPIX==False) are:
-        - flagged with DQ_FLAGS["NO_LIN_CORR"] in pixel_dq
-        - forced to use identity y = x for both segments (no correction).
+    Coefficient convention:
 
-    * Pixels where the *high* segment looks bad (huge |COEFFS2| or COEFFS2
-      all-NaN) but the low segment is fine:
-        - are NOT flagged NO_LIN_CORR
-        - simply never use COEFFS2; they use COEFFS1 at all counts.
-
-    * Existing SATURATED bits in group_dq are preserved:
-        corrected_ramp = original science_ramp where SATURATED is set.
+        L = np.polyval(coeffs, M)
 
     Parameters
     ----------
-    science_ramp : ndarray, shape (N,H,W)
-        Input ramp in measured DN.
-    group_dq : ndarray, shape (N,H,W), uint16
-        GROUPDQ-like flags. SATURATED bits are preserved.
-    linearity_hdul : fits.HDUList
-        Opened linearity calibration file.
+    input_cube : ndarray, shape (N, H, W)
+        Input ramp cube in measured DN.
+
+    coeff_file : str
+        FITS file created by make_linearity_coeffs_final().
+
+    bpm_2d : ndarray, optional, shape (H, W)
+        Additional bad-pixel mask. Nonzero pixels are not corrected.
+
+    invalid_read_behavior : {"raw", "flat_last_valid", "nan"}
+        What to do for reads at/after SAT_INDEX.
+
+        "raw":
+            Keep original measured DN after saturation.
+
+        "flat_last_valid":
+            Set reads after saturation to the last valid corrected value.
+
+        "nan":
+            Set reads after saturation to NaN.
+
+    use_goodpix : bool
+        If True, only apply correction where GOODPIX == 1.
+
+    check_finite : bool
+        If True, reject the correction for a pixel if input or corrected
+        values are non-finite.
+
+    check_monotonic : bool
+        If True, reject the correction for a pixel if corrected valid reads
+        contain a clear negative step.
+
+    monotonic_tolerance : float
+        Allowed negative step in corrected DN.
+
+    return_aux : bool
+        If True, return corrected_cube, lin_dq, and lin_mask.
 
     Returns
     -------
-    corrected_ramp : ndarray, (N,H,W), float32
-        Linearity-corrected ramp (in "linearized DN").
-    pixel_dq       : ndarray, (H,W),   uint16
-        Pixel-level DQ flags (e.g. NO_LIN_CORR).
-    cutoff_read_map: ndarray, (H,W),   int16
-        Per-pixel read-index cutoff:
-          - if CUTOFF_READ HDU exists: that value (clipped to [0,N-1])
-          - else: first index where GROUPDQ has SATURATED set;
-                  if never saturated, N-1.
+    corrected_cube : ndarray, shape (N, H, W), float32
+
+    If return_aux=True:
+        corrected_cube : ndarray, shape (N, H, W), float32
+        lin_dq        : ndarray, shape (N, H, W), uint32
+        lin_mask      : ndarray, shape (H, W), bool
+
+    Notes
+    -----
+    lin_dq is a read-level DQ cube. Ramp fitting can identify saturated reads as:
+
+        sat_mask = (lin_dq & LIN_SATURATED) != 0
+
+    and corrected reads as:
+
+        corrected_reads = (lin_dq & LIN_APPLIED) != 0
     """
 
-    # ---------- Shapes ----------
-    science_ramp = science_ramp.astype(np.float32, copy=False)
-    N, H, W = science_ramp.shape
+    cube = np.asarray(input_cube, dtype=np.float32)
 
-    coeffs1 = linearity_hdul["COEFFS1"].data.astype(np.float32)  # (P1+1,H,W)
-    coeffs2 = linearity_hdul["COEFFS2"].data.astype(np.float32)  # (P2+1,H,W)
-    cutoffs = linearity_hdul["CUTOFFS"].data.astype(np.float32)  # (H,W) measured DN
+    if cube.ndim != 3:
+        raise ValueError("input_cube must have shape (N, H, W)")
 
-    if "GOODPIX" in linearity_hdul:
-        goodpix = linearity_hdul["GOODPIX"].data.astype(bool)    # (H,W)
+    N, H, W = cube.shape
+
+    if invalid_read_behavior not in {"raw", "flat_last_valid", "nan"}:
+        raise ValueError(
+            "invalid_read_behavior must be 'raw', 'flat_last_valid', or 'nan'"
+        )
+
+    if bpm_2d is None:
+        bpm_2d = np.zeros((H, W), dtype=bool)
     else:
-        goodpix = np.ones((H, W), dtype=bool)
+        bpm_2d = np.asarray(bpm_2d) != 0
+        if bpm_2d.shape != (H, W):
+            raise ValueError("bpm_2d must have shape (H, W)")
 
-    P1 = coeffs1.shape[0]
-    P2 = coeffs2.shape[0]
+    with fits.open(coeff_file) as hdul:
+        coeffs1 = hdul["COEFFS1"].data.astype(np.float64)
+        coeffs2 = hdul["COEFFS2"].data.astype(np.float64)
+        cutoff_m = hdul["CUTOFF_M"].data.astype(np.float64)
+        sat_index = hdul["SAT_INDEX"].data.astype(np.int32)
 
-    # ---------- Pixel-level DQ ----------
-    pixel_dq = np.zeros((H, W), dtype=np.uint16)
-
-    # ---------- Coefficient sanity checks ----------
-
-    # Where does each segment have ANY finite coefficients?
-    poly1_has_any = np.isfinite(coeffs1).any(axis=0)   # (H,W)
-    poly2_has_any = np.isfinite(coeffs2).any(axis=0)   # (H,W)
-
-    poly1_all_nan = ~poly1_has_any #lower order polynimal was not fitted
-    poly2_all_nan = ~poly2_has_any #higher order polynimal was not fitted
-
-    cutoff_nan = ~np.isfinite(cutoffs) #cutoff undefined
-    goodpix_bad = ~goodpix #not linearity corrected pixel
-
-    # COEFFS2: coefficients should not be enormous
-    abs2 = np.abs(coeffs2)
-    abs2[~np.isfinite(abs2)] = np.nan
-    high2 = np.nanmax(abs2, axis=0)                    # (H,W)
-    coeff2_bad = high2 > coeff2_max
-
-    # Pixels where we *must* fall back to identity:
-    #   - cutoff NaN, OR
-    #   - GOODPIX is false, OR
-    #   - low segment completely missing.
-    mask_identity = cutoff_nan | goodpix_bad | poly1_all_nan     # (H,W)
-
-    # Pixels where high segment cannot be trusted, but low is OK:
-    high_bad_only = (~mask_identity) & (poly2_all_nan | coeff2_bad)
-
-    # ---------- Apply fallback behaviours ----------
-
-    # 1) Identity pixels: mark NO_LIN_CORR, use y = x for both segments
-    if np.any(mask_identity):
-        pixel_dq[mask_identity] |= DQ_FLAGS["NO_LIN_CORR"]
-
-        # Identity polynomial y = x for low-order set (P1)
-        ident1 = np.zeros(P1, dtype=np.float32)
-        if P1 >= 2:
-            ident1[-2] = 1.0   # slope
-            ident1[-1] = 0.0   # offset
+        if "GOODPIX" in hdul and use_goodpix:
+            goodpix = hdul["GOODPIX"].data.astype(bool)
         else:
-            ident1[0] = 1.0
+            goodpix = np.ones((H, W), dtype=bool)
 
-        # Identity polynomial y = x for high-order set (P2)
-        ident2 = np.zeros(P2, dtype=np.float32)
-        if P2 >= 2:
-            ident2[-2] = 1.0
-            ident2[-1] = 0.0
+        coeff_bpm = (
+            hdul["BPM_INPUT"].data.astype(bool)
+            if "BPM_INPUT" in hdul
+            else np.zeros((H, W), dtype=bool)
+        )
+
+    if coeffs1.shape[1:] != (H, W):
+        raise ValueError("COEFFS1 spatial shape does not match input cube")
+
+    if coeffs2.shape[1:] != (H, W):
+        raise ValueError("COEFFS2 spatial shape does not match input cube")
+
+    if cutoff_m.shape != (H, W):
+        raise ValueError("CUTOFF_M shape does not match input cube")
+
+    if sat_index.shape != (H, W):
+        raise ValueError("SAT_INDEX shape does not match input cube")
+
+    corrected = cube.copy().astype(np.float32)
+
+    # Read-level linearity DQ cube.
+    lin_dq = np.zeros((N, H, W), dtype=np.uint32)
+
+    # Pixel-level mask: True where at least one valid read was corrected.
+    lin_mask = np.zeros((H, W), dtype=bool)
+
+    def has_coeff(p):
+        return np.all(np.isfinite(p))
+
+    def apply_piecewise(y, p1, p2, cm):
+        """
+        Apply piecewise measured-DN -> linearized-DN correction.
+        """
+        y = np.asarray(y, dtype=np.float64)
+        out = np.full_like(y, np.nan, dtype=np.float64)
+
+        if not has_coeff(p1) or not np.isfinite(cm):
+            return out
+
+        low = y <= cm
+
+        out[low] = np.polyval(p1, y[low])
+
+        if has_coeff(p2):
+            out[~low] = np.polyval(p2, y[~low])
         else:
-            ident2[0] = 1.0
+            out[~low] = np.polyval(p1, y[~low])
 
-        coeffs1[:, mask_identity] = ident1[:, None]
-        coeffs2[:, mask_identity] = ident2[:, None]
+        return out
 
-    # NOTE: for high_bad_only we *do not* touch the coefficients directly.
-    # We will simply never use COEFFS2 for those pixels in the blending step.
+    for r, c in tqdm(
+        np.ndindex(H, W),
+        total=H * W,
+        desc="Applying linearity correction",
+    ):
 
-    # ---------- Evaluate polynomials on the ramp ----------
-    corrected1 = _polyval_stack(coeffs1, science_ramp)  # (N,H,W)
-    corrected2 = _polyval_stack(coeffs2, science_ramp)  # (N,H,W)
+        # ------------------------------------------------------------
+        # Skip pixels with no valid correction
+        # ------------------------------------------------------------
+        if bpm_2d[r, c] or coeff_bpm[r, c] or not goodpix[r, c]:
+            lin_dq[:, r, c] |= LIN_NO_CORR
+            continue
 
+        p1 = coeffs1[:, r, c]
+        p2 = coeffs2[:, r, c]
+        cm = cutoff_m[r, c]
 
-    corrected_ramp = corrected1.copy()
+        if not has_coeff(p1) or not np.isfinite(cm):
+            lin_dq[:, r, c] |= LIN_NO_CORR
+            continue
 
-    #  - high segment not flagged as bad
-    valid_high = (~mask_identity) & (~high_bad_only)   # (H,W)
-    valid_high_3d = valid_high[None, :, :]             # (N,H,W)
+        # ------------------------------------------------------------
+        # Valid read range from SAT_INDEX
+        #
+        # SAT_INDEX is interpreted as the first saturated/invalid read.
+        # If SAT_INDEX < 0, no saturation was found, so all reads are used.
+        # ------------------------------------------------------------
+        k = int(sat_index[r, c])
 
-    # Use measured-DN cutoff only to choose which polynomial to apply.
-    below_cut = science_ramp <= cutoffs[None, :, :]    # (N,H,W) bool
-    use_high = (~below_cut) & valid_high_3d
+        if k < 0:
+            k = N
+        else:
+            k = min(k, N)
 
-    #if input read greater than cutoff, use corrected 2, otherwise corrected_ramp
-    corrected_ramp = np.where(use_high, corrected2, corrected_ramp)
+        if k <= 0:
+            lin_dq[:, r, c] |= LIN_NO_CORR
+            lin_dq[:, r, c] |= LIN_SATURATED
+            continue
 
-    # ---------- Preserve SATURATED samples from input GROUPDQ ----------
-    sat_mask = (group_dq & DQ_FLAGS["SATURATED"]) != 0  # (N,H,W) bool
-    corrected_ramp = np.where(sat_mask, science_ramp, corrected_ramp)
+        # Mark reads at/after saturation.
+        if k < N:
+            lin_dq[k:, r, c] |= LIN_SATURATED
 
-    # ---------- Build cutoff-read map (per pixel) ----------
-    # Strategy:
-    #   1) If the calibration file provides a CUTOFF_READ HDU, use that.
-    #   2) Otherwise, derive it from GROUPDQ SATURATED flags:
-    #        first read where SATURATED is set; if never, N-1.
+        y = cube[:k, r, c]
 
-    if "CUTOFF_READ" in linearity_hdul:
-        cutoff_read_map = linearity_hdul["CUTOFF_READ"].data.astype(np.int16)
-        # clip to valid range
-        cutoff_read_map = np.clip(cutoff_read_map, 0, N - 1)
-    else:
-        cutoff_read_map = np.full((H, W), fill_value=N - 1, dtype=np.int16)
-        sat_mask_3d = (group_dq & DQ_FLAGS["SATURATED"]) != 0  # (N,H,W)
+        # ------------------------------------------------------------
+        # Input finite check
+        # ------------------------------------------------------------
+        if check_finite and not np.all(np.isfinite(y)):
+            lin_dq[:k, r, c] |= LIN_NO_CORR | LIN_BAD_VALUE
+            continue
 
-        # For each pixel, find the first read where it is saturated.
-        # This uses the same saturation logic you used to build group_dq
-        # (e.g., derivative-based sat detection), so it's consistent.
-        for r in range(H):
-            sat_row = sat_mask_3d[:, r, :]       # (N,W)
-            any_sat = sat_row.any(axis=0)        # (W,)
-            if not np.any(any_sat):
+        # ------------------------------------------------------------
+        # Apply correction to pre-saturation reads
+        # ------------------------------------------------------------
+        ycorr = apply_piecewise(y, p1, p2, cm)
+
+        if check_finite and not np.all(np.isfinite(ycorr)):
+            lin_dq[:k, r, c] |= LIN_NO_CORR | LIN_BAD_VALUE
+            continue
+
+        # ------------------------------------------------------------
+        # Safety check: correction should not introduce obvious
+        # downward steps in the pre-saturation ramp.
+        # ------------------------------------------------------------
+        if check_monotonic and ycorr.size > 1:
+            dycorr = np.diff(ycorr)
+
+            if np.any(dycorr < monotonic_tolerance):
+                lin_dq[:k, r, c] |= LIN_NO_CORR | LIN_NONMONOTONIC
                 continue
-            first_idx = np.argmax(sat_row[:, any_sat], axis=0)  # (n_sat,)
-            cutoff_read_map[r, any_sat] = first_idx.astype(np.int16)
 
-    
-    total_pix = H * W
-    n_no_lin   = np.count_nonzero(pixel_dq & DQ_FLAGS["NO_LIN_CORR"])
-    n_high_bad = np.count_nonzero(high_bad_only & ~mask_identity)
+        # ------------------------------------------------------------
+        # Write corrected values for pre-saturation reads
+        # ------------------------------------------------------------
+        corrected[:k, r, c] = ycorr.astype(np.float32)
+        lin_dq[:k, r, c] |= LIN_APPLIED
+        lin_mask[r, c] = True
 
-    #print(f"[linearity] NO_LIN_CORR: {n_no_lin} / {total_pix} "
-    #      f"({100.0*n_no_lin/total_pix:.2f} %)")
-    #print(f"[linearity] Pixels using low-only (high segment disabled): "
-    #      f"{n_high_bad} / {total_pix} "
-    #      f"({100.0*n_high_bad/total_pix:.2f} %)")
+        # ------------------------------------------------------------
+        # Handle reads at/after saturation
+        #
+        # These are flagged with LIN_SATURATED regardless of value.
+        # Ramp fitting should ignore them using lin_dq.
+        # ------------------------------------------------------------
+        if k < N:
+            if invalid_read_behavior == "raw":
+                corrected[k:, r, c] = cube[k:, r, c]
 
-    return corrected_ramp.astype(np.float32, copy=False), pixel_dq, cutoff_read_map
+            elif invalid_read_behavior == "flat_last_valid":
+                corrected[k:, r, c] = ycorr[-1]
+
+            elif invalid_read_behavior == "nan":
+                corrected[k:, r, c] = np.nan
+
+    if return_aux:
+        return corrected.astype(np.float32), lin_dq, lin_mask
+
+    return corrected.astype(np.float32)
 
 
-
-def run_linearity_workflow(science_ramp, linearity_file): #best one
+################ diagnostics plots ##################################
+def plot_linearity_correction_examples(
+    coeff_file,
+    ramp_cube,
+    pixels=None,
+    *,
+    n_examples=4,
+    ref_fraction=0.80,
+    selection_mode="mixed",
+    max_search_pixels=300000,
+    random_seed=123,
+    savefile=None,
+    dpi=200,
+):
     """
-    High-level wrapper for linearity correction:
+    Plot example pixels showing how the linearity correction is performed.
 
-      1) Find saturation onset from derivatives (sat_map_meas, measured DN).
-      2) Build initial GROUPDQ from raw saturation (measured DN).
-      3) Apply two-piece polynomial linearity correction (measured -> linear),
-         and get a calibration-based read cutoff (cutoff_read_map).
-      4) Derive a *physical* cutoff from where the corrected ramp crosses the
-         saturation DN (sat_phys), per pixel.
-      5) Combine both into an effective cutoff = min(calib_cutoff, phys_cutoff).
-      6) Enforce this effective cutoff in GROUPDQ (mark reads >= cutoff SATURATED).
-      7) For all reads >= cutoff, force corrected DN to the saturation DN, and
-         guarantee that no corrected value exceeds saturation.
+    Figure layout
+    -------------
+    Top row:
+        Raw ramp M(t), linear reference L(t), corrected ramp.
+
+    Bottom row:
+        Measured-to-linearized mapping L(M), with ramp samples and
+        fitted piecewise polynomial correction.
+
+    Parameters
+    ----------
+    coeff_file : str
+        FITS file produced by make_linearity_coeffs_final().
+
+    ramp_cube : ndarray
+        Original ramp cube with shape (n_reads, ny, nx).
+
+    pixels : list of tuple, optional
+        Specific pixels to plot, e.g. [(500, 500), (1000, 1000)].
+        Pixel order is (row, column).
+
+    n_examples : int
+        Number of automatically selected example pixels if pixels is None.
+
+    ref_fraction : float
+        Reference signal fraction of saturation used to compute correction
+        amplitude for pixel ranking.
+
+    selection_mode : {"mixed", "strong", "typical"}
+        Automatic pixel selection behavior.
+
+        "mixed":
+            Select representative weak, typical, strong, and high-improvement pixels.
+
+        "strong":
+            Select pixels with the largest absolute correction amplitude.
+
+        "typical":
+            Select pixels near the median correction amplitude.
+
+    max_search_pixels : int
+        Maximum number of good pixels used for automatic selection.
+
+    random_seed : int
+        Random seed for reproducible subsampling.
+
+    savefile : str, optional
+        Save figure to this path if provided.
+
+    dpi : int
+        Figure resolution for saved output.
     """
-    # Ensure float
-    science_ramp = science_ramp.astype(np.float32, copy=False)
-    N, H, W = science_ramp.shape
 
-    # 1. Derivative-based saturation map in *measured* DN
-    sat_map_meas = create_saturation_map_by_slope(science_ramp)   # (H,W)
+    # ------------------------------------------------------------
+    # Load coefficient products
+    # ------------------------------------------------------------
+    with fits.open(coeff_file) as hdul:
+        coeffs1 = hdul["COEFFS1"].data.astype(float)
+        coeffs2 = hdul["COEFFS2"].data.astype(float)
+        cutoff_m = hdul["CUTOFF_M"].data.astype(float)
+        saturation = hdul["SATURATION"].data.astype(float)
+        sat_index = hdul["SAT_INDEX"].data.astype(float)
+        slope = hdul["SLOPE"].data.astype(float)
+        intercept = hdul["INTERCEPT"].data.astype(float)
+        goodpix = hdul["GOODPIX"].data.astype(bool)
 
-    # 2. GROUPDQ from raw saturation (measured DN)
-    group_dq_raw = create_group_dq(science_ramp, sat_map_meas)    # (N,H,W)
+        raw_rms = hdul["RAW_RMS"].data.astype(float)
+        corr_rms = hdul["CORR_RMS"].data.astype(float)
+        improve = hdul["IMPROVE"].data.astype(float)
 
-    package = __name__.split('.')[0]
-    filepath = 'calib/'
-    calib_path = str(get_resource_path(package, filepath))+'/'
-    linearity_path = calib_path+linearity_file
+    ramp_cube = np.asarray(ramp_cube, dtype=float)
 
-    # 3. Linearity correction and calibration-based cutoff
-    sat_dn_meas = None
-    with fits.open(linearity_path) as hdul:
-        if "SATURATION" in hdul:
-            sat_dn_meas = hdul["SATURATION"].data.astype(np.float32)  # (H,W)
-        corrected_ramp, pixel_dq, cutoff_read_map_cal = apply_linearity_correction_twopart_final(
-            science_ramp,
-            group_dq_raw,
-            hdul,
-        )   # corrected_ramp: (N,H,W), cutoff_read_map_cal: (H,W)
+    if ramp_cube.ndim != 3:
+        raise ValueError("ramp_cube must have shape (n_reads, ny, nx)")
 
-    #preferred saturation map from hdul, otherwise from the above step
-    if sat_dn_meas is not None:
-        sat_phys = sat_dn_meas
+    n_reads, ny, nx = ramp_cube.shape
+
+    if goodpix.shape != (ny, nx):
+        raise ValueError("Coefficient file shape does not match ramp_cube shape")
+
+    # ------------------------------------------------------------
+    # Helper functions
+    # ------------------------------------------------------------
+    def has_coeff(p):
+        return np.all(np.isfinite(p))
+
+    def apply_pixel_coeff_values(mvals, p1, p2, cm):
+        mvals = np.asarray(mvals, dtype=float)
+        out = np.full_like(mvals, np.nan, dtype=float)
+
+        if not has_coeff(p1) or not np.isfinite(cm):
+            return out
+
+        low = mvals <= cm
+        out[low] = np.polyval(p1, mvals[low])
+
+        if has_coeff(p2):
+            out[~low] = np.polyval(p2, mvals[~low])
+        else:
+            out[~low] = np.polyval(p1, mvals[~low])
+
+        return out
+
+    def apply_pixel_correction_ramp(raw, p1, p2, cm, si):
+        raw = np.asarray(raw, dtype=float)
+
+        if np.isfinite(si) and si >= 0:
+            nuse = min(int(si), raw.size)
+        else:
+            nuse = raw.size
+
+        raw_use = raw[:nuse]
+
+        if raw_use.size == 0:
+            return raw_use, raw_use
+
+        corr = apply_pixel_coeff_values(raw_use, p1, p2, cm)
+
+        if not np.all(np.isfinite(corr)):
+            return raw_use, raw_use
+
+        return raw_use, corr
+
+    def fit_line(y):
+        y = np.asarray(y, dtype=float)
+        t = np.arange(y.size, dtype=float)
+        good = np.isfinite(y)
+
+        if np.count_nonzero(good) < 3:
+            return None
+
+        p = np.polyfit(t[good], y[good], 1)
+        return np.polyval(p, t)
+
+    def correction_amplitude_at_ref(r, c):
+        sat = saturation[r, c]
+
+        if not np.isfinite(sat) or sat <= 0:
+            return np.nan
+
+        mref = ref_fraction * sat
+
+        p1 = coeffs1[:, r, c]
+        p2 = coeffs2[:, r, c]
+        cm = cutoff_m[r, c]
+
+        lref = apply_pixel_coeff_values(np.array([mref]), p1, p2, cm)[0]
+
+        if not np.isfinite(lref) or mref == 0:
+            return np.nan
+
+        return 100.0 * (lref - mref) / mref
+
+    # ------------------------------------------------------------
+    # Automatic pixel selection
+    # ------------------------------------------------------------
+    if pixels is None:
+        candidates = np.argwhere(goodpix)
+
+        if candidates.shape[0] == 0:
+            raise RuntimeError("No GOODPIX pixels found")
+
+        rng = np.random.default_rng(random_seed)
+
+        if candidates.shape[0] > max_search_pixels:
+            idx = rng.choice(
+                candidates.shape[0],
+                size=max_search_pixels,
+                replace=False,
+            )
+            candidates = candidates[idx]
+
+        amp = np.array([
+            correction_amplitude_at_ref(r, c)
+            for r, c in candidates
+        ])
+
+        imp = np.array([
+            improve[r, c]
+            for r, c in candidates
+        ])
+
+        good_metric = (
+            np.isfinite(amp) &
+            np.isfinite(imp) &
+            (imp > 0)
+        )
+
+        candidates = candidates[good_metric]
+        amp = amp[good_metric]
+        imp = imp[good_metric]
+
+        if candidates.shape[0] == 0:
+            raise RuntimeError("No valid candidate pixels found for examples")
+
+        abs_amp = np.abs(amp)
+
+        chosen = []
+
+        if selection_mode == "strong":
+            order = np.argsort(abs_amp)[::-1]
+            chosen = [tuple(candidates[i]) for i in order[:n_examples]]
+
+        elif selection_mode == "typical":
+            target = np.nanmedian(abs_amp)
+            order = np.argsort(np.abs(abs_amp - target))
+            chosen = [tuple(candidates[i]) for i in order[:n_examples]]
+
+        elif selection_mode == "mixed":
+            # Weak correction
+            p20 = np.nanpercentile(abs_amp, 20)
+            i_weak = np.argmin(np.abs(abs_amp - p20))
+            chosen.append(tuple(candidates[i_weak]))
+
+            # Typical correction
+            p50 = np.nanpercentile(abs_amp, 50)
+            i_typ = np.argmin(np.abs(abs_amp - p50))
+            chosen.append(tuple(candidates[i_typ]))
+
+            # Strong correction
+            p90 = np.nanpercentile(abs_amp, 90)
+            i_strong = np.argmin(np.abs(abs_amp - p90))
+            chosen.append(tuple(candidates[i_strong]))
+
+            # Highest RMS improvement
+            i_best = np.nanargmax(imp)
+            chosen.append(tuple(candidates[i_best]))
+
+            # Trim or extend
+            chosen = chosen[:n_examples]
+
+            if len(chosen) < n_examples:
+                order = np.argsort(abs_amp)[::-1]
+                for i in order:
+                    pix = tuple(candidates[i])
+                    if pix not in chosen:
+                        chosen.append(pix)
+                    if len(chosen) >= n_examples:
+                        break
+        else:
+            raise ValueError("selection_mode must be 'mixed', 'strong', or 'typical'")
+
+        pixels = chosen
+
     else:
-        sat_phys = sat_map_meas         
+        pixels = [tuple(p) for p in pixels]
+        n_examples = len(pixels)
 
-    sat_phys_3d = sat_phys[None, :, :]  # (1,H,W) for broadcasting
+    # ------------------------------------------------------------
+    # Make figure
+    # ------------------------------------------------------------
+    fig, axs = plt.subplots(
+        2,
+        n_examples,
+        figsize=(4.2 * n_examples, 7.2),
+        squeeze=False,
+    )
 
-    #filled with last index
-    phys_cut_map = np.full((H, W), fill_value=N - 1, dtype=np.int16)
+    #fig.suptitle(
+    #    "Representative examples of linearity correction application",
+    #    fontsize=15,
+    #)
 
-    over = corrected_ramp >= sat_phys_3d   # (N,H,W), True where we exceed saturation
-    any_over = over.any(axis=0)            # (H,W) mask of pixels that ever exceed
+    for j, (r, c) in enumerate(pixels):
+        if not (0 <= r < ny and 0 <= c < nx):
+            raise ValueError(f"Pixel {(r, c)} is outside detector shape {(ny, nx)}")
 
-    if np.any(any_over):
-        # For those pixels, find first index along the read axis where saturation happens
-        idx_first = np.argmax(over[:, any_over], axis=0)   #return true for the first index
-        phys_cut_map[any_over] = idx_first.astype(np.int16)
+        raw_full = ramp_cube[:, r, c]
 
+        p1 = coeffs1[:, r, c]
+        p2 = coeffs2[:, r, c]
+        cm = cutoff_m[r, c]
+        si = sat_index[r, c]
 
-    cutoff_read_map = np.minimum(
-        cutoff_read_map_cal.astype(np.int16),
-        phys_cut_map
-    )  # (H,W), values in [0, N-1]
+        raw, corr = apply_pixel_correction_ramp(raw_full, p1, p2, cm, si)
 
-    #marks all reads >= cutoff_read_map[y,x] as SATURATED
-    group_dq = enforce_cutoff_in_groupdq(group_dq_raw, cutoff_read_map)
+        t = np.arange(raw.size)
 
-    #Force all reads >= cutoff to saturation DN
-    read_idx  = np.arange(N, dtype=np.int16)[:, None, None]    # (N,1,1)
-    cutoff_3d = cutoff_read_map[None, :, :]                    # (1,H,W)
-    beyond_cut = read_idx >= cutoff_3d                         # (N,H,W)
+        # Linear reference from stored slope/intercept if available
+        if np.isfinite(slope[r, c]) and np.isfinite(intercept[r, c]):
+            ref = slope[r, c] * t + intercept[r, c]
+        else:
+            ref = fit_line(raw)
 
-    sat_mask = (group_dq & DQ_FLAGS["SATURATED"]) != 0         # (N,H,W)
-    mask_off = sat_mask | beyond_cut                           # any "off-limits" read
+        if ref is None:
+            ref = fit_line(raw)
 
-    
-    corrected_ramp = np.where(mask_off, sat_phys_3d, corrected_ramp)
+        raw_line = fit_line(raw)
+        corr_line = fit_line(corr)
 
-    #no corrected value exceeds the saturation DN
-    corrected_ramp = np.minimum(corrected_ramp, sat_phys_3d)
+        amp_ref = correction_amplitude_at_ref(r, c)
+        imp_val = improve[r, c]
+        raw_rms_val = raw_rms[r, c]
+        corr_rms_val = corr_rms[r, c]
 
-    # 8. Summary
-    total_pixels = H * W
-    bad_pix = np.count_nonzero(pixel_dq & DQ_FLAGS["NO_LIN_CORR"])
-    good_pix = total_pixels - bad_pix
+        # --------------------------------------------------------
+        # Top row: ramp correction
+        # --------------------------------------------------------
+        ax = axs[0, j]
 
-    print("\n========== Linearity correction summary ==========")
-    print(f"Total pixels:      {total_pixels:,}")
-    print(f"Corrected pixels:  {good_pix:,} ({100*good_pix/total_pixels:.2f} %)")
-    print(f"Fallback pixels:   {bad_pix:,} ({100*bad_pix/total_pixels:.2f} %)")
-    print("==================================================\n")
+        ax.plot(t, raw, "ko", ms=3, label="Measured ramp $M(t)$")
 
-    return (corrected_ramp.astype(np.float32, copy=False),
-            pixel_dq,
-            group_dq,
-            cutoff_read_map,
-            sat_map_meas)
+        if ref is not None:
+            ax.plot(t, ref, color="0.45", lw=2, ls="--", label="Linear reference $L(t)$")
 
+        ax.plot(t, corr, "r-", lw=1.8, label="Corrected ramp")
 
+        if np.isfinite(si) and si >= 0:
+            ax.axvline(si, color="orange", ls=":", lw=1.5, label="Saturation index")
 
+        ax.set_title(
+            f"Pixel ({r}, {c})\n"
+            rf"$\Delta_{{80}}$={amp_ref:.2f}\%, "
+            rf"improve={imp_val:.2f}$\times$",
+            fontsize=10,
+        )
+        ax.set_xlabel("Read number",fontsize=15)
+        ax.set_ylabel("Signal [DN]",fontsize=15)
+        ax.grid(alpha=0.25)
 
+        if j == 0:
+            ax.legend(fontsize=8, loc="best")
 
+        # --------------------------------------------------------
+        # Bottom row: measured-to-linear mapping
+        # --------------------------------------------------------
+        ax = axs[1, j]
 
+        if ref is not None:
+            ax.plot(raw, ref, "ko", ms=3, label="Ramp samples: $M \\rightarrow L$")
+        else:
+            ax.plot(raw, corr, "ko", ms=3, label="Ramp samples")
 
+        finite_raw = np.isfinite(raw)
 
+        if np.any(finite_raw):
+            xmin = np.nanmin(raw[finite_raw])
+            xmax = np.nanmax(raw[finite_raw])
 
+            grid = np.linspace(xmin, xmax, 300)
 
+            model = apply_pixel_coeff_values(grid, p1, p2, cm)
 
+            ax.plot(
+                grid,
+                model,
+                "r-",
+                lw=2,
+                label="Polynomial correction",
+            )
 
+            ax.plot(
+                [xmin, xmax],
+                [xmin, xmax],
+                color="0.5",
+                ls="--",
+                lw=1,
+                label="No correction",
+            )
 
+            if np.isfinite(cm):
+                ax.axvline(
+                    cm,
+                    color="purple",
+                    ls=":",
+                    lw=1.5,
+                    label="Cutoff $M$",
+                )
 
+        ax.set_xlabel("Measured signal $M$ [DN]",fontsize=15)
+        ax.set_ylabel("Linearized signal $L$ [DN]",fontsize=15)
+        ax.grid(alpha=0.25)
 
+        ax.text(
+            0.04,
+            0.96,
+            f"Raw RMS = {raw_rms_val:.3f} DN\n"
+            f"Corr RMS = {corr_rms_val:.3f} DN",
+            transform=ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=8,
+            bbox=dict(facecolor="white", alpha=0.85, edgecolor="none"),
+        )
 
+        if j == 0:
+            ax.legend(fontsize=8, loc="best")
 
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
 
+    if savefile is not None:
+        plt.savefig(savefile, dpi=dpi, bbox_inches="tight")
 
+    plt.show()
 
-
-
-
-
-
-
-
+#plot_linearity_correction_examples(
+#    coeff_file=path+"lin_coeffs_ifs_slow_cd5.fits",
+#    ramp_cube=lin_input_ifs,
+#    selection_mode="mixed",
+#    n_examples=4,
+#    savefile="linearity_correction_examples_ifs.png",
+#)
 
 
 

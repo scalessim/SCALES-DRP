@@ -169,17 +169,6 @@ class StartCalib(BasePrimitive):
         return file_groups
 
 ############# ouput fits writing ##############################
-    def fits_writer_steps1(self,data,header,output_dir,input_filename,suffix,overwrite=True):
-        base_name = os.path.basename(input_filename)
-        file_root, file_ext = os.path.splitext(base_name)
-        output_filename = f"{file_root}{suffix}{file_ext}"
-        redux_output_dir = os.path.join(output_dir, 'redux')
-        os.makedirs(redux_output_dir, exist_ok=True)
-        output_path = os.path.join(redux_output_dir, output_filename)
-        hdu = fits.PrimaryHDU(data=data, header=header)
-        hdu.writeto(output_path, overwrite=overwrite)
-        return output_path
-
     def fits_writer_steps(
         self,
         data,                  # 2D or 3D array
@@ -188,7 +177,8 @@ class StartCalib(BasePrimitive):
         input_filename,        # original filename (used for naming)
         suffix,                # string appended to filename
         overwrite=True,
-        uncert=None            # optional uncertainty array (same shape as data)
+        uncert=None,
+        dq=None,
     ):
         """
         Write data (and optional uncertainty) to a FITS file inside redux/.
@@ -227,8 +217,27 @@ class StartCalib(BasePrimitive):
         # --- build HDUList ---
         hdus = [fits.PrimaryHDU(data=np.asarray(data, dtype=np.float32), header=header)]
 
+        if dq is not None:
+            dq = np.asarray(dq)
+            if not np.issubdtype(dq.dtype, np.integer):
+                dq = dq.astype(np.uint32)
+
+            dq_hdu = fits.ImageHDU(
+                data=dq,
+                name="DQ",
+                do_not_scale_image_data=True)
+            dq_hdu.header["EXTDESC"] = "Data quality bit mask"
+            dq_hdu.header["DQ0"] = "bit 0: do not use / input BPM"
+            dq_hdu.header["DQ1"] = "bit 1: no linearity correction"
+            dq_hdu.header["DQ2"] = "bit 2: saturated read"
+            dq_hdu.header["DQ3"] = "bit 3: bad linearity correction value"
+            dq_hdu.header["DQ4"] = "bit 4: non-monotonic linearity correction"
+            dq_hdu.header["DQ5"] = "bit 5: linearity correction applied"
+            hdus.append(dq_hdu)
+
         # add uncertainty extension if provided
         if uncert is not None:
+            uncert = np.asarray(uncert)
             if uncert.shape != data.shape:
                 warnings.warn(f"Uncertainty shape {uncert.shape} does not match data {data.shape}; skipping UNCERT extension.")
             else:
@@ -835,26 +844,58 @@ class StartCalib(BasePrimitive):
                             sci_im_full_original1 = hdulist[0].data
                             data_header = hdulist[0].header
                             readtime = data_header['EXPTIME']
+                            det_config = data_header['MCLOCK']
                     except Exception as e:
                         self.logger.error(f"Failed to read {filename}: {e}")
 
                     package = __name__.split('.')[0]
+                    filepath = 'calib/'
+                    calib_path = str(get_resource_path(package, filepath))+'/'
+
                     if obsmode =='Im':
-                        simfile = 'sim_readnoise.fits'
-                        filepath = 'calib/'
-                        calib_path = str(get_resource_path(package, filepath))+'/'
-                        SIG_map_scaled = fits.getdata(calib_path+simfile)
-                        rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
-                        #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
-
+                        if det_config =='5.0 MHz':  #fadt1.0  
+                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                            #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                            #lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
+                        elif det_config =='9.0 MHz': #fast0.6
+                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                            #lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
+                            rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                        elif det_config =='20.0 MHz': #slow
+                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                            #lin_coeff = calib_path+"lin_coeffs_img_slow_cd5.fits"
+                            rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                        else: #default if MCLCOCK is not specified
+                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            #master_bpm = fits.getdata(calib_path+'bpm_img_cd4_new1.fits')
+                            #lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
+                            rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                    
                     elif obsmode =='IFS':
-                        simfile = 'sim_readnoise.fits'
-                        filepath = 'calib/'
-                        calib_path = str(get_resource_path(package, filepath))+'/'
-                        SIG_map_scaled = fits.getdata(calib_path+simfile)
-                        rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                        #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
-
+                        if det_config =='5.0 MHz':  #fadt1.0 
+                            SIG_map_scaled = fits.getdata(calib_path+simfile)
+                            rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                            #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
+                            #lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
+                        elif det_config =='9.0 MHz': #fast1.0
+                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                            rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                            #lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
+                        elif det_config =='20.0 MHz': #slow
+                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                            rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                            #lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
+                        else:
+                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4_new1.fits')
+                            rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                            #lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
+                    
                     #self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = self.swap_odd_even_columns(sci_im_full_original1,do_swap=False)
 
@@ -862,22 +903,20 @@ class StartCalib(BasePrimitive):
                     sci_im_full_original3 = reference.reffix_hxrg(sci_im_full_original2, nchans=4, fixcol=True)
 
                     #self.logger.info("+++++++++++ linearity correction started +++++++++++")
-                    #if obsmode =='IMAGING':
-                    #    corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
-                    #        sci_im_full_original3,
-                    #        linearity_file="linearity_coeffs_img.fits")
-
-                    #if obsmode =='IFS':
-                    #    corrected_input_ramp, pixeldq, groupdq, cutoff_map, sat_map = linearity.run_linearity_workflow(
-                    #        sci_im_full_original3,
-                    #        linearity_file="linearity_coeffs_img.fits")
+                    #corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube(
+                    #    input_cube=sci_im_full_original,
+                    #    coeff_file=lin_coeff,
+                    #    bpm_2d=master_bpm,
+                    #    invalid_read_behavior="raw",
+                    #    use_goodpix=True,
+                    #    return_aux=True)
 
                     self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                     final_slope,reset,uncert = self.ramp_fit(
                         sci_im_full_original3,
                         readtime,
                         SIG_map_scaled,
-                        group_dq = None)
+                        group_dq = None) #keep group_dq=lin_dq when linearity is on
 
                     self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
                     #bpm_slope = bpm.apply_full_correction(final_slope,obsmode)
@@ -899,14 +938,17 @@ class StartCalib(BasePrimitive):
 
                     self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
 
-                    #self.fits_writer_steps(
-                    #    data=bpm_slope,
-                    #    header=data_header,
-                    #    output_dir=self.action.args.dirname,
-                    #    input_filename=filename,
-                    #    suffix='_L1',
-                    #    overwrite=True,
-                    #    uncert = bpm_slope_uncert)
+                    #dq_2d = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
+
+                    self.fits_writer_steps(
+                        data=bpm_slope,
+                        header=data_header,
+                        output_dir=self.action.args.dirname,
+                        input_filename=filename,
+                        suffix='_L1',
+                        overwrite=True,
+                        uncert = bpm_slope_uncert,
+                        dq=None)
 
                     self.proctab_update(
                         header=data_header,
