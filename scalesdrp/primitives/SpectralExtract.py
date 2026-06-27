@@ -712,6 +712,21 @@ class SpectralExtract(BasePrimitive):
                     "Proctab update failed for %s: %s",output_path, str(e))
         return output_path
 
+    def ifsmode_select(self,modslnam, dsprsnam):
+        modslnam = modslnam.strip()
+        dsprsnam = dsprsnam.strip()
+        grating = dsprsnam.split("-")[0]
+
+        if modslnam == "MedRes":
+            band = grating[0]
+            ifsmode = f"{modslnam}-{band}"
+
+        else modslnam == "LowRes":
+            band = grating
+            ifsmode = f"{modslnam}-{band}"
+        
+        return ifsmode
+
     #################################################################################
 
     def _perform(self):
@@ -748,7 +763,6 @@ class SpectralExtract(BasePrimitive):
             data_image = self.action.args.ccddata.data
             data_vector_d = data_image.flatten().astype(np.float64)
             sigma_image = self.action.args.ccddata.uncertainty
-
 
             ifsmode = self.action.args.ccddata.header['IFSMODE']
             if ifsmode=='LowRes-K':

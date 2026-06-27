@@ -337,33 +337,36 @@ class RampFit(BasePrimitive):
     ####################### getting the master files needed from /redux #####################
     def load_single_master_file(self, expected_keywords, master_type):
         """
-        Load one matching master calibration file from ./redux.
+        Load one matching master calibration file from ./redux or calib/.
 
         Matching rules:
         - IMTYPE is determined from master_type.
         - CAMERA and MCLOCK must match for all master files.
         - EXPTIME must match only for DARK.
-        - IFSMODE must match only for FLATLENS.
         - If no matching file is found, return (None, None).
         """
 
-        base = os.path.join(os.getcwd(), "redux")
         master_type = master_type.upper()
-
-        if not os.path.isdir(base):
-            return (None, None)
 
         tail_map = {
             "DARK": "_mdark.fits",
             "BIAS": "_mbias.fits",
             "FLATLAMP": "_mflatlamp.fits",
-            "FLATLENS": "_mflatlens.fits",
-            "LENSFLAT": "_master_lensflat.fits",
         }
 
         tail = tail_map.get(master_type)
         if tail is None:
             return (None, None)
+
+        # Search redux first, then package calib/
+        search_dirs = [os.path.join(os.getcwd(), "redux")]
+        package = __name__.split(".")[0]
+        filepath = "calib/"
+        calib_path = str(get_resource_path(package, filepath))
+        search_dirs.append(calib_path)
+        for base in search_dirs:
+            if not os.path.isdir(base):
+                continue
 
         candidates = [
             os.path.join(base, fname)
@@ -397,10 +400,6 @@ class RampFit(BasePrimitive):
 
             for key, expected_value in expected_keywords.items():
                 if expected_value is None:
-                    continue
-
-                # IFSMODE only matters for LENSFLAT
-                if key == "IFSMODE" and master_type != "FLATLENS":
                     continue
 
                 # EXPTIME only matters for DARK
@@ -473,7 +472,7 @@ class RampFit(BasePrimitive):
             out = data - scale * calib
             sig = np.sqrt(sigma_data**2 + (scale**2) * sigma_calib**2)
 
-        elif kind in ("FLATLAMP", 'FLATLENS'):
+        elif kind in ("FLATLAMP"):
             denom = np.where(np.isfinite(calib) & (np.abs(calib) > eps), calib, np.nan)
             out = data / denom
             sig = np.sqrt( (sigma_data**2) / (denom**2) + (data**2) * (sigma_calib**2) / (denom**4) )
@@ -756,7 +755,7 @@ class RampFit(BasePrimitive):
             self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
             keywords_unique = {
                 key: self.action.args.ccddata.header.get(key)
-                for key in ['CAMERA','IFSMODE', 'MCLOCK', 'EXPTIME']}
+                for key in ['CAMERA', 'MCLOCK', 'EXPTIME']}
 
             m_dark, m_dark_uncert = self.load_single_master_file(keywords_unique, master_type='DARK')
             m_bias, m_bias_uncert = self.load_single_master_file(keywords_unique, master_type='BIAS')
