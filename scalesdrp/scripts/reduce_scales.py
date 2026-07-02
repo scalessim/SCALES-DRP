@@ -220,19 +220,6 @@ def main():
     elif args.frames:
         frames = []
         for frame in args.frames:
-            # Verify we have the correct channel selected
-            #if args.lowres and 'mr' in frame:
-            #    print('low-res channel requested, but medium-res files in list')
-            #    qstr = input('Proceed? <cr>=yes or Q=quit: ')
-            #    if 'Q' in qstr.upper():
-            #        frames = []
-            #        break
-            #if args.medres and 'lr' in frame:
-            #    print('med-res channel requested, but low-res files in list')
-            #    qstr = input('Proceed? <cr>=yes or Q=quit: ')
-            #    if 'Q' in qstr.upper():
-            #        frames = []
-            #        break
             frames.append(frame)
         framework.ingest_data(None, frames, False)
 
@@ -242,19 +229,6 @@ def main():
         with open(args.file_list) as file_list:
             for frame in file_list:
                 if "#" not in frame:
-                    # Verify we have the correct channel selected
-                    #if args.lowres and 'mr' in frame:
-                    #    print('	Low-res channel requested, but med-res files in list')
-                    #    qstr = input('Proceed? <cr>=yes or Q=quit: ')
-                    #    if 'Q' in qstr.upper():
-                    #        frames = []
-                    #        break
-                    #if args.medres and 'lr' in frame:
-                    #    print('Med-res channel requested, but low-res files in list')
-                    #    qstr = input('Proceed? <cr>=yes or Q=quit: ')
-                    #    if 'Q' in qstr.upper():
-                    #        frames = []
-                    #        break
                     frames.append(frame.strip('\n'))
 
         framework.ingest_data(None, frames, False)

@@ -926,6 +926,253 @@ def apply_linearity_coeffs_to_cube(
 
     return corrected.astype(np.float32)
 
+################### apply correction fast ############################
+def apply_linearity_coeffs_to_cube_fast(
+    input_cube,
+    coeff_file,
+    bpm_2d=None,
+    *,
+    invalid_read_behavior="raw",
+    use_goodpix=True,
+    check_finite=True,
+    check_monotonic=True,
+    monotonic_tolerance=-1e-3,
+    return_aux=False,
+):
+    """
+    Apply measured-DN -> linearized-DN correction to a cube of reads.
+
+    Fast vectorized version.
+
+    Coefficient convention:
+        L = np.polyval(coeffs, M)
+
+    Supports 1st, 2nd, or 3rd order polynomial coefficients.
+    """
+
+    cube = np.asarray(input_cube, dtype=np.float32)
+
+    if cube.ndim != 3:
+        raise ValueError("input_cube must have shape (N, H, W)")
+
+    N, H, W = cube.shape
+
+    if invalid_read_behavior not in {"raw", "flat_last_valid", "nan"}:
+        raise ValueError(
+            "invalid_read_behavior must be 'raw', 'flat_last_valid', or 'nan'"
+        )
+
+    if bpm_2d is None:
+        bpm_2d = np.zeros((H, W), dtype=bool)
+    else:
+        bpm_2d = np.asarray(bpm_2d) != 0
+        if bpm_2d.shape != (H, W):
+            raise ValueError("bpm_2d must have shape (H, W)")
+
+    with fits.open(coeff_file) as hdul:
+        coeffs1 = hdul["COEFFS1"].data.astype(np.float64)
+        coeffs2 = hdul["COEFFS2"].data.astype(np.float64)
+        cutoff_m = hdul["CUTOFF_M"].data.astype(np.float64)
+        sat_index = hdul["SAT_INDEX"].data.astype(np.int32)
+
+        if "GOODPIX" in hdul and use_goodpix:
+            goodpix = hdul["GOODPIX"].data.astype(bool)
+        else:
+            goodpix = np.ones((H, W), dtype=bool)
+
+        coeff_bpm = (
+            hdul["BPM_INPUT"].data.astype(bool)
+            if "BPM_INPUT" in hdul
+            else np.zeros((H, W), dtype=bool)
+        )
+
+    if coeffs1.shape[1:] != (H, W):
+        raise ValueError("COEFFS1 spatial shape does not match input cube")
+
+    if coeffs2.shape[1:] != (H, W):
+        raise ValueError("COEFFS2 spatial shape does not match input cube")
+
+    if cutoff_m.shape != (H, W):
+        raise ValueError("CUTOFF_M shape does not match input cube")
+
+    if sat_index.shape != (H, W):
+        raise ValueError("SAT_INDEX shape does not match input cube")
+
+    def eval_poly_image(coeffs, y):
+        """
+        Evaluate polynomial image coefficients on cube y.
+
+        coeffs shape: (degree + 1, H, W)
+        y shape:      (N, H, W)
+
+        Coefficient convention follows np.polyval:
+            degree 1: c0*y + c1
+            degree 2: c0*y**2 + c1*y + c2
+            degree 3: c0*y**3 + c1*y**2 + c2*y + c3
+        """
+
+        ncoeff = coeffs.shape[0]
+
+        if ncoeff == 2:
+            return (
+                coeffs[0][None, :, :] * y
+                + coeffs[1][None, :, :]
+            )
+
+        elif ncoeff == 3:
+            return (
+                coeffs[0][None, :, :] * y**2
+                + coeffs[1][None, :, :] * y
+                + coeffs[2][None, :, :]
+            )
+
+        elif ncoeff == 4:
+            return (
+                coeffs[0][None, :, :] * y**3
+                + coeffs[1][None, :, :] * y**2
+                + coeffs[2][None, :, :] * y
+                + coeffs[3][None, :, :]
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported polynomial order: coeffs has {ncoeff} coefficients. "
+                "Only 1st, 2nd, or 3rd order polynomials are supported."
+            )
+
+    corrected = cube.copy()
+    lin_dq = np.zeros((N, H, W), dtype=np.uint32)
+
+    # ------------------------------------------------------------
+    # Pixel-level validity mask
+    # ------------------------------------------------------------
+    p1_good = np.all(np.isfinite(coeffs1), axis=0)
+    p2_good = np.all(np.isfinite(coeffs2), axis=0)
+    cutoff_good = np.isfinite(cutoff_m)
+
+    valid_pix = (
+        goodpix
+        & ~bpm_2d
+        & ~coeff_bpm
+        & p1_good
+        & cutoff_good
+    )
+
+    no_corr_pix = ~valid_pix
+    lin_dq[:, no_corr_pix] |= LIN_NO_CORR
+
+    # ------------------------------------------------------------
+    # SAT_INDEX handling
+    #
+    # SAT_INDEX is the first saturated/invalid read.
+    # SAT_INDEX < 0 means no saturation was found.
+    # ------------------------------------------------------------
+    k = sat_index.copy()
+    k[k < 0] = N
+    k = np.clip(k, 0, N)
+
+    read_index = np.arange(N, dtype=np.int32)[:, None, None]
+
+    pre_sat_read = read_index < k[None, :, :]
+    sat_read = read_index >= k[None, :, :]
+
+    lin_dq[sat_read] |= LIN_SATURATED
+
+    valid_read = pre_sat_read & valid_pix[None, :, :]
+
+    # Pixels saturated at or before the first read cannot be corrected
+    first_read_bad = valid_pix & (k <= 0)
+
+    if np.any(first_read_bad):
+        lin_dq[:, first_read_bad] |= LIN_NO_CORR | LIN_SATURATED
+        valid_read[:, first_read_bad] = False
+
+    # ------------------------------------------------------------
+    # Evaluate piecewise correction
+    # ------------------------------------------------------------
+    y = cube.astype(np.float64)
+
+    ycorr1 = eval_poly_image(coeffs1, y)
+    ycorr2 = eval_poly_image(coeffs2, y)
+
+    low = y <= cutoff_m[None, :, :]
+
+    ycorr = np.where(low, ycorr1, ycorr2)
+
+    # If COEFFS2 is invalid for a pixel, use COEFFS1 above cutoff.
+    if np.any(~p2_good):
+        ycorr = np.where(
+            (~low) & (~p2_good[None, :, :]),
+            ycorr1,
+            ycorr,
+        )
+
+    # ------------------------------------------------------------
+    # Finite safety check
+    # ------------------------------------------------------------
+    if check_finite:
+        bad_value_read = valid_read & (
+            ~np.isfinite(y) | ~np.isfinite(ycorr)
+        )
+
+        bad_value_pix = np.any(bad_value_read, axis=0)
+
+        if np.any(bad_value_pix):
+            lin_dq[:, bad_value_pix] |= LIN_NO_CORR | LIN_BAD_VALUE
+            valid_read[:, bad_value_pix] = False
+
+    # ------------------------------------------------------------
+    # Monotonicity safety check
+    # ------------------------------------------------------------
+    if check_monotonic and N > 1:
+        dycorr = np.diff(ycorr, axis=0)
+
+        valid_pair = valid_read[1:, :, :] & valid_read[:-1, :, :]
+        bad_step = valid_pair & (dycorr < monotonic_tolerance)
+
+        bad_mono_pix = np.any(bad_step, axis=0)
+
+        if np.any(bad_mono_pix):
+            lin_dq[:, bad_mono_pix] |= LIN_NO_CORR | LIN_NONMONOTONIC
+            valid_read[:, bad_mono_pix] = False
+
+    # ------------------------------------------------------------
+    # Write corrected values only for valid pre-saturation reads
+    # ------------------------------------------------------------
+    corrected[valid_read] = ycorr[valid_read].astype(np.float32)
+    lin_dq[valid_read] |= LIN_APPLIED
+
+    lin_mask = np.any(valid_read, axis=0)
+
+    # ------------------------------------------------------------
+    # Handle reads at/after saturation
+    # ------------------------------------------------------------
+    sat_read_valid_pix = sat_read & valid_pix[None, :, :]
+
+    if invalid_read_behavior == "raw":
+        pass
+
+    elif invalid_read_behavior == "nan":
+        corrected[sat_read_valid_pix] = np.nan
+
+    elif invalid_read_behavior == "flat_last_valid":
+        last_valid_index = np.maximum(k - 1, 0)
+
+        rr, cc = np.indices((H, W))
+        last_vals = corrected[last_valid_index, rr, cc]
+
+        last_vals_3d = np.broadcast_to(
+            last_vals[None, :, :],
+            corrected.shape,
+        )
+
+        corrected[sat_read_valid_pix] = last_vals_3d[sat_read_valid_pix]
+
+    if return_aux:
+        return corrected.astype(np.float32), lin_dq, lin_mask
+
+    return corrected.astype(np.float32)
+
 
 ################ diagnostics plots ##################################
 def plot_linearity_correction_examples(

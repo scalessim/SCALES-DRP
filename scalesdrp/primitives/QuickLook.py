@@ -41,19 +41,6 @@ class QuickLook(BasePrimitive):
             #log = getattr(self, "logger", None) or logging.getLogger("SCALES")
             #self.proctab = Proctab(logger=log)
 
-    def fits_writer_steps1(self,data,header,output_dir,input_filename,suffix,overwrite=True):
-        base_name = os.path.basename(input_filename)
-        file_root, file_ext = os.path.splitext(base_name)
-        output_filename = f"{file_root}{suffix}{file_ext}"
-        redux_output_dir = os.path.join(output_dir, 'ql_redux')
-        os.makedirs(redux_output_dir, exist_ok=True)
-        output_path = os.path.join(redux_output_dir, output_filename)
-        hdu = fits.PrimaryHDU(data=data, header=header)
-        hdu.writeto(output_path, overwrite=overwrite)
-        self.logger.info("+++++++++++ FITS file saved +++++++++++")
-        return output_path
-
-
     def fits_writer_steps(
         self,
         data,
@@ -134,78 +121,6 @@ class QuickLook(BasePrimitive):
 
         return output_path
 
-    def optimal_extract_with_error(self,
-        R_transpose: sp.spmatrix, 
-        data_image: np.ndarray, 
-        read_noise_variance_vector: np.ndarray, 
-        gain: float = 1.0
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Performs classic (Horne 1986) optimal extraction and calculates the
-        corresponding 1-sigma error for each flux element.
-        Args:
-            R_transpose: The (N_fluxes, N_pixels) sparse rectification matrix.
-            data_image: The (H,W) input data image.
-            read_noise_variance_vector: The (N_pixels,) 1D vector of read noise variance.
-            gain: The detector gain.
-        Returns:
-            A tuple containing:
-            - optimized_flux (np.ndarray): The extracted 1D flux array.
-            - flux_error (np.ndarray): The corresponding 1D array of 1-sigma errors.
-        """
-        self.logger.info('Optimal extraction started')
-        start_time1 = time.time()
-        data_vector_d = data_image.flatten().astype(np.float64)
-        photon_noise_variance = data_vector_d.clip(min=0) / gain
-        total_variance = read_noise_variance_vector + photon_noise_variance
-        total_variance[total_variance <= 0] = 1e-9  
-        inverse_variance = 1.0 / total_variance
-        weighted_data = data_vector_d #* inverse_variance
-        numerator = R_transpose @ weighted_data
-        R_transpose_squared = R_transpose.power(2)
-        denominator = R_transpose_squared @ inverse_variance
-        denominator_safe = np.maximum(denominator, 1e-9)
-        optimized_flux = numerator / denominator_safe
-        #flux_variance = 1.0 / denominator_safe
-        #flux_error = np.sqrt(flux_variance)
-        end_time1 = time.time()
-        t1 = (end_time1 - start_time1)
-        self.logger.info(f"Optimal extraction finished in {t1:.4f} seconds.")
-        return optimized_flux
-
-    def iterative_sigma_weighted_ramp_fit1(self,ramp, read_time, gain=3.0, rn=5.0, max_iter=3, tile=(256, 256)):
-        n_reads, n_rows, n_cols = ramp.shape
-        read_times = np.linspace(0, read_time, n_reads, dtype=np.float32)
-        dt = np.mean(np.diff(read_times))
-        slope = np.zeros((n_rows, n_cols), dtype=np.float32)
-        bias = np.zeros_like(slope)
-        Ty, Tx = tile
-        for y0 in range(0, n_rows, Ty):
-            y1 = min(n_rows, y0 + Ty)
-            for x0 in range(0, n_cols, Tx):
-                x1 = min(n_cols, x0 + Tx)
-                cube = ramp[:, y0:y1, x0:x1]  # (N, ty, tx)
-                N, ty, tx = cube.shape
-                shape = (ty, tx)
-                m = np.zeros(shape, dtype=np.float32)
-                b = np.zeros(shape, dtype=np.float32)
-                for iteration in range(max_iter):
-                    sig2 = np.maximum(cube / gain + rn**2, 1e-6)
-                    i = np.arange(N, dtype=np.float32)[:, None, None]
-                    S0  = np.sum(1.0 / sig2, axis=0)
-                    S1  = np.sum(i / sig2, axis=0)
-                    S2  = np.sum(i**2 / sig2, axis=0)
-                    S0x = np.sum(cube / sig2, axis=0)
-                    S1x = np.sum(i * cube / sig2, axis=0)
-                    ibar = S1 / S0
-                    mdt = (S1x - ibar * S0x) / np.maximum(S2 - ibar**2 * S0, 1e-8)
-                    m = mdt / dt
-                    b = S0x / S0 - mdt * ibar
-                    cube_model = b[None, :, :] + m[None, :, :] * i * dt
-                    cube = np.clip(cube_model, 0, None)  # keep stable iteration
-                slope[y0:y1, x0:x1] = m
-                bias[y0:y1, x0:x1] = b
-        return slope
 
     def iterative_sigma_weighted_ramp_fit(self,ramp, read_time, gain=3.0, rn=5.0, tile=(256, 256), return_bias=False):
         ramp = np.asarray(ramp)
