@@ -18,6 +18,7 @@ If you already have a local copy of the repo, instead make sure you have the lat
    cd docs
    git checkout main
    git pull
+   pip install -e.
 
 
 

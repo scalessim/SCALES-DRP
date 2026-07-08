@@ -170,50 +170,50 @@ class StartCalib(BasePrimitive):
                     
                     if obsmode =='Im':
                         if det_config =='5.0 MHz':  #fast1.0  
-                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                             lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
                         
                         elif det_config =='9.0 MHz': #fast0.6
-                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast0.6_cd5.fits')
                             lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
                             rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                             master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
                         
                         elif det_config =='20.0 MHz': #slow
-                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_slow_cd5.fits')
                             lin_coeff = calib_path+"lin_coeffs_img_slow_cd5.fits"
                             rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                             master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
                         
                         else: #default if MCLCOCK is not the specified one above
-                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
                             lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
                             rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                             master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
                     
                     elif obsmode =='IFS':
                         if det_config =='5.0 MHz':  #fast1.0 
-                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast0.6_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast1.0_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
 
                         elif det_config =='9.0 MHz': #fast1.0
-                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
                         
                         elif det_config =='20.0 MHz': #slow
-                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_slow_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_slow_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
 
                         else: #default
-                            SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
@@ -248,7 +248,7 @@ class StartCalib(BasePrimitive):
 
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                         final_slope,reset,uncert = scbasic.ramp_fit(
-                            corrected_cube,
+                            sci_im_full_original3,
                             readtime,
                             SIG_map_scaled,
                             group_dq = lin_dq) #keep group_dq=lin_dq when linearity is on otherwise None
@@ -277,7 +277,7 @@ class StartCalib(BasePrimitive):
                     self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
 
                     fits_writer_calib(
-                        data=bpm_slope,
+                        data=final_slope,
                         header=data_header,
                         output_dir=self.action.args.dirname,
                         input_filename=filename,

@@ -8,19 +8,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Data Products &mdash; SCALES-DRP 0.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
-      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
 
   
       <script src="_static/jquery.js?v=5d32c60e"></script>
       <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="_static/documentation_options.js?v=2709fde1"></script>
-      <script src="_static/doctools.js?v=9bcbadda"></script>
-      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
     <link rel="next" title="Support" href="Support.html" />
-    <link rel="prev" title="More into the DRP Execution" href="Running_the_SCALES-DRP_Pipeline.html" /> 
+    <link rel="prev" title="Calibration Products" href="calib_products.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -46,10 +46,10 @@
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
+<li class="toctree-l1"><a class="reference internal" href="calib_products.html">Calibration Products</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
@@ -85,8 +85,7 @@
   <section id="data-products">
 <h1>Data Products<a class="headerlink" href="#data-products" title="Link to this heading"></a></h1>
 <p>The following is an overview of the data products created by the pipeline.</p>
-<table class="docutils align-default" id="id1">
-<caption><span class="caption-text">Data Products</span><a class="headerlink" href="#id1" title="Link to this table"></a></caption>
+<table class="docutils align-default">
 <colgroup>
 <col style="width: 21.4%" />
 <col style="width: 35.7%" />
@@ -99,84 +98,58 @@
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>b</p></td>
+<tr class="row-even"><td><p>qramp</p></td>
 <td><p>DN/px</p></td>
-<td><p>bias removed</p></td>
+<td><p>Quicklook slope image</p></td>
 </tr>
-<tr class="row-odd"><td><p>d</p></td>
+<tr class="row-odd"><td><p>L1</p></td>
 <td><p>DN/px</p></td>
-<td><p>dark current removed</p></td>
+<td><p>Science-grade slope image after detector level corrections</p></td>
 </tr>
-<tr class="row-even"><td><p>f</p></td>
+<tr class="row-even"><td><p>mcalunit</p></td>
 <td><p>DN/px</p></td>
-<td><p>detector flat removed</p></td>
-</tr>
-<tr class="row-odd"><td><p>lenf</p></td>
-<td><p>DN/px</p></td>
-<td><p>lenslet flat removed</p></td>
-</tr>
-<tr class="row-even"><td><p>opt_cube</p></td>
-<td><p>flux/px</p></td>
-<td><p>data cube from OptimalExtract</p></td>
-</tr>
-<tr class="row-odd"><td><p>chi_cube</p></td>
-<td><p>flux/px</p></td>
-<td><p>data cube from ChisquareExtract</p></td>
-</tr>
-</tbody>
-</table>
-<p>Different master files generated during the analysis are listed below.</p>
-<table class="docutils align-default" id="id2">
-<caption><span class="caption-text">Master files created</span><a class="headerlink" href="#id2" title="Link to this table"></a></caption>
-<colgroup>
-<col style="width: 21.4%" />
-<col style="width: 35.7%" />
-<col style="width: 42.9%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>File Extension</p></th>
-<th class="head"><p>Full Name</p></th>
-<th class="head"><p>Note</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>mcalib</p></td>
 <td><p>Master monochromatic calibration</p></td>
-<td></td>
 </tr>
 <tr class="row-odd"><td><p>mbias</p></td>
+<td><p>DN/px</p></td>
 <td><p>Master bias</p></td>
-<td></td>
 </tr>
 <tr class="row-even"><td><p>mdark</p></td>
+<td><p>DN/px</p></td>
 <td><p>Master dark</p></td>
-<td></td>
 </tr>
-<tr class="row-odd"><td><p>mflat</p></td>
+<tr class="row-odd"><td><p>mflatlamp</p></td>
+<td><p>DN/px</p></td>
 <td><p>Master detector flat</p></td>
-<td></td>
 </tr>
-<tr class="row-even"><td><p>mobj</p></td>
-<td><p>Master object</p></td>
-<td></td>
+<tr class="row-even"><td><p>mflatlens</p></td>
+<td><p>DN/px</p></td>
+<td><p>Master lenslet flat</p></td>
 </tr>
-<tr class="row-odd"><td><p>opt_cube</p></td>
+<tr class="row-odd"><td><p>opt_L2</p></td>
+<td><p>DN/s/spaxel</p></td>
 <td><p>IFS 3D cube using optimal extraction</p></td>
-<td></td>
 </tr>
-<tr class="row-even"><td><p>chi_cube</p></td>
+<tr class="row-even"><td><p>chi_L2</p></td>
+<td><p>DN/s/spaxel</p></td>
 <td><p>IFS 3D cube using chi-square extraction</p></td>
-<td></td>
 </tr>
 </tbody>
 </table>
+<figure class="align-center" id="id1">
+<a class="reference internal image-reference" href="_images/data_product.png"><img alt="_images/data_product.png" src="_images/data_product.png" style="width: 700px;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Illustration of the lenslet and slicer IFS formats, along with the hybrid lenslet-slicer (or “slenslit”) concept used for the SCALES medium-resolution IFS. The lenslet IFS is used by most exoplanet- imaging IFSs because it samples the field before the downstream spectrograph imparts optical aberrations. The slicer IFS has the benefit of creating longer spectra, but imparts optical aberrations. The slenslit IFS combines the benefits of the lenslet IFS and the slicer IFS.</span><a class="headerlink" href="#id1" title="Link to this image"></a></p>
+</figcaption>
+</figure>
 </section>
 
 
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="Running_the_SCALES-DRP_Pipeline.html" class="btn btn-neutral float-left" title="More into the DRP Execution" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="calib_products.html" class="btn btn-neutral float-left" title="Calibration Products" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="Support.html" class="btn btn-neutral float-right" title="Support" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

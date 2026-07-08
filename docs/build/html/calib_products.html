@@ -1,0 +1,448 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calibration Products &mdash; SCALES-DRP 0.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=2709fde1"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Data Products" href="Data_Products.html" />
+    <link rel="prev" title="Primitives" href="Primitives.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            SCALES-DRP
+              <img src="_static/logo1.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Calibration Products</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#linearity-coefficient-generation">Linearity Coefficient Generation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#behaviour">Behaviour</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id1">Calibration Products</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#output">Output</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#data-quality-flags-dq-flags">Data Quality Flags (DQ Flags)</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#creating-master-bad-pixel-mask">Creating Master Bad Pixel Mask</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id2">Behaviour</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#data-quality-dq-flags">Data Quality (DQ) Flags</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id3">Output</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#read-noise-map">Read Noise Map</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#rectification-matrix">Rectification Matrix</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id4">Behaviour</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id5">Calibration Products</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id6">Output</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#master-calibration-frame-generation">Master Calibration Frame Generation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id7">Behaviour</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id8">Output</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html">Updating Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Updating_Documentation.html#updating-text">Updating text</a></li>
+<li class="toctree-l1"><a class="reference internal" href="FAQ.html">FAQ</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">SCALES-DRP</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Calibration Products</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/calib_products.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="calibration-products">
+<h1>Calibration Products<a class="headerlink" href="#calibration-products" title="Link to this heading"></a></h1>
+<p>Several calibration reference files are required by the SCALES Data Reduction Pipeline to char-
+acterize detector behavior, correct instrumental effects, and enable spectral extraction. These
+calibration products are generated from dedicated calibration observations and detector charac-
+terization datasets acquired during instrument commissioning and routine calibration campaigns.
+Once generated, most of the calibration files can be reused for science processing provided that the
+detector operating conditions, readout configuration, and instrument setup remain unchanged.
+The calibration framework consists of both detector-level calibration products and IFS-specific
+calibration products. Detector-level calibration files are used to characterize and correct detector artifacts such as bad pixels, non-linearity, read noise, gain variations, and persistence. IFS-specific calibration files describe the mapping between detector pixels and the reconstructed spectral cube and are required for spectral extraction.</p>
+<p>All the primitive files are exist in:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/primitives
+</pre></div>
+</div>
+<p>All the calibration files are exist in:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/calib
+</pre></div>
+</div>
+<nav class="contents local" id="contents">
+<ul class="simple">
+<li><p><a class="reference internal" href="#linearity-coefficient-generation" id="id10">Linearity Coefficient Generation</a></p>
+<ul>
+<li><p><a class="reference internal" href="#behaviour" id="id11">Behaviour</a></p></li>
+<li><p><a class="reference internal" href="#id1" id="id12">Calibration Products</a></p></li>
+<li><p><a class="reference internal" href="#output" id="id13">Output</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#creating-master-bad-pixel-mask" id="id14">Creating Master Bad Pixel Mask</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id2" id="id15">Behaviour</a></p></li>
+<li><p><a class="reference internal" href="#data-quality-dq-flags" id="id16">Data Quality (DQ) Flags</a></p></li>
+<li><p><a class="reference internal" href="#id3" id="id17">Output</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#read-noise-map" id="id18">Read Noise Map</a></p></li>
+<li><p><a class="reference internal" href="#rectification-matrix" id="id19">Rectification Matrix</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id4" id="id20">Behaviour</a></p></li>
+<li><p><a class="reference internal" href="#id5" id="id21">Calibration Products</a></p></li>
+<li><p><a class="reference internal" href="#id6" id="id22">Output</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#master-calibration-frame-generation" id="id23">Master Calibration Frame Generation</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id7" id="id24">Behaviour</a></p></li>
+<li><p><a class="reference internal" href="#id8" id="id25">Output</a></p></li>
+</ul>
+</li>
+</ul>
+</nav>
+<section id="linearity-coefficient-generation">
+<span id="createlinearity"></span><h2><a class="toc-backref" href="#id10" role="doc-backlink">Linearity Coefficient Generation</a><a class="headerlink" href="#linearity-coefficient-generation" title="Link to this heading"></a></h2>
+<p><strong>Generates per-pixel detector non-linearity calibration coefficients from uniformly illuminated flat-field ramps.</strong></p>
+<p>This primitive derives the detector non-linearity correction coefficients used by the linearity correction step (see <a class="reference internal" href="Primitives.html#linearity"><span class="std std-ref">Linearity Correction</span></a>). Each detector pixel is calibrated independently using a high signal-to-noise flat-field ramp that spans the detector’s linear, non-linear, and saturation regimes.</p>
+<p>The routine analyzes each pixel ramp to identify the usable pre-saturation region, constructs an ideal linear reference response, detects the onset of non-linearity, and fits a piecewise polynomial model that maps the measured detector signal to its corresponding linearized value.</p>
+<section id="behaviour">
+<h3><a class="toc-backref" href="#id11" role="doc-backlink">Behaviour</a><a class="headerlink" href="#behaviour" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Validates the input ramp and removes unusable samples before fitting.</p></li>
+<li><p>Optionally excludes pixels flagged in the supplied bad pixel mask.</p></li>
+<li><p>Ignores the first few detector reads to avoid reset transients.</p></li>
+<li><p>Rejects pixels with insufficient dynamic range, too few valid reads, or unstable detector behaviour.</p></li>
+<li><p>Detects the onset of detector saturation using either:</p>
+<ul>
+<li><p>a fixed saturation threshold; or</p></li>
+<li><p>the measured reduction in the ramp derivative.</p></li>
+</ul>
+</li>
+<li><p>Constructs an anchored linear reference model from the pre-saturation portion of the ramp.</p></li>
+<li><p>Identifies the transition between the linear and non-linear detector response.</p></li>
+<li><p>Fits two polynomial correction functions:</p>
+<ul>
+<li><p>a low-signal polynomial (<code class="docutils literal notranslate"><span class="pre">COEFFS1</span></code>);</p></li>
+<li><p>a high-signal polynomial (<code class="docutils literal notranslate"><span class="pre">COEFFS2</span></code>).</p></li>
+</ul>
+</li>
+<li><p>Enforces continuity between the two polynomial segments at the transition point.</p></li>
+<li><p>Validates the correction by ensuring that it:</p>
+<ul>
+<li><p>remains monotonic;</p></li>
+<li><p>does not introduce non-physical behaviour;</p></li>
+<li><p>improves the linearity of the detector response.</p></li>
+</ul>
+</li>
+<li><p>Records the reason for any rejected or fallback calibration using a per-pixel data quality (DQ) bitmask.</p></li>
+</ul>
+</section>
+<section id="id1">
+<h3><a class="toc-backref" href="#id12" role="doc-backlink">Calibration Products</a><a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
+<p>The generated calibration reference file contains:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">COEFFS1</span></code> — low-signal polynomial coefficients.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">COEFFS2</span></code> — high-signal polynomial coefficients.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CUTOFF_M</span></code> — measured DN separating the low- and high-signal correction regions.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CUTOFF_L</span></code> — corresponding linearized DN transition value.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SATURATION</span></code> — estimated detector saturation level.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SAT_INDEX</span></code> — read index at which saturation begins.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SLOPE</span></code> and <code class="docutils literal notranslate"><span class="pre">INTERCEPT</span></code> — anchored baseline linear model parameters.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">BREAK_INDEX</span></code> — detected onset of detector non-linearity.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">GOODPIX</span></code> — pixels with successful linearity calibration.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DQ</span></code> — per-pixel data quality flags describing calibration failures or fallback conditions.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">BPM_INPUT</span></code> — the input bad pixel mask used during coefficient generation.</p></li>
+</ul>
+</section>
+<section id="output">
+<h3><a class="toc-backref" href="#id13" role="doc-backlink">Output</a><a class="headerlink" href="#output" title="Link to this heading"></a></h3>
+<p>The primitive produces a FITS calibration reference file containing the polynomial coefficients, detector response parameters, quality flags, and auxiliary calibration products required by the Linearity Correction primitive.</p>
+<p>The related codes can be found here:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/Primitives/linearity.py
+</pre></div>
+</div>
+<section id="data-quality-flags-dq-flags">
+<h4>Data Quality Flags (DQ Flags)<a class="headerlink" href="#data-quality-flags-dq-flags" title="Link to this heading"></a></h4>
+<p><strong>Records the quality and validity of the per-pixel linearity calibration.</strong></p>
+<p>During the generation of the linearity calibration coefficients (<a class="reference internal" href="#createlinearity"><span class="std std-ref">Linearity Coefficient Generation</span></a>), the pipeline creates a per-pixel data quality (DQ) map. Each pixel is assigned one or more bitmask flags describing the outcome of the calibration process. These flags are stored in the output calibration FITS file and are used by subsequent processing steps to identify pixels with unreliable or unavailable linearity corrections.</p>
+<p>The DQ map includes flags describing:</p>
+<ul class="simple">
+<li><p><strong>Input data integrity</strong></p>
+<ul>
+<li><p>Pixel masked in the input bad pixel mask.</p></li>
+<li><p>Insufficient finite samples.</p></li>
+<li><p>Insufficient dynamic range.</p></li>
+<li><p>Too few valid reads for fitting.</p></li>
+</ul>
+</li>
+<li><p><strong>Detector behaviour</strong></p>
+<ul>
+<li><p>Unstable negative jumps.</p></li>
+<li><p>No saturation detected.</p></li>
+<li><p>Invalid baseline linear fit.</p></li>
+<li><p>No measurable non-linearity transition.</p></li>
+</ul>
+</li>
+<li><p><strong>Polynomial fitting</strong></p>
+<ul>
+<li><p>Low-order polynomial fit failure.</p></li>
+<li><p>High-order polynomial fit failure.</p></li>
+<li><p>Fallback to a single polynomial fit.</p></li>
+</ul>
+</li>
+<li><p><strong>Physical validation</strong></p>
+<ul>
+<li><p>Non-monotonic correction.</p></li>
+<li><p>Discontinuous low/high transition.</p></li>
+<li><p>Excessive fit residuals.</p></li>
+<li><p>Correction failed physical validation.</p></li>
+</ul>
+</li>
+</ul>
+<p>In addition to the DQ map, the calibration file also contains a <code class="docutils literal notranslate"><span class="pre">GOODPIX</span></code> extension identifying pixels for which a valid linearity calibration was successfully generated.</p>
+<p>The related codes can be found here:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/Primitives/linearity.py
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+<section id="creating-master-bad-pixel-mask">
+<span id="createbpm"></span><h2><a class="toc-backref" href="#id14" role="doc-backlink">Creating Master Bad Pixel Mask</a><a class="headerlink" href="#creating-master-bad-pixel-mask" title="Link to this heading"></a></h2>
+<p><strong>Identifies and classifies detector bad pixels from calibration image stacks.</strong></p>
+<p>This primitive generates the master bad pixel mask (BPM) used throughout the pipeline to identify defective detector pixels. The BPM is constructed from stacks of calibrated dark or flat-field slope images, depending on the selected operating mode. In addition to producing a binary bad pixel mask, the routine classifies each bad pixel according to its detector behaviour and records the results in a bitmask-based data quality (DQ) map.</p>
+<p>Dark image stacks are used to identify abnormal dark-current behaviour, while flat-field stacks are used to identify abnormal detector response. The resulting master BPM is used during science, calibration, and quicklook processing.</p>
+<section id="id2">
+<h3><a class="toc-backref" href="#id15" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id2" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Processes either dark or flat-field calibration image stacks.</p></li>
+<li><p>Identifies detector reference pixels and optionally excludes them from statistical calculations.</p></li>
+<li><p>Flags pixels containing non-finite values.</p></li>
+<li><p>Detects temporally unstable pixels from frame-to-frame variations after removing common-mode detector structure.</p></li>
+<li><p>For dark stacks:</p>
+<ul>
+<li><p>identifies hot pixels;</p></li>
+<li><p>identifies cold pixels.</p></li>
+</ul>
+</li>
+<li><p>For flat-field stacks:</p>
+<ul>
+<li><p>identifies low-response (low-QE) pixels;</p></li>
+<li><p>identifies abnormally high-response (open-like) pixels.</p></li>
+</ul>
+</li>
+<li><p>Detects persistent local spatial outliers relative to neighbouring pixels.</p></li>
+<li><p>Identifies connected clusters of defective pixels.</p></li>
+<li><p>Combines all detected defect classes into a single master bad pixel mask.</p></li>
+</ul>
+</section>
+<section id="data-quality-dq-flags">
+<h3><a class="toc-backref" href="#id16" role="doc-backlink">Data Quality (DQ) Flags</a><a class="headerlink" href="#data-quality-dq-flags" title="Link to this heading"></a></h3>
+<p>The output DQ map records the reason each pixel was classified as bad. The supported categories include:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">NONFINITE</span></code> — non-finite calibration values.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">UNSTABLE</span></code> — excessive temporal variation.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">HOT</span></code> — abnormally high dark current.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">COLD</span></code> — abnormally low dark current.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">LOW_QE</span></code> — reduced flat-field response.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">HIGH_RESPONSE</span></code> — abnormally high flat-field response.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SPATIAL_OUTLIER</span></code> — persistent local spatial anomaly.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER</span></code> — member of a connected bad-pixel cluster.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">REFERENCE_PIXEL</span></code> — detector reference pixel.</p></li>
+</ul>
+<p>Multiple DQ flags may be assigned to a single pixel.</p>
+</section>
+<section id="id3">
+<h3><a class="toc-backref" href="#id17" role="doc-backlink">Output</a><a class="headerlink" href="#id3" title="Link to this heading"></a></h3>
+<p>The primitive returns:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">final_bpm</span></code> — boolean master bad pixel mask.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dq_map</span></code> — bitmask-based data quality map.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">masks</span></code> — individual masks for each bad pixel category.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">products</span></code> — diagnostic images used to evaluate the generated bad pixel mask, including temporal noise maps, median calibration images, normalized flat responses, spatial outlier maps, and dark-level images.</p></li>
+</ul>
+<p>The related codes can be found here:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/Primitives/bpm_correction.py
+</pre></div>
+</div>
+<figure class="align-center" id="id9">
+<a class="reference internal image-reference" href="_images/bpm.png"><img alt="_images/bpm.png" src="_images/bpm.png" style="width: 600px;" />
+</a>
+<figcaption>
+<p><span class="caption-text">bad pixel mask for imaging detector (right), and the IFS detector (left).</span><a class="headerlink" href="#id9" title="Link to this image"></a></p>
+</figcaption>
+</figure>
+</section>
+</section>
+<section id="read-noise-map">
+<h2><a class="toc-backref" href="#id18" role="doc-backlink">Read Noise Map</a><a class="headerlink" href="#read-noise-map" title="Link to this heading"></a></h2>
+<p><strong>Provides a per-pixel detector read noise map for ramp fitting.</strong></p>
+<p>The read noise map is generated from a series of bias exposures after bad pixel correction and removal of the detector DC offset. Multiple bias frames are combined to estimate the read noise of each detector pixel, producing a two-dimensional calibration map used during ramp fitting.</p>
+<p>The read noise map provides the per-pixel read noise required by the ramp fitting algorithm to correctly weight detector samples and estimate the count rate and its associated uncertainty.</p>
+<p>The read noise maps are not regenerated as part of the routine daily calibrations. Instead, they are updated periodically following detector performance evaluations to account for any long-term changes in detector characteristics.</p>
+<p>The current read noise reference files for both the imager and IFS detectors are distributed with the pipeline and are used automatically during ramp fitting and spectral extraction.</p>
+</section>
+<section id="rectification-matrix">
+<span id="rmatrix"></span><h2><a class="toc-backref" href="#id19" role="doc-backlink">Rectification Matrix</a><a class="headerlink" href="#rectification-matrix" title="Link to this heading"></a></h2>
+<p><strong>Generates the detector-to-lenslet mapping required for IFS spectral extraction.</strong></p>
+<p>The rectification matrix is generated from a sequence of monochromatic calibration exposures spanning the wavelength range of each IFS observing mode. These calibration images measure the detector response of every lenslet spectrum as a function of wavelength and form the basis for both the optimal and χ² spectral extraction methods.</p>
+<p>For each observing mode, the pipeline identifies and tracks monochromatic lenslet spots across wavelength, registers them to the physical lenslet array, and constructs sparse rectification matrices describing the detector response. These calibration products are generated only when no valid rectification matrix already exists or when the instrument geometry has changed. Otherwise, the previously generated calibration products are loaded directly.</p>
+<section id="id4">
+<h3><a class="toc-backref" href="#id20" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id4" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Identifies monochromatic lenslet spots in each calibration exposure.</p></li>
+<li><p>Tracks individual lenslet spots across wavelength to reconstruct spectral traces.</p></li>
+<li><p>Removes duplicate or incomplete trace detections.</p></li>
+<li><p>Registers detector traces to the physical lenslet array.</p></li>
+<li><p>Generates a positional calibration array (<code class="docutils literal notranslate"><span class="pre">posarr</span></code>) describing the detector location and extraction region of every lenslet at every wavelength.</p></li>
+<li><p>Constructs sparse rectification matrices from the measured monochromatic point spread functions (PSFs).</p></li>
+<li><p>Saves the calibration products for reuse, avoiding regeneration during routine pipeline execution.</p></li>
+</ul>
+</section>
+<section id="id5">
+<h3><a class="toc-backref" href="#id21" role="doc-backlink">Calibration Products</a><a class="headerlink" href="#id5" title="Link to this heading"></a></h3>
+<p>The rectification calibration consists of:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">posarr</span></code> — positional calibration array containing the detector coordinates, extraction regions, and spot intensities for every wavelength and lenslet.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">QL_rectmat</span></code> — sparse rectification matrix used by the quicklook and optimal extraction pipeline to map detector pixels into extracted spectral flux.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">C2_rectmat</span></code> — sparse forward-model rectification matrix used by the science-grade χ² extraction to model detector images from spectral flux.</p></li>
+</ul>
+</section>
+<section id="id6">
+<h3><a class="toc-backref" href="#id22" role="doc-backlink">Output</a><a class="headerlink" href="#id6" title="Link to this heading"></a></h3>
+<p>The generated calibration products are stored for subsequent pipeline processing and are reused until a new detector geometry or calibration sequence requires regeneration.</p>
+</section>
+</section>
+<section id="master-calibration-frame-generation">
+<h2><a class="toc-backref" href="#id23" role="doc-backlink">Master Calibration Frame Generation</a><a class="headerlink" href="#master-calibration-frame-generation" title="Link to this heading"></a></h2>
+<p><strong>Combines multiple calibration exposures into high signal-to-noise master calibration frames.</strong></p>
+<p>This primitive combines repeated calibration exposures into a single master calibration frame for use throughout the pipeline. It supports the generation of master bias, dark, detector flat, lenslet flat, and other detector calibration products by combining individual calibrated slope images while rejecting transient artifacts and propagating uncertainties.</p>
+<p>Input calibration frames may be supplied either as a three-dimensional image stack or as a list of two-dimensional images. When available, per-frame uncertainty images are used for inverse-variance weighted combination.</p>
+<section id="id7">
+<h3><a class="toc-backref" href="#id24" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id7" title="Link to this heading"></a></h3>
+<ul class="simple">
+<li><p>Accepts a stack of calibration images with optional uncertainty images.</p></li>
+<li><p>Optionally scales individual frames prior to combination (e.g., for exposure-time or illumination normalization).</p></li>
+<li><p>Excludes non-finite pixels and invalid uncertainty values.</p></li>
+<li><p>Performs iterative sigma-clipping to reject transient artifacts and outliers.</p></li>
+<li><p>Supports three combination methods:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">ivw</span></code> — inverse-variance weighted mean;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">mean</span></code> — arithmetic mean;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">median</span></code> — median combination.</p></li>
+</ul>
+</li>
+<li><p>Propagates uncertainties using the selected combination method.</p></li>
+<li><p>Marks output pixels with insufficient valid input samples as invalid.</p></li>
+<li><p>Optionally returns the final inlier mask identifying which input frames contributed to each output pixel.</p></li>
+</ul>
+</section>
+<section id="id8">
+<h3><a class="toc-backref" href="#id25" role="doc-backlink">Output</a><a class="headerlink" href="#id8" title="Link to this heading"></a></h3>
+<p>The primitive returns:</p>
+<ul class="simple">
+<li><p>a master calibration image;</p></li>
+<li><p>an associated uncertainty image;</p></li>
+<li><p>optionally, the final inlier mask used during sigma clipping.</p></li>
+</ul>
+<p>The related codes can be found here:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/Primitives/scales_basic.py
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="Primitives.html" class="btn btn-neutral float-left" title="Primitives" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="Data_Products.html" class="btn btn-neutral float-right" title="Data Products" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, The SCALES Team.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

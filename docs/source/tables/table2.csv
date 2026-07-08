@@ -1,7 +1,9 @@
-mcalib,Master monochromatic calibration
-mbias,Master bias
-mdark,Master dark
-mflat,Master detector flat
-mobj, Master object
-opt_cube, IFS 3D cube using optimal extraction
-chi_cube, IFS 3D cube using chi-square extraction
+qramp,DN/px,Quicklook slope image
+L1,DN/px,Science-grade slope image after detector level corrections
+mcalunit,DN/px,Master monochromatic calibration
+mbias,DN/px,Master bias
+mdark,DN/px,Master dark
+mflatlamp,DN/px,Master detector flat
+mflatlens,DN/px,Master lenslet flat
+opt_L2,DN/s/spaxel,IFS 3D cube using optimal extraction
+chi_L2,DN/s/spaxel,IFS 3D cube using chi-square extraction

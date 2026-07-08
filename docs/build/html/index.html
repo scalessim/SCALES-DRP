@@ -6,16 +6,16 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Welcome to the SCALES-DRP! &mdash; SCALES-DRP 0.1 documentation</title>
+  <title>Welcome to SCALES-DRP :) &mdash; SCALES-DRP 0.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
-      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
 
   
       <script src="_static/jquery.js?v=5d32c60e"></script>
       <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="_static/documentation_options.js?v=2709fde1"></script>
-      <script src="_static/doctools.js?v=9bcbadda"></script>
-      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
@@ -45,10 +45,10 @@
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
+<li class="toctree-l1"><a class="reference internal" href="calib_products.html">Calibration Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
@@ -71,7 +71,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="#" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">Welcome to the SCALES-DRP!</li>
+      <li class="breadcrumb-item active">Welcome to SCALES-DRP :)</li>
       <li class="wy-breadcrumbs-aside">
             <a href="_sources/index.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -81,8 +81,8 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="welcome-to-the-scales-drp">
-<h1>Welcome to the SCALES-DRP!<a class="headerlink" href="#welcome-to-the-scales-drp" title="Link to this heading"></a></h1>
+  <section id="welcome-to-scales-drp">
+<h1>Welcome to SCALES-DRP :)<a class="headerlink" href="#welcome-to-scales-drp" title="Link to this heading"></a></h1>
 <p>SCALES (Slicer Combined with Array of Lenslets for Exoplanet Spectroscopy) is a next-generation thermal infrared coronagraphic imager and integral field spectrograph (IFS) for the W. M. Keck Observatory.
 SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has been developed by the SCALES team 2024 and supported by the W. M. Keck Observatory.</p>
 <p>The SCALES-DRP takes raw SCALES images and turns them into spectrally-dispersed datacubes.</p>
@@ -111,7 +111,9 @@ SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has
 <div><ul class="simple">
 <li><p>Simplified installation via pip and conda environment</p></li>
 <li><p>Formal support system via GitHub issues</p></li>
-<li><p>Support for Mac intel M2 and M3 chips in Python 3.12</p></li>
+<li><p>Support for most UNIX-based operating systems.</p></li>
+<li><p>Implemented in Python 3.12 within the Keck DRP Framework.</p></li>
+<li><p>Distributed under the BSD 3-Clause license through the WMKO DRP developers.</p></li>
 </ul>
 </div></blockquote>
 <div class="toctree-wrapper compound">
@@ -120,23 +122,6 @@ SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="Installation.html#environment-and-dependencies">Environment and Dependencies</a></li>
 <li class="toctree-l2"><a class="reference internal" href="Installation.html#installation-steps">Installation Steps</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#configuration-file">Configuration file</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#reference-pixel-correction">Reference Pixel Correction</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#f-noise-correction">1/f Noise Correction</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#linearity-correction">Linearity Correction</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#bad-pixel">Bad pixel</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#readnoise-map">Readnoise map</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#rectification-matrix">Rectification matrix</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#ramp-fitting">Ramp fitting</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#spectral-extraction">Spectral Extraction</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#wavelevngth-calibration">Wavelevngth Calibration</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Primitives.html#world-coordinate-system-wcs">World Coordinate System (WCS)</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a><ul>
@@ -148,6 +133,25 @@ SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has
 <li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#process-files-file-lists-and-entire-directories">Process files, file lists and entire directories</a></li>
 <li class="toctree-l2"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#other-command-line-options">Other command line options</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#reference-pixel-correction">Reference Pixel Correction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#f-noise-correction">1/f Noise Correction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#linearity-correction">Linearity Correction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#ramp-fitting">Ramp Fitting</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#bad-pixel-correction">Bad Pixel Correction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#applying-master-calibration-files">Applying Master Calibration Files</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#spectral-extraction">Spectral Extraction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Primitives.html#world-coordinate-system-wcs">World Coordinate System (WCS)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="calib_products.html">Calibration Products</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="calib_products.html#linearity-coefficient-generation">Linearity Coefficient Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="calib_products.html#creating-master-bad-pixel-mask">Creating Master Bad Pixel Mask</a></li>
+<li class="toctree-l2"><a class="reference internal" href="calib_products.html#read-noise-map">Read Noise Map</a></li>
+<li class="toctree-l2"><a class="reference internal" href="calib_products.html#rectification-matrix">Rectification Matrix</a></li>
+<li class="toctree-l2"><a class="reference internal" href="calib_products.html#master-calibration-frame-generation">Master Calibration Frame Generation</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>

@@ -29,7 +29,7 @@ We have default parameters for IFS and Imaging mode of observation. For example:
 	dark_min_nframes = 3 #minimum dark exposures
 
 
-These parameters control the minimum number of bias, detector/lenslet flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations.
+These parameters control the minimum number of bias, detector/lenslet flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations. If not mentioned, then the DRP will go with the default parameter configuration.
 
 
 

@@ -604,7 +604,7 @@ class QuickLook(BasePrimitive):
             slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
             self.fits_writer_steps(
-                data=slope_filled,
+                data=img_corr,
                 header=hdr,
                 output_dir=output_dir,
                 input_filename=filename,
@@ -620,7 +620,7 @@ class QuickLook(BasePrimitive):
             self.logger.info("BPM correction completed")
 
             self.fits_writer_steps(
-                data=slope_filled,
+                data=img_corr,
                 header=hdr,
                 output_dir=output_dir,
                 input_filename=filename,
