@@ -15,7 +15,7 @@ import astropy.units as u
 from scipy import sparse
 from scipy.optimize import lsq_linear
 from astropy.coordinates import Angle
-from astropy.wcs import WCS 
+from astropy.wcs import WCS
 import astropy.io.fits as pyfits
 from scipy.optimize import curve_fit
 import os
@@ -34,7 +34,7 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 from keckdrpframework.models.arguments import Arguments
 
-############# functions to check avoid processing again ######################### 
+############# functions to check avoid processing again #########################
 def read_existing_l1(l1_path):
 
     with fits.open(l1_path) as hdul:
@@ -310,8 +310,8 @@ def solve_bounded_weighted_nnls(
     data_vector: np.ndarray,
     read_noise_variance_vector: np.ndarray,
     gain: float,
-    A_guess: np.ndarray,  
-    bound_factor: float = 1.0, 
+    A_guess: np.ndarray,
+    bound_factor: float = 1.0,
     tolerance: float = 1e-6) -> np.ndarray:
     """
     Args:
@@ -323,7 +323,7 @@ def solve_bounded_weighted_nnls(
         bound_factor:  How many times the guess to set the upper bound
     Returns:
         Returns the best-fit amplitude
-    """ 
+    """
     print("\nSolving with BOUNDED weighted non-negative least squares...")
     photon_noise_variance = data_vector.clip(min=0) / gain
     total_variance = read_noise_variance_vector + photon_noise_variance
@@ -334,11 +334,11 @@ def solve_bounded_weighted_nnls(
     d_prime = W @ data_vector
     lower_bounds = 0
     upper_bounds = np.maximum(0, A_guess) * bound_factor
-    upper_bounds += 1e-9 
+    upper_bounds += 1e-9
     bounds = (lower_bounds, upper_bounds)
     start_time = time.time()
     lsq_options = {'tol': tolerance, 'verbose': 0}
-    res = lsq_linear(R_prime, d_prime, bounds=bounds, **lsq_options) 
+    res = lsq_linear(R_prime, d_prime, bounds=bounds, **lsq_options)
     end_time = time.time()
     t = (end_time - start_time)/60.0
     print(f"Bounded lsq_linear finished in {t:.4f} mins.")
@@ -397,7 +397,7 @@ def proctab_update(
 	header,output_dir,input_filename,
 	suffix,frame=None,proctab=None,
 	proctab_path=None,newtype=None):
-	
+
 	output_dir = get_base_output_dir(output_dir)
 	base_name = os.path.basename(input_filename)
 	file_root, file_ext = os.path.splitext(base_name)
@@ -479,7 +479,7 @@ def build_master_from_stack(
     """
     # --- normalize inputs to arrays ---
     data = np.asarray(data_stack)
-        
+
     if data.ndim == 2:
         return data
 
@@ -593,8 +593,8 @@ def build_master_from_stack(
         master_unc[good_pix] = unc[good_pix]
 
     # enforce min_valid
-    master[~good_pix] = np.nan
-    master_unc[~good_pix] = np.nan
+    #master[~good_pix] = np.nan
+    #master_unc[~good_pix] = np.nan
 
     if return_mask:
         return master.astype(np.float32), master_unc.astype(np.float32), m
@@ -602,23 +602,32 @@ def build_master_from_stack(
 
 ########################### ramp fitting #####################################################
 def _ols_row_and_uncert(row_reads,valid_reads_mask,t,sig_row):
-
-	N, W = row_reads.shape
-	v = valid_reads_mask.astype(bool)
-	S0 = v.sum(axis=0)
-	S0_safe = np.maximum(S0, 1)
-	St  = (t[:, None] * v).sum(axis=0)
-	tbar = St / S0_safe
-	Stt_centered = (((t[:, None] - tbar) ** 2) * v).sum(axis=0)
-	y   = np.where(v, row_reads, 0.0)
-	Sy  = y.sum(axis=0)
-	Sty = (t[:, None] * y).sum(axis=0)
-	num = Sty - tbar * Sy
-	den = np.where(Stt_centered > 0, Stt_centered, np.nan)
-	slope_row = num / den
-	slope_unc_row = sig_row / np.sqrt(den)
-	slope_unc_row[(S0 < 2) | ~np.isfinite(den)] = np.nan
-	return slope_row, slope_unc_row
+    if True in np.isnan(sig_row):
+        print('input sigmas have nans')
+    N, W = row_reads.shape
+    v = valid_reads_mask.astype(bool)
+    S0 = v.sum(axis=0)
+    S0_safe = np.maximum(S0, 1)
+    St  = (t[:, None] * v).sum(axis=0)
+    tbar = St / S0_safe
+    Stt_centered = (((t[:, None] - tbar) ** 2) * v).sum(axis=0)
+    y   = np.where(v, row_reads, 0.0)
+    Sy  = y.sum(axis=0)
+    Sty = (t[:, None] * y).sum(axis=0)
+    num = Sty - tbar * Sy
+    den = np.where(Stt_centered > 0, Stt_centered, np.nan)
+    slope_row = num / den
+    if True in np.isnan(slope_row):
+        print('divide by den put nans into slope')
+    slope_unc_row = sig_row / np.sqrt(den)
+    if True in np.isnan(slope_unc_row):
+        print('is den negative?',np.unique(den < 0))
+        print('is den zero?',np.unique(den==0))
+        print('divide by sqrt(den) made nans')
+    slope_unc_row[(S0 < 2) | ~np.isfinite(den)] = np.nan
+    if True in np.isnan(slope_unc_row):
+        print('S0 mask made nans')
+    return slope_row, slope_unc_row
 
 
 def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
@@ -633,7 +642,7 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
     produce two images—slope (countrate) and pedestal (reset) using fitramp everywhere it’s well-posed,
     and fall back to a robust OLS only where fitramp can’t run. Optionally clean reads,
     mask physically impossible read pairs, and (optionally) detect jumps.
-    
+
     Prefer fitramp (pedestal=True) for any number of reads; OLS only as per-pixel fallback.
     - Saturation/rollover handled via Δread > 0 mask.
     - Jump detection layered on top.
@@ -698,7 +707,7 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
     # ---------- Reset prior: first valid read; else no prior (σ=∞) ----------
     #If the first resultant is valid, use it as the prior mean on the pedestal.
     #Prior uncertainty is reset_prior_strength × SIG (finite). If first read is bad, set σ=∞ (flat prior).
-    #With few usable differences, a finite reset prior makes the joint 
+    #With few usable differences, a finite reset prior makes the joint
     #(pedestal+slope) fit solvable and better conditioned.
 
     first_read = input_read[0]
@@ -717,7 +726,10 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
         if i % 128 == 0:
             print(f"Fitting row {i}/{H}...")
 
+
         sig_row   = SIG_map_scaled[i, :]
+        if True in np.isnan(sig_row):
+            print('nans in sig_row to begin with')
         d_row     = diffs[:, i, :]
         m_row     = pair_mask[:, i, :]
         resetval  = resetval_map[i, :]
@@ -817,6 +829,8 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
                 row_slope[idx_final_fit]  = final_res.countrate
                 row_ped[idx_final_fit]    = final_res.pedestal
                 row_uncert[idx_final_fit] = final_res.uncert     # <-- from fitramp
+                if True in np.unique(np.isnan(final_res.uncert)):
+                    print('uncert 3: ',np.unique(np.isnan(final_res.uncert)))
             except Exception:
                 pass
 
@@ -829,6 +843,9 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
                 t, sig_row)
             row_slope[need_fallback]  = ols_row[need_fallback]
             row_uncert[need_fallback] = ols_unc[need_fallback]
+            if True in np.isnan(ols_unc[need_fallback]):
+                print('uncert 4: ',np.unique(np.isnan(ols_unc[need_fallback])))
+                print(np.unique(base_valid[:,i,:]))
             row_ped[need_fallback]    = resetval[need_fallback]  # prior mean
 
         # 5) Final sanitation: any remaining non-finite → seed; then OLS
@@ -839,6 +856,8 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
                 t, sig_row)
             row_slope[bad_final]  = ols_row[bad_final]
             row_uncert[bad_final] = ols_unc[bad_final]
+            if True in np.isnan(ols_unc[bad_final]):
+                print('uncert 5: ',np.unique(np.isnan(ols_unc[bad_final])))
             row_ped[bad_final]    = resetval[bad_final]
 
         slope[i, :]  = row_slope
@@ -1127,17 +1146,17 @@ def load_single_master_file(expected_keywords, master_type):
     return (None, None)
 #################################################################################
 def ifsmode_select(self,modslnam, dsprsnam):
-	modslnam = modslnam.strip()
-	dsprsnam = dsprsnam.strip()
-	grating = dsprsnam.split("-")[0]
+    modslnam = modslnam.strip()
+    dsprsnam = dsprsnam.strip()
+    grating = dsprsnam.split("-")[0]
 
-	if modslnam == "MedRes":
-		band = grating[0]
-		ifsmode = f"{modslnam}-{band}"
-	elif modslnam == "LowRes":
-		band = grating
-		ifsmode = f"{modslnam}-{band}"
-	return ifsmode
+    if modslnam == "MedRes":
+        band = grating[0]
+        ifsmode = f"{modslnam}-{band}"
+    elif modslnam == "LowRes":
+        band = grating
+        ifsmode = f"{modslnam}-{band}"
+    return ifsmode
 
 ############## lenslet flat may change #####################################################
 def load_and_normalize_lenslet_flat(
@@ -1291,7 +1310,7 @@ def apply_flatlens(
     if calib is None or (isinstance(calib, np.ndarray) and calib.size == 0):
         print("No flatlens data provided; skipping flat correction.")
         return data.astype(np.float32), sigma_data.astype(np.float32)
-        
+
     # Cast to float arrays; allow sigma_calib=None (treated as zeros)
     data        = np.asarray(data, dtype=float)
     sigma_data  = np.asarray(sigma_data, dtype=float)
@@ -1362,7 +1381,7 @@ def _parse_sky_coord(coord_val: [str, float], is_ra: bool = False) -> float:
         return float(coord_val)
     if not isinstance(coord_val, str):
         raise TypeError(f"Coordinate must be a string or number, but got {type(coord_val)}.")
-        
+
     try:
         if is_ra and ('h' in coord_val.lower() or ':' in coord_val):
             return Angle(coord_val, unit=u.hourangle).degree

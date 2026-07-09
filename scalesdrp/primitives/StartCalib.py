@@ -216,6 +216,9 @@ class StartCalib(BasePrimitive):
 
                         elif det_config =='9.0 MHz': #fast1.0
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
+                            if True in np.isnan(SIG_map_scaled):
+                                print('nans in read noise map')
+                            SIG_map_scaled[np.where(np.isnan(SIG_map_scaled)==True)] = np.nanmedian(SIG_map_scaled)
                             master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_9mhz)
                             print(calib_path)
                             print(self.context.bpmat_ifs_9mhz)
@@ -258,6 +261,7 @@ class StartCalib(BasePrimitive):
                     elif sci_im_full_original3.ndim == 3:
 
                         self.logger.info("+++++++++++ linearity correction started +++++++++++")
+                        print('before linearity corr: ',np.unique(np.isnan(sci_im_full_original3)))
                         corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_fast(
                             input_cube=sci_im_full_original3,
                             coeff_file=lin_coeff,
@@ -265,14 +269,19 @@ class StartCalib(BasePrimitive):
                             invalid_read_behavior="raw",
                             use_goodpix=True,
                             return_aux=True)
-
+                        print('after linearity corr: ',np.unique(np.isnan(corrected_cube)))
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
+                        if True in np.isnan(SIG_map_scaled):
+                            print('nans in startcalib sig_map_scaled')
                         final_slope,reset,uncert = scbasic.ramp_fit(
-                            corrected_cube,
+                            #corrected_cube,
+                            sci_im_full_original3,
                             readtime,
                             SIG_map_scaled,
                             group_dq = lin_dq) #keep group_dq=lin_dq when linearity is on otherwise None
 
+                        print('nans in slope?',np.unique(np.isnan(final_slope)))
+                        print('nans in uncert?',np.unique(np.isnan(uncert)))
                         dq_2d = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
 
                     self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
@@ -354,7 +363,8 @@ class StartCalib(BasePrimitive):
                 master, master_unc = scbasic.build_master_from_stack(
                     group_ramps,
                     group_uncerts,
-                    method='median')
+                    method='median',
+                    iterations=0)
 
                 hdrm = group_header_for_master.copy()
                 hdrm['HISTORY'] = f"Master {imtype} built from {len(group_ramps)} frames"
@@ -515,6 +525,7 @@ class StartCalib(BasePrimitive):
                     print('nans are in stack?',np.unique(np.isnan(group_ramps)))
                     print('nans are in mcalunit?',np.unique(np.isnan(master)))
                     print('zeros are in uncertainties?',np.where(group_uncerts==0))
+                    print('nans are in uncertainties?',np.unique(np.isnan(group_uncerts)))
                     fits_writer_calib(
                         data=master,
                         header=hdrm,

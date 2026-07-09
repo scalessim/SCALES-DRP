@@ -583,7 +583,7 @@ def generate_bpm_classified_v4(
     print(f"Spatial persistent outliers: {np.sum(spatial_bpm)} ({time.time() - start:.2f}s)")
 
     # --------------------------------------------------
-    # 6. Find neighbors of each catogery 
+    # 6. Find neighbors of each catogery
     # --------------------------------------------------
     adj_hot = expand_neighbors(
         masks["hot"],
