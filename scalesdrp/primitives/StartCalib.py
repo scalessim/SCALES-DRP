@@ -43,12 +43,12 @@ pt = Proctab(logger=log)
 
 class StartCalib(BasePrimitive):
     """
-    From reads to slope images of al the calibration exposures. This include 
+    From reads to slope images of al the calibration exposures. This include
     detector flat, dark, bias, and monochromator exposures. This function will
     also make master calibration required for science processing.
 
     Include a ACN, 1/f correction, linearity correction, ramp fitting, and a bad pixel correction.
-    We adopt the ramp fitting method of Brandt et. al. 2024. 
+    We adopt the ramp fitting method of Brandt et. al. 2024.
     This method perform an optimal fit to a pixel’s count rate nondestructively in the
     presence of both read and photon noise. The method construct a covarience matrix by
     estimating the difference in the read in a ramp, propagation of the read noise,
@@ -56,10 +56,10 @@ class StartCalib(BasePrimitive):
     to the differences, using the inverse of the covariance matrix as weights.
     This gives optimal weight to each difference.
     The jumps are detected iteratively checking the goodness of
-    fit at each possible jump location. 
+    fit at each possible jump location.
         Args:
             data_image: The (N,H,W) input ramp cube.
-            
+
         Returns:
             A 2D image of ramp fitted slope
             A 2D image of uncetainty of the ramp fitted slope
@@ -79,7 +79,7 @@ class StartCalib(BasePrimitive):
         if not all_groups:
             self.logger.warning("No file groups found. Nothing to process.")
             return
-        
+
         ols_t_global = None
         organized_groups = {}
         for group in all_groups:
@@ -100,7 +100,7 @@ class StartCalib(BasePrimitive):
                 params = group['params']
                 filenames = group['filenames']
                 obsmode = params.get('camera', 'obsmode')
-                
+
                 ifsmode = params.get('dsprsnam', 'N/A')
                 filtername = params.get('imgfw2n', 'N/A')
                 exptime = params.get('exptime', 0)
@@ -142,13 +142,13 @@ class StartCalib(BasePrimitive):
                             l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
                             group_ramps.append(l1_slope)
                             group_uncerts.append(l1_uncert)
-                        
+
                             if group_header_for_master is None:
                                 group_header_for_master = l1_header.copy()
 
                             self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
                             continue
-                        
+
                         except Exception as e:
                             self.logger.warning(
                                 f"Existing L1 file could not be used: {l1_path}. "
@@ -165,36 +165,38 @@ class StartCalib(BasePrimitive):
 
 
                     package = __name__.split('.')[0]
-                    filepath = 'calib/'
-                    calib_path = str(get_resource_path(package, filepath))+'/'
-                    
+                    #filepath = 'calib/'
+                    #calib_path = str(get_resource_path(package, filepath))+'/'
+
+                    calibfilepath = self.context.calib_file_path
+                    calib_path = str(get_resource_path(package, calibfilepath))+'/'
                     if obsmode =='Im':
-                        if det_config =='5.0 MHz':  #fast1.0  
+                        if det_config =='5.0 MHz':  #fast1.0
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                             lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
-                        
+
                         elif det_config =='9.0 MHz': #fast0.6
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast0.6_cd5.fits')
                             lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
                             rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                             master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
-                        
+
                         elif det_config =='20.0 MHz': #slow
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_slow_cd5.fits')
                             lin_coeff = calib_path+"lin_coeffs_img_slow_cd5.fits"
                             rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                             master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
-                        
+
                         else: #default if MCLCOCK is not the specified one above
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
                             lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
                             rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                             master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
-                    
+
                     elif obsmode =='IFS':
-                        if det_config =='5.0 MHz':  #fast1.0 
+                        if det_config =='5.0 MHz':  #fast1.0
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast0.6_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast1.0_cd5.fits"
@@ -202,10 +204,16 @@ class StartCalib(BasePrimitive):
 
                         elif det_config =='9.0 MHz': #fast1.0
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                            rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_9mhz)
+                            print(calib_path)
+                            print(self.context.bpmat_ifs_9mhz)
+                            print(calib_path+self.context.bpm_ifs_9mhz)
+                            print(calib_path+self.context.bpmat_ifs_9mhz)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_9mhz)
+                            print(calib_path+self.context.bpmat_ifs_9mhz)
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
-                        
+
                         elif det_config =='20.0 MHz': #slow
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_slow_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
@@ -217,7 +225,7 @@ class StartCalib(BasePrimitive):
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
-                    
+
                     #self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = scbasic.swap_odd_even_columns(sci_im_full_original1,do_swap=False)
 
@@ -226,13 +234,13 @@ class StartCalib(BasePrimitive):
                     data_header['HISTORY'] = "ACN & 1/f correction applied"
 
                     if  sci_im_full_original3.ndim == 2:
-                        
+
                         final_slope = sci_im_full_original3
                         uncert = scbasic.estimate_uncert_single_read(
                             image_dn=final_slope,
                             readnoise_map_dn=SIG_map_scaled,
                             gain=1.0)
-                        
+
                         dq_2d = None
 
                     elif sci_im_full_original3.ndim == 3:
@@ -252,11 +260,11 @@ class StartCalib(BasePrimitive):
                             readtime,
                             SIG_map_scaled,
                             group_dq = lin_dq) #keep group_dq=lin_dq when linearity is on otherwise None
-                        
+
                         dq_2d = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
 
                     self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
-                    
+
                     #dynamic mask section
                     #transient_mask, local_med, local_sigma, sig = bpm.detect_transient_bad_pixels(
                     #    final_slope,
@@ -309,7 +317,7 @@ class StartCalib(BasePrimitive):
                     raise RuntimeError(
                         "Internal error: group_header_for_master is None "
                         "even though group_ramps is not empty.")
-                
+
                 #expected_keywords = {
                 #    "CAMERA": obsmode,
                 #    "MCLOCK": mclock}
@@ -342,7 +350,7 @@ class StartCalib(BasePrimitive):
 
                 if imtype == 'DARK':
 
-                    hdrm['HISTORY'] = "master detector DARK created"            
+                    hdrm['HISTORY'] = "master detector DARK created"
                     scbasic.proctab_update(
                         header=hdrm,
                         output_dir=self.action.args.dirname,
@@ -350,7 +358,7 @@ class StartCalib(BasePrimitive):
                         suffix="_mdark",
                         frame=None,
                         proctab=self.proctab)
-                    
+
                     fits_writer_calib(
                         data=master,
                         header=hdrm,
@@ -407,7 +415,7 @@ class StartCalib(BasePrimitive):
                     readnoise = fits.getdata(calib_path+simfile)
                     var_read_vector = (readnoise.flatten().astype(np.float64))**2
                     GAIN = 1.0#self.action.args.ccddata.header['GAIN']
-            
+
                     if ifsmode=='LowRes-K':
                         R_for_extract = load_npz(calib_path+'K_C2_rectmat_lowres.npz')
                         R_matrix = load_npz(calib_path+'K_QL_rectmat_lowres.npz')
@@ -444,7 +452,7 @@ class StartCalib(BasePrimitive):
                         R_for_extract = load_npz(calib_path+'M_C2_rectmat_medres.npz')
                         R_matrix = load_npz(calib_path+'M_QL_rectmat_medres.npz')
                         FLUX_SHAPE_3D = (1900, 103, 110)
-            
+
                     A_guess_cube,A_guess_cube_err = scbasic.optimal_extract_with_error(
                         R_matrix,
                         master_flatlens,
@@ -467,7 +475,7 @@ class StartCalib(BasePrimitive):
                         suffix="_cube_flatlens",
                         frame=None,
                         proctab=self.proctab)
-            
+
                 if imtype == 'FLATLAMP':
                     hdrm['HISTORY'] = "master detector flat created"
                     fits_writer_calib(
@@ -492,7 +500,7 @@ class StartCalib(BasePrimitive):
                     hdrm['HISTORY'] = f"CALUNIT wavelength group: {wavelength}"
                     wl_val = float(wavelength)
                     wl_str = f"{wl_val:.3f}".rstrip("0").rstrip(".")
-                    
+
                     suffix = f"_{wl_str}_mcalunit"
                     fits_writer_calib(
                         data=master,
@@ -510,9 +518,9 @@ class StartCalib(BasePrimitive):
                         frame=None,
                         proctab=self.proctab)
                     self.logger.info("+++++++++++ Creating master monochromator file +++++++++++")
-                        
+
         self.logger.info('+++++++++++++ All available Master calibration files are created ++++++++++++++')
-        
+
         log_string = StartCalib.__module__
         self.logger.info(log_string)
         return self.action.args

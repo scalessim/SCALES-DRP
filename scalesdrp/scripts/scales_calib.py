@@ -31,7 +31,7 @@ import logging.config
 def _parse_arguments(in_args: list) -> argparse.Namespace:
     description = "SCALES pipeline CLI"
 
-    
+
     #defining arguments for execution
     parser = argparse.ArgumentParser(prog=f"{in_args[0]}",
                                      description=description)
@@ -120,7 +120,7 @@ def main():
         # scales_config_fullpath = os.path.abspath(args.scales_config_file)
         scales_config = ConfigClass(args.SCALES_config_file, default_section='SCALES')
 
-    
+
 
     try:
         framework = Framework(Scales_Calib_Pipeline, framework_config_fullpath)
@@ -132,7 +132,7 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    
+
     framework.context.pipeline_logger = getLogger(framework_logcfg_fullpath,
                                                   name="SCALES")
     framework.logger = getLogger(framework_logcfg_fullpath, name="DRPF")
@@ -146,7 +146,7 @@ def main():
 
     # check for the output directory
     check_directory(scales_config.output_directory)
-    
+
     if args.write_config:
         dest = os.path.join(os.getcwd(), 'scales_calib.cfg')
         if os.path.exists(dest):
@@ -157,7 +157,7 @@ def main():
             shutil.copy(scales_config_fullpath, os.getcwd())
             print("Copied scales_calib.cfg into current dir.  Edit and use with -c")
         sys.exit(0)
-    
+
     framework.config.default_ingestion_event = "add_only"
 
     # update proc table argument
@@ -188,7 +188,7 @@ def main():
             #framework.append_event('template', arguments)
 
     # ingest an entire directory, trigger "next_file" on each file, optionally continue to monitor if -m is specified
-    
+
     elif args.infiles is not None or args.dirname is not None:
         framework.ingest_data(args.dirname, args.infiles, args.monitor)
         #print(framework.context.data_set.data_table.columns.tolist())
@@ -198,6 +198,10 @@ def main():
         #stop
     #print(args)
     #stop
+    framework.context.calib_file_path = scales_config.calib_file_path
+    framework.context.bpm_ifs_9mhz = scales_config.bpm_ifs_9mhz
+    framework.context.bpmat_ifs_9mhz = scales_config.bpmat_ifs_9mhz
+
     framework.append_event('centroid_estimate',args)
     framework.append_event('calib_process_started',args)
     framework.start()
