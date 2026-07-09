@@ -47,7 +47,6 @@
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Modes of DRP Operation &amp; the Execution</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="#quicklook-pipeline">Quicklook Pipeline</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#calibration-pipeline">Calibration Pipeline</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#science-grad-pipeline">Science-Grad Pipeline</a></li>
 </ul>
@@ -89,38 +88,19 @@
              
   <section id="modes-of-drp-operation-the-execution">
 <h1>Modes of DRP Operation &amp; the Execution<a class="headerlink" href="#modes-of-drp-operation-the-execution" title="Link to this heading"></a></h1>
-<p>The DRP consists of three main modules: (1) a calibration module, (2) a quicklook module, and (3) a science grade module. More details of modules and the data reduction steps involved are given below.</p>
-<section id="quicklook-pipeline">
-<span id="quicklookmodule"></span><h2>Quicklook Pipeline<a class="headerlink" href="#quicklook-pipeline" title="Link to this heading"></a></h2>
-<p>The quicklook module is used for real-time analysis during observations. It performs <a class="reference internal" href="calib_products.html#referencepixel"><span class="std std-ref">Reference Pixel Correction</span></a> and <a class="reference internal" href="calib_products.html#onebyf"><span class="std std-ref">1/f Noise Correction</span></a> corrections, followed by pixel-by-pixel ramp fitting using a first-order polynomial and rectification-based <a class="reference internal" href="calib_products.html#bpm"><span class="std std-ref">Bad pixel</span></a> correction.</p>
-<p>For imaging mode, quicklook automatically displays the raw image and the final bad-pixel-corrected slope image. For IFS mode, in addition to the slope image, it displays a 3D data cube generated using fast <a class="reference internal" href="calib_products.html#optimalextract"><span class="std std-ref">Optimal Extraction</span></a> with an existing <a class="reference internal" href="calib_products.html#rmatrix"><span class="std std-ref">Rectification matrix</span></a> created by the <a class="reference internal" href="#calibmodule"><span class="std std-ref">Calibration Pipeline</span></a>.</p>
-<p>The quicklook module is designed for rapid automatic execution, allowing users to interactively visualize individual exposures and final 3D IFS data cubes through GUIs during observations. Typically, it takes approximately 0.2–0.3 seconds to produce the data cube.</p>
-<p>The quicklook pipeline continuously searches the input folder for newly arriving FITS files and produces slope images as they are detected. Once each analysis is complete, it waits indefinitely for the next FITS file to arrive.</p>
-<p>A user can access the <code class="docutils literal notranslate"><span class="pre">Quicklook</span> <span class="pre">Pipeline</span></code> using the following command.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>start_scales_quicklook<span class="w"> </span>-m<span class="w"> </span>-W<span class="w"> </span>-d<span class="w"> </span>FULL<span class="w"> </span>PATH
-</pre></div>
-</div>
-<p>Here <code class="docutils literal notranslate"><span class="pre">-m</span></code> indicate monitoring, <code class="docutils literal notranslate"><span class="pre">-W</span></code> indicates wait for ever, and <code class="docutils literal notranslate"><span class="pre">-d</span></code> for directory. More details can seen <a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#othercommand"><span class="std std-ref">here</span></a>. The module will wait for the next file to arrive and analysis as they arrive. In real time observations, the quicklook module is integrated with the SCALES server and do analysis as the data readsout.</p>
-<figure class="align-center" id="id1">
-<a class="reference internal image-reference" href="_images/flowchart_quicklook.png"><img alt="_images/flowchart_quicklook.png" src="_images/flowchart_quicklook.png" style="width: 800px;" />
-</a>
-<figcaption>
-<p><span class="caption-text">A flowchart of the SCLAES-DRP quicklook module.</span><a class="headerlink" href="#id1" title="Link to this image"></a></p>
-</figcaption>
-</figure>
-</section>
+<p>The DRP consists of two main modules: (1) a calibration module and a science grade module. More details of modules and the data reduction steps involved are given below.</p>
 <section id="calibration-pipeline">
 <span id="calibmodule"></span><h2>Calibration Pipeline<a class="headerlink" href="#calibration-pipeline" title="Link to this heading"></a></h2>
 <p>The calibration module is the core component of the SCALES-DRP. It automatically processes dark, detector flat, monochromatic calibration lamp, and bias exposures using the sequence of processing steps described in <a class="reference internal" href="Primitives.html"><span class="doc">Primitives</span></a>.</p>
 <p>The calibration module produces two categories of output products. The first category consists of daily master calibration products generated by sigma-clipped median combining multiple calibrated slope images. These include master detector flats, dark frames, and bias frames for both the imaging and IFS detectors.</p>
 <p>The second category consists of calibration reference products that are not regenerated on a daily basis, but are instead monitored periodically by WMKO staff and updated as needed. These include rectification matrices and lenslet flats for each IFS observing mode derived from master monochromatic calibration exposures, read-noise maps generated from master bias frames, gain maps derived from flat-field exposures, persistence measurements from sequences of dark and detector flat exposures, and bad pixel maps derived from master dark and detector flat frames. Detector-level corrected flat exposures are also used to derive detector non-linearity correction coefficients and the associated data quality (DQ) flag maps.</p>
-<p>Monochromatic calibration data are acquired less frequently because the optical geometry of the instrument is expected to remain stable over much longer timescales than the detector calibrations. These exposures are used to generate the <a class="reference internal" href="calib_products.html#rmatrix"><span class="std std-ref">rectification matrices</span></a> required for <a class="reference internal" href="calib_products.html#spectralextract"><span class="std std-ref">spectral extraction</span></a> and <a class="reference internal" href="calib_products.html#wave"><span class="std std-ref">wavelength calibration</span></a>. The rectification matrices encode the detector response of every lenslet PSF (psflet) as a function of wavelength, providing the mapping between detector pixels and the reconstructed three-dimensional data cube.</p>
+<p>Monochromatic calibration data are acquired less frequently because the optical geometry of the instrument is expected to remain stable over much longer timescales than the detector calibrations. These exposures are used to generate the <a class="reference internal" href="calib_products.html#rmatrix"><span class="std std-ref">rectification matrices</span></a> required for <a class="reference internal" href="Primitives.html#spectralextract"><span class="std std-ref">spectral extraction</span></a> and <span class="xref std std-ref">wavelength calibration</span>. The rectification matrices encode the detector response of every lenslet PSF (psflet) as a function of wavelength, providing the mapping between detector pixels and the reconstructed three-dimensional data cube.</p>
 <p>A small number of monochromatic calibration exposures are acquired each time the instrument configuration is changed. These exposures are used to measure and correct for instrument flexure on a daily basis.</p>
-<figure class="align-center" id="id2">
+<figure class="align-center" id="id1">
 <a class="reference internal image-reference" href="_images/flowchart_calib.png"><img alt="_images/flowchart_calib.png" src="_images/flowchart_calib.png" style="width: 800px;" />
 </a>
 <figcaption>
-<p><span class="caption-text">A flowchart of the SCLAES-DRP calibration module.</span><a class="headerlink" href="#id2" title="Link to this image"></a></p>
+<p><span class="caption-text">A flowchart of the SCLAES-DRP calibration module.</span><a class="headerlink" href="#id1" title="Link to this image"></a></p>
 </figcaption>
 </figure>
 <p>A user can execute the <code class="docutils literal notranslate"><span class="pre">Calibration</span> <span class="pre">Pipeline</span></code> using the following command:</p>
@@ -138,12 +118,12 @@
 </section>
 <section id="science-grad-pipeline">
 <h2>Science-Grad Pipeline<a class="headerlink" href="#science-grad-pipeline" title="Link to this heading"></a></h2>
-<p>The science module processes science exposures by applying the detector-level corrections described in <a class="reference internal" href="Primitives.html"><span class="doc">Primitives</span></a>, followed by <a class="reference internal" href="calib_products.html#ramp"><span class="std std-ref">ramp fitting</span></a>, <a class="reference internal" href="calib_products.html#bpm"><span class="std std-ref">bad pixel correction</span></a>, and <a class="reference internal" href="calib_products.html#spectralextract"><span class="std std-ref">spectral extraction</span></a>. Using the calibration products generated by the <a class="reference internal" href="#calibmodule"><span class="std std-ref">calibration module</span></a>, it produces calibrated slope images and wavelength-calibrated three-dimensional IFS data cubes.</p>
-<figure class="align-center" id="id3">
+<p>The science module processes science exposures by applying the detector-level corrections described in <a class="reference internal" href="Primitives.html"><span class="doc">Primitives</span></a>, followed by <a class="reference internal" href="Primitives.html#ramp"><span class="std std-ref">ramp fitting</span></a>, <span class="xref std std-ref">bad pixel correction</span>, and <a class="reference internal" href="Primitives.html#spectralextract"><span class="std std-ref">spectral extraction</span></a>. Using the calibration products generated by the <a class="reference internal" href="#calibmodule"><span class="std std-ref">calibration module</span></a>, it produces calibrated slope images and wavelength-calibrated three-dimensional IFS data cubes.</p>
+<figure class="align-center" id="id2">
 <a class="reference internal image-reference" href="_images/flowchart_science.png"><img alt="_images/flowchart_science.png" src="_images/flowchart_science.png" style="width: 800px;" />
 </a>
 <figcaption>
-<p><span class="caption-text">A flowchart of the SCLAES-DRP science-grad module.</span><a class="headerlink" href="#id3" title="Link to this image"></a></p>
+<p><span class="caption-text">A flowchart of the SCLAES-DRP science-grade module.</span><a class="headerlink" href="#id2" title="Link to this image"></a></p>
 </figcaption>
 </figure>
 <p>A user can execute the <code class="docutils literal notranslate"><span class="pre">science-grad</span> <span class="pre">pipeline</span></code> using the following command:</p>

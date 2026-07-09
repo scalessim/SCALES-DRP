@@ -92,22 +92,22 @@ class RampFit(BasePrimitive):
             elif obsmode =='IFS':
                 if det_config =='5.0 MHz': #fast0.6
                     SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
                     rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                     lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
                 elif det_config =='9.0 MHz': #fast1.0
                     SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast0.6_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
                     rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                     lin_coeff = calib_path+"lin_coeffs_ifs_fast1.0_cd5.fits"
                 elif det_config =='20.0 MHz': #slow
                     SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_slow_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
                     rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                     lin_coeff = calib_path+"lin_coeffs_ifs_slow_cd5.fits"
                 else:
                     SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
                     rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                     lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
 

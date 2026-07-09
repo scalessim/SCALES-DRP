@@ -112,12 +112,6 @@ The related codes can be found here:
     /SCALES-DRP/scalesdrp/Primitives/linearity.py
 
 
-.. figure:: /_static/plots/linear_demo.png
-   :width: 600px
-   :align: center
-
-   linear demo caption  
-
 .. _ramp:
 
 Ramp Fitting
@@ -174,7 +168,7 @@ These products are written as FITS extensions and represent the final detector-l
    :width: 600px
    :align: center
 
-   Example ramp-fitted slope images showing a monochromatic calibration exposure (left) and an imager detector flat exposure (right) after detector-level processing and ramp fitting.  
+   Example ramp-fitted slope images of a monochromatic calibration exposure (left) and an imaging detector flat exposure (right).  
 
 
 The related codes can be found here:
@@ -229,8 +223,8 @@ Output
    :width: 400px
    :align: center
 
-   bad pixel mask for imaging detector (left), and the IFS detector (right). 
-
+   Example of bad pixel correction. Detector image before (left) and after (right) bad pixel correction.
+   
 The related codes can be found here:
 
 .. code-block:: bash

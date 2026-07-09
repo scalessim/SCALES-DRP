@@ -13,266 +13,341 @@ from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
 from scalesdrp.core.scales_pkg_resources import get_resource_path
 import time
 from scipy import sparse
-from scipy.ndimage import median_filter
-
-######### bpm correction untill CD4 ############################
-def correct_local_defects_pass1_improved(image_data_to_correct, bad_pixel_mask, **kwargs):
-
-    verbose = kwargs.get('verbose', True)
-    if verbose: print("--- PASS 1: Starting Improved Local Iterative Correction ---")
-    
-    corrected_image = image_data_to_correct.copy()
-    remaining_bpm = bad_pixel_mask.copy()
-    initial_bad_count = np.sum(remaining_bpm)
-    if initial_bad_count == 0:
-        return corrected_image, remaining_bpm # Return empty mask
-
-    current_box_size = kwargs.get('initial_box_size', 5)
-    max_box_size = kwargs.get('max_box_size', 11)
-    min_good_neighbors_frac = kwargs.get('min_good_neighbors_frac', 0.3)
-    max_iterations = kwargs.get('max_iterations', 10) # More iterations can help
-
-    # Keep track of pixels that are permanently unfixable by this method
-    stalled_pixels_mask = np.zeros_like(remaining_bpm)
-
-    for growth_pass in range((max_box_size - current_box_size) // 2 + 1):
-        num_fixed_this_growth_step = 0
-        for i in range(max_iterations):
-            num_bad_at_start = np.sum(remaining_bpm)
-            if num_bad_at_start == 0: break
-            
-            replacement_values = median_filter(corrected_image, size=current_box_size, mode='reflect')
-            good_pixel_mask = (~remaining_bpm).astype(np.uint8)
-            good_neighbor_count = convolve(good_pixel_mask, np.ones((current_box_size, current_box_size)), mode='constant', cval=0)
-            min_good_req = int(min_good_neighbors_frac * (current_box_size**2 - 1))
-            
-            pixels_to_correct = remaining_bpm & (good_neighbor_count >= min_good_req)
-            
-            num_newly_corrected = np.sum(pixels_to_correct)
-            if num_newly_corrected == 0: break
-            
-            corrected_image[pixels_to_correct] = replacement_values[pixels_to_correct]
-            remaining_bpm[pixels_to_correct] = False
-            num_fixed_this_growth_step += num_newly_corrected
-        
-        if np.sum(remaining_bpm) == 0: break
-        
-        # If we stalled, increase box size. Mark the remaining pixels as stalled for now.
-        if num_fixed_this_growth_step == 0:
-            stalled_pixels_mask |= remaining_bpm
-            current_box_size += 2
-            if verbose: print(f"Stalled. Growing box to {current_box_size}x{current_box_size}.")
-        
-    final_uncorrected_mask = remaining_bpm | stalled_pixels_mask
-    if verbose: print(f"--- Pass 1 Finished. Uncorrectable local pixels: {np.sum(final_uncorrected_mask)} ---")
-    
-    return corrected_image, final_uncorrected_mask
+from scipy.ndimage import median_filter, binary_dilation, label
+######### bpm correction ############################
+# ============================================================
+# DQ BIT DEFINITIONS
+# ============================================================
+DQ_BITS = {
+    "NONFINITE":        1,
+    "UNSTABLE":         2,
+    "HOT":              4,
+    "COLD":             8,
+    "LOW_QE":           16,
+    "HIGH_RESPONSE":    32,
+    "SPATIAL_OUTLIER":  64,
+    "ADJ_HOT":          128,
+    "ADJ_LOW_QE":       256,
+    "ADJ_OPEN":         512,
+    "CLUSTER":          1024,
+    "REFERENCE_PIXEL":  2048,
+}
 
 
-def fill_global_defects_pass2_inpainting(image, bad_pixel_mask):
-    
-    num_defects = np.sum(bad_pixel_mask)
-    if num_defects == 0:
-        print("\n--- PASS 2: No defects to fill. Skipping. ---")
-        return image.copy()
-        
-    #print(f"\n--- PASS 2: Inpainting {num_defects} large-scale defects using astropy.convolution ---")
-    
-    # Inpainting works by replacing NaN values.
-    image_with_nans = image.copy()
-    image_with_nans[bad_pixel_mask] = np.nan
-    
-
-    kernel_size_stddev = 3 # The standard deviation of the Gaussian in pixels
-    kernel = Gaussian2DKernel(x_stddev=kernel_size_stddev)
-    
-    inpainted_image = interpolate_replace_nans(image_with_nans, kernel)
-    
-    #print("--- Pass 2 Inpainting Finished. ---")
-    return inpainted_image
-
-def apply_full_correction(image_to_correct,obsmode, pass1_kwargs={}):
-    """
-    Applies the improved full two-pass BPM correction workflow.
-    """
-    t1=time.time()
-
-    package = __name__.split('.')[0]
-    calib_path = str(get_resource_path(package, filepath))+'/'
-    if obsmode=='IMAGING':
-        filepath = 'bpm_new_5.fits'
-        master_bpm = fits.getdata(calib_path).astype(bool)
-        #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
-    else:
-        filepath = 'calib/cd3_bpm_ifs_5mhz.fits'
-        calib_path = get_resource_path(package, filepath)+'/'
-        master_bpm = fits.getdata(calib_path).astype(bool)
-        #master_bpm = np.bitwise_or(master_bpm1, neg_bpm)
-
-    corrected_pass1, large_defects_mask = correct_local_defects_pass1_improved(
-        image_to_correct,
-        master_bpm,
-        **pass1_kwargs
-    )
-    
-    # Pass 2 uses this failure mask to fill in the large holes.
-    fully_corrected_image = fill_global_defects_pass2_inpainting(
-        corrected_pass1,
-        large_defects_mask
-    )
-    t2=time.time()
-    print(f"Bad pixel correction completed in {t2 - t1:.2f} seconds.")
-
-    return fully_corrected_image
-
-######################### Creating BPM untill cd4 ###########################
-
-def generate_bpm_relative(
-    image_stack: np.ndarray,
-    stack_name: str = "Image Stack",
-    spatial_brightness_factor: float = 5.0,
-    spatial_kernel_size: int = 5,
-    temporal_sigma_thresh: float = 5.0,
-    min_frames_for_temporal: int = 3,
-    plot_results: bool = True
-) -> np.ndarray:
-    """
-    Generates a Bad Pixel Mask (BPM) from a stack of images.
-
-    - Temporal outliers are found using a standard deviation.
-    - Spatial outliers are found using a RELATIVE BRIGHTNESS test: a pixel
-      is flagged if it is N times brighter or dimmer than its local median.
-
-    Args:
-        image_stack (np.ndarray): 3D stack of images (N_frames, Height, Width).
-        stack_name (str): Name for logging/plotting.
-        spatial_brightness_factor (float): A pixel is bad if its value is > this
-                                           factor times the local median, or <
-                                           the local median / this factor.
-        spatial_kernel_size (int): Size of the square kernel for spatial median filter.
-        temporal_sigma_thresh (float): Sigma threshold for the temporal outlier test.
-        min_frames_for_temporal (int): Min frames to run the temporal test.
-
-    Returns:
-        np.ndarray: A 2D boolean bad pixel mask where True represents a bad pixel.
-    """
-    if image_stack.ndim != 3:
-        raise ValueError("Input `image_stack` must be a 3D array.")
-        
-    n_frames, height, width = image_stack.shape
-
-    final_bpm = np.all(np.isnan(image_stack), axis=0)
-    print(f"Flagged {np.sum(final_bpm)} pixels that are initially NaN in all frames.")
-
-    # --- Criterion 1: Temporal Outliers ---
-    temporal_bpm = np.zeros_like(final_bpm)
-    if n_frames >= min_frames_for_temporal and temporal_sigma_thresh > 0:
-        start_time = time.time()
-        print(f"1. Finding Temporal Outliers (sigma > {temporal_sigma_thresh})...")
-        pixel_medians = np.nanmedian(image_stack, axis=0, keepdims=True)
-        pixel_stds_map = np.nanstd(image_stack, axis=0)
-        valid_stds = pixel_stds_map[np.isfinite(pixel_stds_map) & (pixel_stds_map > 0)]
-        std_floor = np.median(valid_stds) * 0.01 if len(valid_stds) > 0 else 1e-5
-        pixel_stds_map[~np.isfinite(pixel_stds_map) | (pixel_stds_map <= 0)] = max(std_floor, 1e-5)
-        
-        deviations = np.abs(image_stack - pixel_medians)
-        is_outlier_stack = deviations > (temporal_sigma_thresh * pixel_stds_map)
-        temporal_bpm = np.any(is_outlier_stack, axis=0)
-        
-        print(f"   + Found {np.sum(temporal_bpm)} temporal outliers in {time.time() - start_time:.2f}s.")
-        final_bpm |= temporal_bpm
-
-    # --- Criterion 2: Spatial Outliers using Relative Brightness ---
-    spatial_bpm = np.zeros_like(final_bpm)
-    if spatial_brightness_factor > 1 and spatial_kernel_size >= 3:
-        start_time = time.time()
-        print(f"2. Finding Spatial Outliers (relative brightness factor > {spatial_brightness_factor})...")
-        
-        for i in range(n_frames):
-            frame = image_stack[i].copy()
-            original_nans = np.isnan(frame)
-            
-            # Use a global median for NaN replacement to not affect local calculations
-            global_median_val = np.nanmedian(frame)
-            if not np.isfinite(global_median_val): global_median_val = 0
-            
-            frame_no_nan = np.nan_to_num(frame, nan=global_median_val)
-            
-            # a) Calculate the local median for every pixel
-            local_median = median_filter(frame_no_nan, size=spatial_kernel_size, mode='reflect')
-            
-            local_median[local_median <= 1e-9] = 1e-9
-
-            with np.errstate(divide='ignore', invalid='ignore'):
-                is_hot_pixel = frame > (spatial_brightness_factor * local_median)
-                is_cold_pixel = frame < (local_median / spatial_brightness_factor)
-            
-            is_outlier_this_frame = is_hot_pixel | is_cold_pixel
-            
-            is_outlier_this_frame |= original_nans 
-            
-            spatial_bpm |= is_outlier_this_frame
-
-        print(f"   + Found {np.sum(spatial_bpm)} spatial outliers in {time.time() - start_time:.2f}s.")
-        final_bpm |= spatial_bpm
-    print(f"Total unique pixels flagged for {stack_name}: {np.sum(final_bpm)}")
-
-    return final_bpm
-
-############### bpm creation CD4 onwards ######################
 def robust_sigma_from_mad(values, floor=1e-6):
+    '''
+    This estimates a robust standard deviation using Median Absolute Deviation.
+    '''
+    values = np.asarray(values)
     values = values[np.isfinite(values)]
+
     if values.size == 0:
         return floor
 
     med = np.nanmedian(values)
     mad = np.nanmedian(np.abs(values - med))
-    sigma = 1.4826 * mad
-    return max(sigma, floor)
+    #Converts MAD to Gaussian-equivalent sigma
+    return max(1.4826 * mad, floor)
 
 
-def generate_bpm_robust_v2(
+def add_bit(dq_map, mask, bit_name):
+    #This adds a DQ flag to selected pixels.
+    dq_map[mask] |= DQ_BITS[bit_name]
+
+
+def make_reference_pixel_mask(shape, ref_width=4):
+    #Creates a reference-pixel mask for the 4-pixel detector border.
+    ny, nx = shape
+
+    ref_mask = np.zeros((ny, nx), dtype=bool)
+    ref_mask[:, :ref_width] = True
+    ref_mask[:, nx-ref_width:] = True
+    ref_mask[:ref_width, :] = True
+    ref_mask[ny-ref_width:, :] = True
+
+    science_mask = ~ref_mask
+    return ref_mask, science_mask
+
+
+def expand_neighbors(mask, science_mask=None, radius=1):
+    #This flags neighbors around bad pixels. radius 1==> 3x3 box
+    if radius <= 0:
+        expanded = mask.copy()
+    else:
+        structure = np.ones((2 * radius + 1, 2 * radius + 1), dtype=bool)
+        expanded = binary_dilation(mask, structure=structure)
+
+    adjacent = expanded & (~mask)
+
+    if science_mask is not None:
+        adjacent &= science_mask
+    #return neighbour only mask
+    return adjacent
+
+
+def detect_clusters(mask, min_cluster_size=6, science_mask=None):
+    #detect connected groups on bad pixels
+    work = mask.copy()
+
+    if science_mask is not None:
+        work &= science_mask
+    #define 8 connected neighbours
+    structure = np.ones((3, 3), dtype=int)
+    labels, nlab = label(work, structure=structure)
+
+    cluster_mask = np.zeros_like(mask, dtype=bool)
+    #loop through each connected component
+    for lab in range(1, nlab + 1):
+        comp = labels == lab
+        #if the connected component is large enough
+        if np.sum(comp) >= min_cluster_size:
+            cluster_mask |= comp
+
+    return cluster_mask
+
+
+def save_category_maps(output_dir, prefix, masks, dq_map, final_bpm, products=None):
+    os.makedirs(output_dir, exist_ok=True)
+
+    fits.PrimaryHDU(final_bpm.astype(np.uint8)).writeto(
+        os.path.join(output_dir, f"{prefix}_bpm_bool.fits"),
+        overwrite=True,
+    )
+
+    fits.PrimaryHDU(dq_map.astype(np.uint16)).writeto(
+        os.path.join(output_dir, f"{prefix}_dq.fits"),
+        overwrite=True,
+    )
+
+    for name, mask in masks.items():
+        fits.PrimaryHDU(mask.astype(np.uint8)).writeto(
+            os.path.join(output_dir, f"{prefix}_{name}.fits"),
+            overwrite=True,
+        )
+
+    if products is not None:
+        for name, arr in products.items():
+            if arr is None:
+                continue
+            fits.PrimaryHDU(arr).writeto(
+                os.path.join(output_dir, f"{prefix}_{name}.fits"),
+                overwrite=True,
+            )
+
+# ============================================================
+
+def remove_frame_common_mode(
+    stack,
+    stats_mask,
+    remove_global=True,
+    remove_rows=True,
+    remove_cols=False,
+):
+    """
+    This one used to estimate unstable pixels.
+    Remove frame-to-frame common-mode structure before estimating
+    temporal instability.
+
+    This removes frmae to frame structure before measuring temporal instability
+    like the cross hatching stripes of the imager.
+
+    Parameters
+    ----------
+    stack : ndarray
+        Shape = (n_frames, ny, nx)
+    stats_mask : 2D bool
+        True where pixels should be used for statistics.
+    remove_global : bool
+        Subtract one global median per frame.
+    remove_rows : bool
+        Subtract one row median per frame.
+    remove_cols : bool
+        Subtract one column median per frame.
+
+    Returns
+    -------
+    clean_stack : ndarray
+        Common-mode corrected stack.
+    """
+    clean = np.asarray(stack, dtype=np.float32).copy()
+    n_frames, ny, nx = clean.shape
+
+    for k in range(n_frames):
+        frame = clean[k].copy()
+
+        good = stats_mask & np.isfinite(frame)
+
+        if remove_global and np.any(good):
+            frame -= np.nanmedian(frame[good])
+
+        if remove_rows:
+            for y in range(ny):
+                row_good = stats_mask[y, :] & np.isfinite(frame[y, :])
+                if np.any(row_good):
+                    frame[y, :] -= np.nanmedian(frame[y, row_good])
+
+        if remove_cols:
+            for x in range(nx):
+                col_good = stats_mask[:, x] & np.isfinite(frame[:, x])
+                if np.any(col_good):
+                    frame[:, x] -= np.nanmedian(frame[col_good, x])
+
+        clean[k] = frame
+    #return common mode corrected stack
+    return clean
+
+
+def detect_unstable_pixels_from_temporal_scatter(
+    stack,
+    stats_mask,
+    temporal_sigma_thresh=10.0,
+    mad_floor=1e-6,
+    remove_global=True,
+    remove_rows=True,
+    remove_cols=False,
+):
+    """
+    Detect temporally unstable pixels using excess temporal scatter.
+
+    Old method:
+        Count how many frames a pixel deviates from its own temporal median.
+
+    Problem:
+        Common-mode row/stripe variations can look like unstable pixels.
+
+    New method:
+        1. Remove frame-level global/row/column structure.
+        2. Compute per-pixel temporal scatter.
+        3. Compare each pixel's temporal scatter against the detector population.
+
+    This detects pixels that are truly noisy/flickering relative to other pixels.
+    """
+    #clean the common mode
+    clean_stack = remove_frame_common_mode(
+        stack,
+        stats_mask=stats_mask,
+        remove_global=remove_global,
+        remove_rows=remove_rows,
+        remove_cols=remove_cols,
+    )
+    #for each pixel, calaculate the temporal MAD across the frames
+    temporal_median = np.nanmedian(clean_stack, axis=0)
+
+    temporal_mad = np.nanmedian(
+        np.abs(clean_stack - temporal_median[None, :, :]),
+        axis=0,
+    )
+
+    temporal_sigma_map = 1.4826 * temporal_mad
+
+    valid = np.isfinite(temporal_sigma_map) & stats_mask
+
+    unstable = np.zeros_like(stats_mask, dtype=bool)
+
+    if not np.any(valid):
+        return unstable, temporal_sigma_map, np.nan
+    #median temporal noise level
+    population_median = np.nanmedian(temporal_sigma_map[valid])
+    #scatter of the temporal noise values
+    population_sigma = robust_sigma_from_mad(
+        temporal_sigma_map[valid],
+        floor=mad_floor,
+    )
+    #define unstable threshold
+    threshold = population_median + temporal_sigma_thresh * population_sigma
+
+    unstable = temporal_sigma_map > threshold
+    unstable &= stats_mask
+
+    print(f"Temporal scatter median: {population_median:.6g}")
+    print(f"Temporal scatter sigma:  {population_sigma:.6g}")
+    print(f"Temporal unstable thresh: {threshold:.6g}")
+    #Returns unstable mask, temporal sigma map, and threshold
+    return unstable, temporal_sigma_map, threshold
+
+
+# ============================================================
+
+def generate_bpm_classified_v4(
     image_stack,
     stack_name="Image Stack",
     mode="dark",
 
-    # temporal instability test
-    temporal_sigma_thresh=6.0,
-    min_frames_bad_temporal=2,
+    # reference pixels
+    ref_width=4,
+    flag_reference_pixels=True,
+    exclude_reference_from_stats=True,
 
-    # spatial local outlier test
-    spatial_sigma_thresh=6.0,
+    # temporal instability
+    temporal_sigma_thresh=10.0,
+    temporal_remove_global=True,
+    temporal_remove_rows=True,
+    temporal_remove_cols=False,
+
+    # spatial local outlier
+    spatial_sigma_thresh=8.0,
     spatial_kernel_size=7,
-    min_frames_bad_spatial=2,
+    min_frames_bad_spatial=4,
 
-    # dark persistent hot/cold test
+    # dark hot/cold
     dark_hot_sigma=8.0,
     dark_cold_sigma=8.0,
 
-    # flat response test
+    # flat response / QE
     normalize_flats=True,
     flat_norm_kernel_size=31,
-    flat_low_response_thresh=0.5,
+    flat_low_response_thresh=0.4,
     flat_high_response_thresh=1.5,
+
+    # neighbor and cluster logic
+    neighbor_radius=0,
+    cluster_min_size=6,
 
     # general
     mad_floor_fraction=0.05,
 ):
     """
-    Generate a master BPM from a stack of dark or flat slope images.
+    Generate classified detector BPM from dark & flat slope-image stacks.
 
-    Parameters
+    Categories
     ----------
-    image_stack : ndarray
-        Shape = (n_frames, ny, nx)
-    mode : {"dark", "flat"}
-        dark: detect hot/cold/dark-current outliers and unstable pixels.
-        flat: detect low/high-response pixels after illumination normalization.
+    NONFINITE
+        NaN/Inf in calibration frames.
+
+    UNSTABLE
+        Excess temporal scatter after removing frame-level common-mode,
+        row, and optionally column structure.
+
+    HOT
+        Dark-stack only. Persistent high dark current.
+
+    COLD
+        Dark-stack only. Persistent low dark signal.
+
+    LOW_QE
+        Flat-stack only. Low normalized flat response.
+
+    HIGH_RESPONSE
+        Flat-stack only. High normalized flat response / open-like pixel.
+
+    SPATIAL_OUTLIER
+        Persistent local spatial outlier across frames.
+
+    ADJ_*
+        Neighbor pixels around selected defect classes.
+
+    CLUSTER
+        Connected group of core bad pixels.
+
+    REFERENCE_PIXEL
+        Four-pixel detector reference border.
 
     Returns
     -------
-    final_bpm : 2D bool ndarray
-        True = bad pixel.
+    final_bpm : 2D bool
+    dq_map : 2D uint16
+    masks : dict
+    products : dict
     """
     if image_stack.ndim != 3:
         raise ValueError("image_stack must have shape (n_frames, ny, nx)")
@@ -285,108 +360,132 @@ def generate_bpm_robust_v2(
 
     if spatial_kernel_size % 2 == 0:
         spatial_kernel_size += 1
+
     if flat_norm_kernel_size % 2 == 0:
         flat_norm_kernel_size += 1
 
-    print(f"\n=== Generating BPM for: {stack_name} ===")
+    print(f"\n=== Generating classified BPM for: {stack_name} ===")
     print(f"Mode: {mode}")
     print(f"Stack shape: {stack.shape}")
 
-    # --------------------------------------------------
-    # 0. NaNs / non-finite pixels
-    # --------------------------------------------------
-    all_nan_bpm = np.all(~np.isfinite(stack), axis=0)
-    any_nan_bpm = np.any(~np.isfinite(stack), axis=0)
+    #create reference mask and science mask
+    ref_mask, science_mask = make_reference_pixel_mask((ny, nx), ref_width=ref_width)
 
-    final_bpm = all_nan_bpm.copy()
+    stats_mask = science_mask.copy() if exclude_reference_from_stats else np.ones((ny, nx), dtype=bool)
 
-    print(f"All-frame NaN pixels: {np.sum(all_nan_bpm)}")
-    print(f"Any-frame NaN pixels: {np.sum(any_nan_bpm)}")
+    dq_map = np.zeros((ny, nx), dtype=np.uint16)
 
+    masks = {
+        "nonfinite": np.zeros((ny, nx), dtype=bool),
+        "unstable": np.zeros((ny, nx), dtype=bool),
+        "hot": np.zeros((ny, nx), dtype=bool),
+        "cold": np.zeros((ny, nx), dtype=bool),
+        "low_qe": np.zeros((ny, nx), dtype=bool),
+        "high_response": np.zeros((ny, nx), dtype=bool),
+        "spatial_outlier": np.zeros((ny, nx), dtype=bool),
+        "adj_hot": np.zeros((ny, nx), dtype=bool),
+        "adj_low_qe": np.zeros((ny, nx), dtype=bool),
+        "adj_open": np.zeros((ny, nx), dtype=bool),
+        "cluster": np.zeros((ny, nx), dtype=bool),
+        "reference_pixel": ref_mask.copy(),
+        "science_pixel": science_mask.copy(),
+    }
+
+    if flag_reference_pixels:
+        add_bit(dq_map, ref_mask, "REFERENCE_PIXEL")
+
+    # 0. Non-finite pixels
     # --------------------------------------------------
-    # 1. Median image of the stack
-    # --------------------------------------------------
+    nonfinite_any = np.any(~np.isfinite(stack), axis=0)
+    nonfinite_any &= stats_mask
+
+    masks["nonfinite"] = nonfinite_any
+    add_bit(dq_map, nonfinite_any, "NONFINITE")
+
+    print(f"Reference pixels: {np.sum(ref_mask)}")
+    print(f"Science pixels:   {np.sum(science_mask)}")
+    print(f"Any-frame non-finite science pixels: {np.sum(nonfinite_any)}")
+
+
+    # 1. Median image
     stack_median = np.nanmedian(stack, axis=0)
 
-    # --------------------------------------------------
-    # 2. Temporal instability test
-    #    This detects pixels unstable across frames.
-    #    It does NOT catch pixels that are always hot/dead.
-    # --------------------------------------------------
+    # 2. NEW temporal instability
     start = time.time()
 
-    deviations = np.abs(stack - stack_median[None, :, :])
-    pixel_mad = np.nanmedian(deviations, axis=0)
-    pixel_sigma = 1.4826 * pixel_mad
-
-    finite_sigma = pixel_sigma[np.isfinite(pixel_sigma) & (pixel_sigma > 0)]
-    if finite_sigma.size > 0:
-        sigma_floor = max(np.nanmedian(finite_sigma) * mad_floor_fraction, 1e-6)
-    else:
-        sigma_floor = 1e-6
-
-    pixel_sigma[~np.isfinite(pixel_sigma) | (pixel_sigma <= 0)] = sigma_floor
-
-    temporal_outlier_stack = deviations > (
-        temporal_sigma_thresh * pixel_sigma[None, :, :]
+    unstable, temporal_sigma_map, temporal_unstable_threshold = (
+        detect_unstable_pixels_from_temporal_scatter(
+            stack,
+            stats_mask=stats_mask,
+            temporal_sigma_thresh=temporal_sigma_thresh,
+            remove_global=temporal_remove_global,
+            remove_rows=temporal_remove_rows,
+            remove_cols=temporal_remove_cols,
+        )
     )
 
-    temporal_count = np.sum(temporal_outlier_stack, axis=0)
-    temporal_bpm = temporal_count >= min_frames_bad_temporal
+    masks["unstable"] = unstable
+    add_bit(dq_map, unstable, "UNSTABLE")
 
-    print(
-        f"Temporal unstable pixels: {np.sum(temporal_bpm)} "
-        f"({time.time() - start:.2f}s)"
-    )
-
-    final_bpm |= temporal_bpm
+    print(f"Unstable pixels: {np.sum(unstable)} ({time.time() - start:.2f}s)")
 
     # --------------------------------------------------
-    # 3. Mode-specific persistent tests
+    # 3. Dark-specific hot/cold
     # --------------------------------------------------
-    dark_level_bpm = np.zeros((ny, nx), dtype=bool)
-    flat_response_bpm = np.zeros((ny, nx), dtype=bool)
-    flat_response = None
+    dark_level_image = None
 
     if mode == "dark":
-        # Persistent hot/cold dark pixels relative to whole dark median image.
-        finite = np.isfinite(stack_median)
-
+        finite = np.isfinite(stack_median) & stats_mask
+        #global dark level
         global_dark_med = np.nanmedian(stack_median[finite])
+        #robust scatter of dark levels
         global_dark_sigma = robust_sigma_from_mad(stack_median[finite])
-
-        dark_hot = stack_median > (
+        #flags hot pixels
+        hot = stack_median > (
             global_dark_med + dark_hot_sigma * global_dark_sigma
         )
-        dark_cold = stack_median < (
+        #flags cold pixels
+        cold = stack_median < (
             global_dark_med - dark_cold_sigma * global_dark_sigma
         )
 
-        dark_level_bpm = dark_hot | dark_cold
-        dark_level_bpm[~finite] = True
+        hot &= finite
+        cold &= finite
 
-        print(f"Persistent dark hot pixels: {np.sum(dark_hot)}")
-        print(f"Persistent dark cold pixels: {np.sum(dark_cold)}")
-        print(f"Persistent dark-level BPM: {np.sum(dark_level_bpm)}")
+        masks["hot"] = hot
+        masks["cold"] = cold
 
-        final_bpm |= dark_level_bpm
+        add_bit(dq_map, hot, "HOT")
+        add_bit(dq_map, cold, "COLD")
 
-    elif mode == "flat":
-        # Persistent low/high-response pixels after removing illumination pattern.
+        dark_level_image = stack_median
+
+        print(f"Dark global median: {global_dark_med:.6g}")
+        print(f"Dark robust sigma:  {global_dark_sigma:.6g}")
+        print(f"Hot pixels:         {np.sum(hot)}")
+        print(f"Cold pixels:        {np.sum(cold)}")
+
+    # --------------------------------------------------
+    # 4. Flat-specific low-QE/high-response
+    # --------------------------------------------------
+    flat_response = None
+
+    if mode == "flat":
         flat_med = stack_median.copy()
+        finite = np.isfinite(flat_med) & stats_mask
 
-        finite = np.isfinite(flat_med)
         fill_value = np.nanmedian(flat_med[finite]) if np.any(finite) else 1.0
 
         flat_fill = flat_med.copy()
         flat_fill[~finite] = fill_value
-
+        #normalize the flat with the defined kernal size
         if normalize_flats:
             illum = median_filter(
                 flat_fill,
                 size=flat_norm_kernel_size,
                 mode="reflect",
             )
+            #prevents division by 0
             illum[~np.isfinite(illum) | (illum <= 1e-6)] = 1e-6
             flat_response = flat_fill / illum
         else:
@@ -394,30 +493,34 @@ def generate_bpm_robust_v2(
             if norm <= 0:
                 norm = 1.0
             flat_response = flat_fill / norm
+        #low and high QE mask cutoff
+        low_qe = flat_response < flat_low_response_thresh
+        high_response = flat_response > flat_high_response_thresh
 
-        flat_low = flat_response < flat_low_response_thresh
-        flat_high = flat_response > flat_high_response_thresh
+        low_qe &= finite
+        high_response &= finite
 
-        flat_response_bpm = flat_low | flat_high
-        flat_response_bpm[~finite] = True
+        masks["low_qe"] = low_qe
+        masks["high_response"] = high_response
 
-        print(f"Flat low-response pixels: {np.sum(flat_low)}")
-        print(f"Flat high-response pixels: {np.sum(flat_high)}")
-        print(f"Flat response BPM: {np.sum(flat_response_bpm)}")
+        add_bit(dq_map, low_qe, "LOW_QE")
+        add_bit(dq_map, high_response, "HIGH_RESPONSE")
 
-        final_bpm |= flat_response_bpm
+        print(f"Flat low-QE pixels:        {np.sum(low_qe)}")
+        print(f"Flat high-response pixels: {np.sum(high_response)}")
+        print(f"Flat response median:      {np.nanmedian(flat_response[finite]):.6g}")
 
     # --------------------------------------------------
-    # 4. Spatial local outlier test with persistence
+    # 5. Spatial persistent outliers
     # --------------------------------------------------
     start = time.time()
-    spatial_count = np.zeros((ny, nx), dtype=np.uint16)
 
+    spatial_count = np.zeros((ny, nx), dtype=np.uint16)
+    #loop over each frame
     for i in range(n_frames):
         frame = stack[i].copy()
-        original_bad = ~np.isfinite(frame)
 
-        finite = np.isfinite(frame)
+        finite = np.isfinite(frame) & stats_mask
         fill_value = np.nanmedian(frame[finite]) if np.any(finite) else 0.0
 
         frame_fill = frame.copy()
@@ -433,7 +536,7 @@ def generate_bpm_robust_v2(
             test_frame = frame_fill / illum
         else:
             test_frame = frame_fill
-
+        #local median of the image
         local_med = median_filter(
             test_frame,
             size=spatial_kernel_size,
@@ -441,7 +544,7 @@ def generate_bpm_robust_v2(
         )
 
         abs_dev = np.abs(test_frame - local_med)
-
+        #local robust scatter
         local_mad = median_filter(
             abs_dev,
             size=spatial_kernel_size,
@@ -451,7 +554,7 @@ def generate_bpm_robust_v2(
         local_sigma = 1.4826 * local_mad
 
         finite_local_sigma = local_sigma[
-            np.isfinite(local_sigma) & (local_sigma > 0)
+            np.isfinite(local_sigma) & (local_sigma > 0) & stats_mask
         ]
 
         if finite_local_sigma.size > 0:
@@ -465,149 +568,102 @@ def generate_bpm_robust_v2(
         local_sigma[
             ~np.isfinite(local_sigma) | (local_sigma <= 0)
         ] = local_sigma_floor
-
+        #spatial cutoff applied
         spatial_outlier = abs_dev > (spatial_sigma_thresh * local_sigma)
-        spatial_outlier |= original_bad
+        spatial_outlier &= stats_mask
 
         spatial_count += spatial_outlier.astype(np.uint16)
 
     spatial_bpm = spatial_count >= min_frames_bad_spatial
+    spatial_bpm &= stats_mask
 
-    print(
-        f"Spatial persistent outliers: {np.sum(spatial_bpm)} "
-        f"({time.time() - start:.2f}s)"
+    masks["spatial_outlier"] = spatial_bpm
+    add_bit(dq_map, spatial_bpm, "SPATIAL_OUTLIER")
+
+    print(f"Spatial persistent outliers: {np.sum(spatial_bpm)} ({time.time() - start:.2f}s)")
+
+    # --------------------------------------------------
+    # 6. Find neighbors of each catogery 
+    # --------------------------------------------------
+    adj_hot = expand_neighbors(
+        masks["hot"],
+        science_mask=science_mask,
+        radius=neighbor_radius,
     )
 
-    final_bpm |= spatial_bpm
+    adj_low_qe = expand_neighbors(
+        masks["low_qe"],
+        science_mask=science_mask,
+        radius=neighbor_radius,
+    )
+
+    adj_open = expand_neighbors(
+        masks["high_response"],
+        science_mask=science_mask,
+        radius=neighbor_radius,
+    )
+
+    masks["adj_hot"] = adj_hot
+    masks["adj_low_qe"] = adj_low_qe
+    masks["adj_open"] = adj_open
+
+    add_bit(dq_map, adj_hot, "ADJ_HOT")
+    add_bit(dq_map, adj_low_qe, "ADJ_LOW_QE")
+    add_bit(dq_map, adj_open, "ADJ_OPEN")
+
+    print(f"Adjacent-to-hot pixels:       {np.sum(adj_hot)}")
+    print(f"Adjacent-to-low-QE pixels:    {np.sum(adj_low_qe)}")
+    print(f"Adjacent-to-open-like pixels: {np.sum(adj_open)}")
 
     # --------------------------------------------------
-    # 5. Final summary
+    # 7. Cluster detection
     # --------------------------------------------------
-    print(f"Total unique bad pixels for {stack_name}: {np.sum(final_bpm)}")
-    print(f"Fraction flagged: {100.0 * np.sum(final_bpm) / final_bpm.size:.4f}%")
-    return final_bpm
+    #combine all primary bad pixels
+    core_defect_mask = (
+        masks["nonfinite"]
+        | masks["unstable"]
+        | masks["hot"]
+        | masks["cold"]
+        | masks["low_qe"]
+        | masks["high_response"]
+        | masks["spatial_outlier"]
+    )
 
-#input is a cube of quicklook slope images, odd even corrected, not bpm corrected.
+    cluster_mask = detect_clusters(
+        core_defect_mask,
+        min_cluster_size=cluster_min_size,
+        science_mask=science_mask,
+    )
 
-#sigma cutoff ifs dark = temporal_sigma_thresh=10.0, spatial_sigma_thresh=8.0
-#sigma cutoff ifs flat = temporal_sigma_thresh=8.0, spatial_sigma_thresh=8.0
+    masks["cluster"] = cluster_mask
+    add_bit(dq_map, cluster_mask, "CLUSTER")
 
-#sigma cutoff img dark = temporal_sigma_thresh=10.0, spatial_sigma_thresh=8.0
-#sigma cutoff img flat = temporal_sigma_thresh=10.0, spatial_sigma_thresh=8.0
+    print(f"Cluster pixels: {np.sum(cluster_mask)}")
 
-#bpm_from_darks = generate_bpm_robust_v2(
-#    dark_stack,
-#    stack_name="Dark Stack",
-#    mode="dark",
+    # --------------------------------------------------
+    # 8. Final summary
+    # --------------------------------------------------
+    final_bpm = dq_map != 0
 
-#    temporal_sigma_thresh=10.0,
-#    min_frames_bad_temporal=2,
+    print(f"\nSummary for {stack_name}:")
+    for key, mask in masks.items():
+        print(f"  {key:18s}: {np.sum(mask):8d}")
 
-#    spatial_sigma_thresh=8.0,
-#    spatial_kernel_size=7,
-#    min_frames_bad_spatial=2,
+    print(f"  {'TOTAL':18s}: {np.sum(final_bpm):8d}")
+    print(f"  Fraction flagged: {100.0 * np.sum(final_bpm) / final_bpm.size:.4f}%")
 
-#    dark_hot_sigma=8.0,
-#    dark_cold_sigma=8.0,
+    products = {
+        "stack_median": stack_median,
+        "temporal_sigma_map": temporal_sigma_map,
+        "temporal_unstable_threshold": np.array([temporal_unstable_threshold], dtype=np.float32),
+        "spatial_count": spatial_count,
+        "flat_response": flat_response,
+        "dark_level_image": dark_level_image,
+    }
 
-#    normalize_flats=False)
+    return final_bpm, dq_map, masks, products
 
-#bpm_from_flats = generate_bpm_robust_v2(
-#    flat_stack,
-#    stack_name="Flat Stack",
-#    mode="flat",
-
-#    temporal_sigma_thresh=8.0,
-#    min_frames_bad_temporal=2,
-
-#    spatial_sigma_thresh=8.0,
-#    spatial_kernel_size=7,
-#    min_frames_bad_spatial=2,
-
-#    normalize_flats=True,
-#    flat_norm_kernel_size=31,
-#    flat_low_response_thresh=0.5,
-#    flat_high_response_thresh=1.5)
-
-#final_bpm = bpm_from_darks | bpm_from_flats
-
-#fits.PrimaryHDU(final_bpm.astype(np.uint8)).writeto('filename.fits',overwrite=True)
-#############R.matrix based .npz FILE bpm correction #########################
-
-def bpm_correction_v1(bpmap):
-    package = __name__.split('.')[0]
-    filepath = 'calib/'
-    calib_path = str(get_resource_path(package, filepath))+'/'
-    if obsmode=='IMAGING':
-        calfile = 'calib/bpm_new_5.fits'
-        bpmap = pyfits.getdata(calib_path+calfile)
-    elif obsmode=='IFS':
-        calfile = 'cd3_bpm_ifs_5mhz.fits'
-        bpmap = pyfits.getdata(calib_path+calfile)
-
-
-    ypix = bpmap.shape[0]
-    xpix = bpmap.shape[1]
-    matrowinds = []
-    matcolinds = []
-    matvals = []
-    for i in range(len(bpmap)):
-        for j in range(len(bpmap[0])):
-            if bpmap[i,j] == 1.0:
-                vals = []
-                weights = []
-                indsx = []
-                indsy = []
-                sbox = 1
-                goodbox = False
-                while goodbox == False:
-                    sbox += 2
-                    #print(sbox)
-                    xs,xe = j-sbox//2,j+sbox//2+1
-                    ys,ye = i-sbox//2,i+sbox//2+1
-                    if xs < 0:
-                        xs = 0
-                    if xe >= xpix:
-                        xe = xpix
-                    if ys < 0:
-                        ys = 0
-                    if ye >= xpix:
-                        ye = xpix
-                    #print(xs,xe,ys,ye)
-                    box = bpmap[ys:ye,xs:xe]
-                    if len(np.where(box!=1.0)[0]) > 3:
-                        goodbox = True
-                #plt.imshow(box)
-                #plt.colorbar()
-                #plt.show()
-                #stop
-
-                for yy in range(ys,ye):
-                    for xx in range(xs,xe):
-                        if bpmap[yy,xx]==0:
-                            dist = np.sqrt((yy-i)**2 + (xx-j)**2)
-                            weights.append(1/dist)
-                            indsx.append(xx)
-                            indsy.append(yy)
-                avginds = np.ravel_multi_index((indsy,indsx),(ypix,xpix))
-                vals = np.array(weights)/np.sum(weights)
-                pixind = np.ravel_multi_index(([i],[j]),(ypix,xpix))
-                #print(vals,np.sum(vals),indsx,indsy)
-                #stop
-                for k in range(len(vals)):
-                    matrowinds.append(pixind[0])
-                    matcolinds.append(avginds[k])
-                    matvals.append(vals[k])
-            elif bpmap[i,j] == 0.0:
-                pixind = np.ravel_multi_index(([i],[j]),(ypix,xpix))
-                matrowinds.append(pixind[0])
-                matcolinds.append(pixind[0])
-                matvals.append(1.0)
-    rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(bpmap.shape),np.prod(bpmap.shape)))
-    #sparse.save_npz('bpmat_ifs1.npz',rmat)
-    return rmat
-
-
+############# R.matrix based .npz FILE bpm correction #########################
 def bpm_correction(bpmap, min_good_pixels=4, max_box_size=21):
     """
     Build a sparse matrix that replaces BPM pixels with an inverse-distance
@@ -699,7 +755,10 @@ def bpm_correction(bpmap, min_good_pixels=4, max_box_size=21):
     )
     #sparse.save_npz('bpmat_ifs.npz',rmat)
     return rmat
-#############################################################################
+
+
+
+################ dynamic mask not implemented yet ##################################################
 def detect_transient_bad_pixels(
     image,
     master_bpm=None,

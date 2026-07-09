@@ -4,7 +4,7 @@ import numpy as np
 from astropy.io import fits
 from tqdm import tqdm
 
-
+################ create non-linearity coefficients #################
 def make_linearity_coeffs_final(
     ramp_cube,
     bpm_2d=None,
@@ -12,94 +12,83 @@ def make_linearity_coeffs_final(
     *,
     skip_initial_reads=2,
     low_poly_order=1,
-    high_poly_order=2,
+    high_poly_order=3,
 
-    # Saturation / plateau detection
+    # saturation / plateau detection
     sat_window=3,
-    sat_drop_fraction=0.65,
+    sat_drop_fraction=0.65,      # plateau if local derivate dy < 0.65 * early slope
     hard_sat_dn=None,
 
-    # Nonlinearity break detection
-    linearity_fraction=0.975,
+    # break detection
+    linearity_fraction=0.90,     # break where measured/linear_model < 0.90 of the fitted model
     min_points_total=10,
     min_low_points=6,
     min_high_points=6,
-    fallback_split_fraction=0.75,
+    fallback_split_fraction=0.75, #if no real non-linearity found, split 75% of the valid ramp
 
-    # Safety behavior
-    require_real_break=True,
-    allow_single_fit=False,
-    corr_worse_tolerance=1.05,
-
-    # Quality cuts
-    min_dynamic_range=50.0,
+    # quality cuts
+    min_dynamic_range=50.0, #if a pixel change by less than 50 DN, treated as unstable
     max_negative_jump_fraction=0.20,
     negative_jump_sigma=5.0,
 
-    # Fit sanity checks
-    max_coeff_abs=1e8,
-    transition_tolerance=5.0,
-    monotonic_tolerance=-1e-3,
-    max_rms_low=np.inf,
+    # fitting sanity
+    max_coeff_abs=1e8, #reject polynomial fot with coefficients larger than this
+    transition_tolerance=5.0, #low/high transition coeff1 and coeff2 should agree within 5 DN
+    monotonic_tolerance=-1e-3, #allow negative slopes
+    max_rms_low=np.inf, #optional rms upper limit
     max_rms_high=np.inf,
+
+    # behavior
+    allow_single_fit=True, #if both low and high fit fails, try to fit a single polynomial over the whole ramp
+    require_real_break=False, #if True, pixel with no detected non-linearity break and rejected
 ):
     """
     Create per-pixel linearity correction coefficients.
 
-    Model:
+    Correction model:
         measured DN M  --->  linearized DN L
 
-    Output convention:
-        COEFFS1 and COEFFS2 are np.polyval-compatible coefficients.
+    Main idea:
+      1. Remove first few unstable reads.
+      2. Find saturation/plateau.
+      3. Keep only pre-saturation reads.
+      4. Fit a baseline line anchored at the first valid read.
+      5. Find nonlinearity break where M/L < linearity_fraction.
+      6. Fit low and high correction polynomials M -> L.
+      7. Normalize polynomial fitting internally for numerical stability.
+      8. Convert normalized polynomial back to ordinary measured-DN coefficients.
+      9. Store coefficients and diagnostic maps.
 
-        L = np.polyval(coeffs, M)
-
-    The correction is accepted only if it is finite, monotonic, continuous
-    across the low/high transition, and does not make the ramp less linear.
+    Output coefficient convention:
+      COEFFS1 and COEFFS2 are standard np.polyval-compatible coefficients:
+          L = np.polyval(coeffs, M)
     """
 
-    # -------------------------------------------------
+    # -----------------------------
     # DQ flags
-    # -------------------------------------------------
-    DQ_BPM_INPUT             = 1 << 0
-    DQ_NONFINITE             = 1 << 1
-    DQ_LOW_DYNAMIC_RANGE     = 1 << 2
-    DQ_TOO_FEW_POINTS        = 1 << 3
-    DQ_NEGATIVE_JUMPS        = 1 << 4
-    DQ_NO_SATURATION_FOUND   = 1 << 5
-    DQ_BAD_BASELINE          = 1 << 6
-    DQ_NO_BREAK_FOUND        = 1 << 7
-    DQ_BAD_LOWFIT            = 1 << 8
-    DQ_BAD_HIGHFIT           = 1 << 9
-    DQ_SINGLE_FIT_USED       = 1 << 10
-    DQ_NONMONOTONIC          = 1 << 11
-    DQ_TRANSITION_BAD        = 1 << 12
-    DQ_RMS_TOO_HIGH          = 1 << 13
-    DQ_UNPHYSICAL_CORR       = 1 << 14
+    # -----------------------------
+    DQ_BPM_INPUT             = 1 << 0 #input bpm
+    DQ_NONFINITE             = 1 << 1 #nan or inf values
+    DQ_LOW_DYNAMIC_RANGE     = 1 << 2 #low dynamic range pixels
+    DQ_TOO_FEW_POINTS        = 1 << 3 #not enough reads to fit
+    DQ_NEGATIVE_JUMPS        = 1 << 4 #negative jumps
+    DQ_NO_SATURATION_FOUND   = 1 << 5 #saturation
+    DQ_BAD_BASELINE          = 1 << 6 #baseline fit failed
+    DQ_NO_BREAK_FOUND        = 1 << 7 #no nolinearity break found
+    DQ_BAD_LOWFIT            = 1 << 8 #lower fit failed
+    DQ_BAD_HIGHFIT           = 1 << 9 #upper fit failed
+    DQ_SINGLE_FIT_USED       = 1 << 10 #used single fit fallback option
+    DQ_NONMONOTONIC          = 1 << 11 #Polynomial correction is nonmonotonic.
+    DQ_TRANSITION_BAD        = 1 << 12 #low/high transition is bad
+    DQ_RMS_TOO_HIGH          = 1 << 13 #polynomial residual is too high
+    DQ_UNPHYSICAL_CORR       = 1 << 14 #correction became unphysical
 
-    fatal_flags = (
-        DQ_BPM_INPUT |
-        DQ_NONFINITE |
-        DQ_LOW_DYNAMIC_RANGE |
-        DQ_TOO_FEW_POINTS |
-        DQ_NEGATIVE_JUMPS |
-        DQ_BAD_BASELINE |
-        DQ_NONMONOTONIC |
-        DQ_TRANSITION_BAD |
-        DQ_RMS_TOO_HIGH |
-        DQ_UNPHYSICAL_CORR
-    )
-
-    # -------------------------------------------------
-    # Input checks
-    # -------------------------------------------------
-    ramp = np.asarray(ramp_cube, dtype=np.float64)
-
+    ramp = np.asarray(ramp_cube, dtype=float)
     if ramp.ndim != 3:
         raise ValueError("ramp_cube must have shape (n_reads, ny, nx)")
 
     n_reads, ny, nx = ramp.shape
-    reads = np.arange(n_reads, dtype=np.float64)
+    reads = np.arange(n_reads, dtype=float)
 
     if bpm_2d is None:
         bpm_2d = np.zeros((ny, nx), dtype=np.uint8)
@@ -109,9 +98,6 @@ def make_linearity_coeffs_final(
             raise ValueError("bpm_2d must have shape (ny, nx)")
         bpm_2d = (bpm_2d != 0).astype(np.uint8)
 
-    # -------------------------------------------------
-    # Output arrays
-    # -------------------------------------------------
     coeffs1 = np.full((low_poly_order + 1, ny, nx), np.nan, dtype=np.float32)
     coeffs2 = np.full((high_poly_order + 1, ny, nx), np.nan, dtype=np.float32)
 
@@ -139,120 +125,96 @@ def make_linearity_coeffs_final(
     dq = np.zeros((ny, nx), dtype=np.uint32)
     goodpix = np.zeros((ny, nx), dtype=np.uint8)
 
-    # -------------------------------------------------
-    # Helper functions
-    # -------------------------------------------------
-    def get_rank_warning():
-        if hasattr(np, "RankWarning"):
-            return np.RankWarning
-        if hasattr(np, "exceptions") and hasattr(np.exceptions, "RankWarning"):
-            return np.exceptions.RankWarning
-        return Warning
-
-    RankWarningClass = get_rank_warning()
-
+    # -----------------------------
+    # Helpers
+    # -----------------------------
     def safe_polyfit(x, y, order):
-        x = np.asarray(x, dtype=np.float64)
-        y = np.asarray(y, dtype=np.float64)
-
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
         if x.size < order + 2:
             return None
-
         if not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
             return None
-
-        if np.nanstd(x) <= 0:
+        if np.nanstd(x) == 0 or np.nanstd(y) == 0:
             return None
-
         try:
             with warnings.catch_warnings():
-                warnings.simplefilter("error", RankWarningClass)
+                warnings.simplefilter("error", np.RankWarning)
                 p = np.polyfit(x, y, order)
+            if not np.all(np.isfinite(p)):
+                return None
+            if np.nanmax(np.abs(p)) > max_coeff_abs:
+                return None
+            return p.astype(np.float64)
         except Exception:
             return None
 
-        if not np.all(np.isfinite(p)):
-            return None
-
-        if np.nanmax(np.abs(p)) > max_coeff_abs:
-            return None
-
-        return p.astype(np.float64)
-
     def normalized_polyfit_to_original_x(x, y, order):
-        x = np.asarray(x, dtype=np.float64)
-        y = np.asarray(y, dtype=np.float64)
+        """
+        Fit y as polynomial of x, but internally normalize x for stability.
+        Return standard np.polyval-compatible polynomial in original x.
+        """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
 
         if x.size < order + 2:
             return None
 
         x0 = np.nanmean(x)
         xs = np.nanstd(x)
-
-        if not np.isfinite(x0) or not np.isfinite(xs) or xs <= 0:
+        if not np.isfinite(xs) or xs <= 0:
             return None
 
         xn = (x - x0) / xs
         pn = safe_polyfit(xn, y, order)
-
         if pn is None:
             return None
 
-        poly_n = np.poly1d(pn)
+        # Convert polynomial in xn=(x-x0)/xs to polynomial in x.
+        poly = np.poly1d(pn)
         xpoly = np.poly1d([1.0 / xs, -x0 / xs])
-        p_orig = poly_n(xpoly).c
+        p_orig = poly(xpoly).c
 
         if not np.all(np.isfinite(p_orig)):
             return None
-
         if np.nanmax(np.abs(p_orig)) > max_coeff_abs:
             return None
 
-        return p_orig.astype(np.float64)
+        return p_orig.astype(np.float32)
 
     def rms_to_line(y):
-        y = np.asarray(y, dtype=np.float64)
-        t = np.arange(y.size, dtype=np.float64)
+        y = np.asarray(y, dtype=float)
+        t = np.arange(len(y), dtype=float)
         m = np.isfinite(y)
-
-        if np.count_nonzero(m) < 3:
+        if np.count_nonzero(m) < 2:
             return np.nan
-
         p = np.polyfit(t[m], y[m], 1)
         model = np.polyval(p, t[m])
         return float(np.sqrt(np.mean((y[m] - model) ** 2)))
 
-    def rms_resid(p, x, y):
-        if p is None:
+    def rms_resid(p, x, y): #check how stright the ramp is.
+        if p is None or len(x) == 0:
             return np.nan
-
-        x = np.asarray(x, dtype=np.float64)
-        y = np.asarray(y, dtype=np.float64)
-
-        if x.size == 0:
-            return np.nan
-
         model = np.polyval(p, x)
         return float(np.sqrt(np.nanmean((y - model) ** 2)))
 
     def monotonic_ok(p, xmin, xmax, ngrid=128):
+        '''
+        Check whether a ploynomial correction is monotonic over its valid DN range
+        '''
         if p is None:
             return False
-
         if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
             return False
-
         grid = np.linspace(xmin, xmax, ngrid)
         vals = np.polyval(p, grid)
-
         if not np.all(np.isfinite(vals)):
-            return False
-
+            return False #Accept only if corrected value mostly increases as measured DN increases.
         return np.all(np.diff(vals) > monotonic_tolerance)
 
     def apply_piecewise(y, p1, p2, cm):
-        y = np.asarray(y, dtype=np.float64)
-        out = np.full_like(y, np.nan, dtype=np.float64)
+        y = np.asarray(y, dtype=float)
+        out = np.full_like(y, np.nan, dtype=float)
 
         has_p1 = p1 is not None and np.all(np.isfinite(p1))
         has_p2 = p2 is not None and np.all(np.isfinite(p2))
@@ -261,21 +223,21 @@ def make_linearity_coeffs_final(
             return out
 
         low = y <= cm
-        out[low] = np.polyval(p1, y[low])
+        out[low] = np.polyval(p1, y[low]) #low DN reads
 
         if has_p2:
-            out[~low] = np.polyval(p2, y[~low])
-        else:
+            out[~low] = np.polyval(p2, y[~low]) #high DN use p2 if available.
+        else: #otherwise fallback to p1
             out[~low] = np.polyval(p1, y[~low])
 
         return out
 
-    # -------------------------------------------------
-    # Main per-pixel loop
-    # -------------------------------------------------
+    # -----------------------------
+    # Per-pixel loop
+    # -----------------------------
     for r, c in tqdm(np.ndindex(ny, nx), total=ny * nx, desc="Linearity coeffs"):
 
-        if bpm_2d[r, c] != 0:
+        if bpm_2d[r, c] != 0: #skip if a pixel is bpm true
             dq[r, c] |= DQ_BPM_INPUT
             continue
 
@@ -283,17 +245,17 @@ def make_linearity_coeffs_final(
         finite = np.isfinite(y_all)
 
         if np.count_nonzero(finite) < min_points_total:
-            dq[r, c] |= DQ_NONFINITE
+            dq[r, c] |= DQ_NONFINITE #not enough finite reads
             continue
-
+        #keep only finite reads
         t = reads[finite]
         y = y_all[finite]
 
+        # Skip first reset/unstable reads
         if skip_initial_reads > 0:
             if y.size <= skip_initial_reads + min_points_total:
                 dq[r, c] |= DQ_TOO_FEW_POINTS
                 continue
-
             t = t[skip_initial_reads:]
             y = y[skip_initial_reads:]
 
@@ -306,27 +268,25 @@ def make_linearity_coeffs_final(
             continue
 
         dy = np.diff(y)
-
         if dy.size < sat_window:
             dq[r, c] |= DQ_TOO_FEW_POINTS
             continue
 
+        # Negative-jump rejection using robust scale
         med_dy = np.nanmedian(dy)
-        mad_dy = 1.4826 * np.nanmedian(np.abs(dy - med_dy))
-
+        mad_dy = 1.4826 * np.nanmedian(np.abs(dy - med_dy)) #scatter estimate
         if not np.isfinite(mad_dy) or mad_dy <= 0:
             mad_dy = max(abs(med_dy), 1.0)
 
+        #reject pixel with too many negative jumps
         neg_thresh = -negative_jump_sigma * mad_dy
-        neg_frac = np.mean(dy < neg_thresh)
-
-        if neg_frac > max_negative_jump_fraction:
+        if np.mean(dy < neg_thresh) > max_negative_jump_fraction:
             dq[r, c] |= DQ_NEGATIVE_JUMPS
             continue
 
-        # -------------------------------------------------
-        # Saturation / plateau detection
-        # -------------------------------------------------
+        # -----------------------------
+        # Saturation detection
+        # -----------------------------
         sat_i = None
 
         if hard_sat_dn is not None:
@@ -335,25 +295,25 @@ def make_linearity_coeffs_final(
                 sat_i = int(hard_hits[0])
 
         if sat_i is None:
-            n_early = max(3, min(len(dy), len(dy) // 4))
+            n_early = max(3, min(len(dy), len(dy) // 4)) #estimate the early slope
             early_slope = np.nanmedian(dy[:n_early])
 
             if np.isfinite(early_slope) and early_slope > 0:
-                flat_thresh = sat_drop_fraction * early_slope
-
+                flat_thresh = sat_drop_fraction * early_slope #define flattening threshold
+                #find first region where local derivative drops below threshold
                 for i in range(len(dy) - sat_window + 1):
-                    local_slope = np.nanmedian(dy[i:i + sat_window])
-                    if local_slope < flat_thresh:
+                    local = np.nanmedian(dy[i:i + sat_window])
+                    if local < flat_thresh:
                         sat_i = i + 1
                         break
 
-        if sat_i is None:
+        if sat_i is None: #if no saturation use full ramp, saturation is final ramp
             dq[r, c] |= DQ_NO_SATURATION_FOUND
             t_valid = t
             y_valid = y
             sat_index[r, c] = -1
             saturation[r, c] = y[-1]
-        else:
+        else: #use pre saturation reads
             sat_i = int(np.clip(sat_i, 1, len(y) - 1))
             t_valid = t[:sat_i]
             y_valid = y[:sat_i]
@@ -363,21 +323,23 @@ def make_linearity_coeffs_final(
         nvalid = len(y_valid)
         nvalid_map[r, c] = nvalid
 
-        if nvalid < min_points_total:
+        if nvalid < min_points_total: #reject if too few reads
             dq[r, c] |= DQ_TOO_FEW_POINTS
             continue
 
-        # -------------------------------------------------
-        # Anchored baseline line
-        # -------------------------------------------------
-        t0 = t_valid[0]
+        # -----------------------------
+        # Anchored baseline fit
+        #
+        # Fit y - y0 = slope * (t - t0)
+        # This avoids intercept/bias causing an unphysical baseline.
+        # -----------------------------
+        t0 = t_valid[0] #shift ramp so first valid read
         y0 = y_valid[0]
 
         tt = t_valid - t0
         yy = y_valid - y0
 
         denom = np.sum(tt ** 2)
-
         if denom <= 0 or not np.isfinite(denom):
             dq[r, c] |= DQ_BAD_BASELINE
             continue
@@ -389,7 +351,7 @@ def make_linearity_coeffs_final(
             dq[r, c] |= DQ_BAD_BASELINE
             continue
 
-        L_valid = slope * t_valid + intercept
+        L_valid = slope * t_valid + intercept #ideal linearized ramp
 
         if not np.all(np.isfinite(L_valid)):
             dq[r, c] |= DQ_BAD_BASELINE
@@ -398,17 +360,15 @@ def make_linearity_coeffs_final(
         slope_map[r, c] = slope
         intercept_map[r, c] = intercept
 
-        # -------------------------------------------------
-        # Break detection
-        # -------------------------------------------------
-        denom_L = np.maximum(np.abs(L_valid), 1.0)
-        ratio = y_valid / denom_L
-
+        # -----------------------------
+        # Break detection by 90% rule for finding non-linearity
+        # -----------------------------
+        ratio = y_valid / np.maximum(L_valid, 1.0)
         candidates = np.where(ratio < linearity_fraction)[0]
 
         if candidates.size > 0:
             idx_break = int(candidates[0])
-        else:
+        else: #no break found
             idx_break = nvalid
             dq[r, c] |= DQ_NO_BREAK_FOUND
 
@@ -417,49 +377,52 @@ def make_linearity_coeffs_final(
         if require_real_break and idx_break >= nvalid:
             continue
 
-        # -------------------------------------------------
-        # Split low/high regions
-        # -------------------------------------------------
+        # -----------------------------
+        # Split where real break found , othrewise split based on fallback_split_fraction
+        # -----------------------------
         if idx_break < nvalid:
             split = idx_break
         else:
             split = int(fallback_split_fraction * nvalid)
-
+        #ensure enough points on both sides
         if nvalid >= min_low_points + min_high_points:
             split = max(min_low_points, split)
             split = min(nvalid - min_high_points, split)
         else:
-            dq[r, c] |= DQ_TOO_FEW_POINTS
-            continue
-
+            split = max(1, min(split, nvalid - 1))
+        #create measured to-linear target pair
         M_low = y_valid[:split]
         L_low = L_valid[:split]
 
         M_high = y_valid[split:]
         L_high = L_valid[split:]
 
-        if len(M_low) < min_low_points or len(M_high) < min_high_points:
-            dq[r, c] |= DQ_TOO_FEW_POINTS
-            continue
-
+        #store transition point
         nlow_map[r, c] = len(M_low)
         nhigh_map[r, c] = len(M_high)
 
         cutoff_m[r, c] = y_valid[split]
         cutoff_l[r, c] = L_valid[split]
 
-        # -------------------------------------------------
-        # Polynomial fits: measured DN -> linearized DN
-        # -------------------------------------------------
-        p1 = normalized_polyfit_to_original_x(M_low, L_low, low_poly_order)
-        p2 = normalized_polyfit_to_original_x(M_high, L_high, high_poly_order)
+        # -----------------------------
+        # Fit polynomial correction M -> L
+        # -----------------------------
+        p1 = None
+        p2 = None
+
+        if len(M_low) >= min_low_points: #fit low region corrections
+            p1 = normalized_polyfit_to_original_x(M_low, L_low, low_poly_order)
 
         if p1 is None:
             dq[r, c] |= DQ_BAD_LOWFIT
 
+        if len(M_high) >= min_high_points: #fit high region correction
+            p2 = normalized_polyfit_to_original_x(M_high, L_high, high_poly_order)
+
         if p2 is None:
             dq[r, c] |= DQ_BAD_HIGHFIT
 
+        # Single fallback if both segment fits failed
         if p1 is None and p2 is None and allow_single_fit:
             p_single = normalized_polyfit_to_original_x(y_valid, L_valid, low_poly_order)
             if p_single is not None:
@@ -469,21 +432,23 @@ def make_linearity_coeffs_final(
         if p1 is None and p2 is None:
             continue
 
-        # -------------------------------------------------
-        # Transition continuity
-        # -------------------------------------------------
+        # -----------------------------
+        # Smooth transition
+        # -----------------------------
+        #evaluate both polynomial at cutoff
         if p1 is not None and p2 is not None:
-            mcut = float(cutoff_m[r, c])
+            mcut = cutoff_m[r, c]
             y1 = np.polyval(p1, mcut)
             y2 = np.polyval(p2, mcut)
 
             if np.isfinite(y1) and np.isfinite(y2):
                 jump = y2 - y1
+
+                # Shift high polynomial constant term to match low polynomial.
                 p2 = p2.copy()
                 p2[-1] -= jump
-
+                #If still discontinuous, reject high polynomial.
                 y2_new = np.polyval(p2, mcut)
-
                 if not np.isfinite(y2_new) or abs(y2_new - y1) > transition_tolerance:
                     dq[r, c] |= DQ_TRANSITION_BAD
                     p2 = None
@@ -491,15 +456,15 @@ def make_linearity_coeffs_final(
                 dq[r, c] |= DQ_TRANSITION_BAD
                 p2 = None
 
-        # -------------------------------------------------
-        # Monotonicity checks
-        # -------------------------------------------------
-        if p1 is not None:
+        # -----------------------------
+        # Monotonic checks
+        # -----------------------------
+        if p1 is not None and len(M_low) >= 2: #reject low fit if it is not monotonic
             if not monotonic_ok(p1, np.nanmin(M_low), np.nanmax(M_low)):
                 dq[r, c] |= DQ_NONMONOTONIC
                 p1 = None
 
-        if p2 is not None:
+        if p2 is not None and len(M_high) >= 2: #reject high fit if it is not monotonic
             if not monotonic_ok(p2, np.nanmin(M_high), np.nanmax(M_high)):
                 dq[r, c] |= DQ_NONMONOTONIC
                 p2 = None
@@ -507,34 +472,27 @@ def make_linearity_coeffs_final(
         if p1 is None and p2 is None:
             continue
 
-        # -------------------------------------------------
-        # Fit residual checks
-        # -------------------------------------------------
+        # -----------------------------
+        # Fit residuals
+        # -----------------------------
         if p1 is not None:
             rms1 = rms_resid(p1, M_low, L_low)
-            rms1_map[r, c] = rms1
-
+            rms1_map[r, c] = rms1 #store low-fit rms
             if np.isfinite(rms1) and rms1 > max_rms_low:
                 dq[r, c] |= DQ_RMS_TOO_HIGH
-                continue
 
         if p2 is not None:
             rms2 = rms_resid(p2, M_high, L_high)
-            rms2_map[r, c] = rms2
-
+            rms2_map[r, c] = rms2 #store high-fit rms
             if np.isfinite(rms2) and rms2 > max_rms_high:
                 dq[r, c] |= DQ_RMS_TOO_HIGH
-                continue
 
-        # -------------------------------------------------
-        # Final safety test: do not make ramp worse
-        # -------------------------------------------------
+        # -----------------------------
+        # Verify correction does not make valid ramp worse
+        # -----------------------------
         y_corr = apply_piecewise(y_valid, p1, p2, cutoff_m[r, c])
 
-        if not np.all(np.isfinite(y_corr)):
-            dq[r, c] |= DQ_UNPHYSICAL_CORR
-            continue
-
+        #Measure straightness before and after correction.
         raw_rms = rms_to_line(y_valid)
         corr_rms = rms_to_line(y_corr)
 
@@ -544,35 +502,52 @@ def make_linearity_coeffs_final(
         if np.isfinite(raw_rms) and np.isfinite(corr_rms) and corr_rms > 0:
             improvement_map[r, c] = raw_rms / corr_rms
 
-        dycorr = np.diff(y_corr)
+        if not np.all(np.isfinite(y_corr)):
+            dq[r, c] |= DQ_UNPHYSICAL_CORR #reject NaN
+            continue
 
+        # Do not accept if correction creates clear negative steps.
+        dycorr = np.diff(y_corr)
         if np.any(dycorr < -max(1.0, 5.0 * mad_dy)):
             dq[r, c] |= DQ_UNPHYSICAL_CORR
             continue
 
+        # Do not accept if correction makes the line residual worse than 25%.
+        # Allow small tolerance because correction may be subtle.
         if np.isfinite(raw_rms) and np.isfinite(corr_rms):
-            if corr_rms > corr_worse_tolerance * raw_rms:
+            if corr_rms > 1.25 * raw_rms:
                 dq[r, c] |= DQ_UNPHYSICAL_CORR
                 continue
 
-        # -------------------------------------------------
-        # Store accepted coefficients
-        # -------------------------------------------------
+        # -----------------------------
+        # Store coeffs
+        # -----------------------------
         if p1 is not None:
             coeffs1[:, r, c] = p1.astype(np.float32)
 
         if p2 is not None:
             coeffs2[:, r, c] = p2.astype(np.float32)
 
-        if (dq[r, c] & fatal_flags) == 0:
+        fatal = (
+            DQ_BPM_INPUT |
+            DQ_NONFINITE |
+            DQ_LOW_DYNAMIC_RANGE |
+            DQ_TOO_FEW_POINTS |
+            DQ_NEGATIVE_JUMPS |
+            DQ_BAD_BASELINE |
+            DQ_NONMONOTONIC |
+            DQ_TRANSITION_BAD |
+            DQ_UNPHYSICAL_CORR
+        )
+
+        if (dq[r, c] & fatal) == 0:
             goodpix[r, c] = 1
 
-    # -------------------------------------------------
+    # -----------------------------
     # Write FITS
-    # -------------------------------------------------
+    # -----------------------------
     phdu = fits.PrimaryHDU()
     hdr = phdu.header
-
     hdr["COMMENT"] = "Linearity correction coefficients: measured DN -> linearized DN"
     hdr["SKIPRD"] = int(skip_initial_reads)
     hdr["LINFRAC"] = float(linearity_fraction)
@@ -584,9 +559,6 @@ def make_linearity_coeffs_final(
     hdr["MINLOW"] = int(min_low_points)
     hdr["MINHIGH"] = int(min_high_points)
     hdr["FALLSPL"] = float(fallback_split_fraction)
-    hdr["REQBRK"] = bool(require_real_break)
-    hdr["SINGLE"] = bool(allow_single_fit)
-    hdr["CWORSE"] = float(corr_worse_tolerance)
 
     hdr["DQ0"] = "1<<0 BPM input"
     hdr["DQ1"] = "1<<1 nonfinite"
@@ -631,16 +603,8 @@ def make_linearity_coeffs_final(
     hdul.writeto(output_filename, overwrite=True)
     return hdul
 
-
-#hdul = make_linearity_coeffs_final(
-#    lin_input,
-#    bpm_2d=bpm,
-#    output_filename="lin_coeffs_img_fast0.6_cd5.fits",
-#    skip_initial_reads=2,
-#    linearity_fraction=0.975,
-#    sat_drop_fraction=0.65,
-#    high_poly_order=2)
-
+#input to the non-linearity coefficient creating function 
+#is a acn & 1/f corrected cube of reads reaching saturation
 
 ##################### correct ########################################
 # ----------------------------------------------------------------------

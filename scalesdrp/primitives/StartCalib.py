@@ -198,25 +198,25 @@ class StartCalib(BasePrimitive):
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast0.6_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast1.0_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
 
                         elif det_config =='9.0 MHz': #fast1.0
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
                         
                         elif det_config =='20.0 MHz': #slow
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_slow_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_slow_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
 
                         else: #default
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd4.fits')
+                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
                     
                     #self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = scbasic.swap_odd_even_columns(sci_im_full_original1,do_swap=False)
@@ -248,7 +248,7 @@ class StartCalib(BasePrimitive):
 
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                         final_slope,reset,uncert = scbasic.ramp_fit(
-                            sci_im_full_original3,
+                            corrected_cube,
                             readtime,
                             SIG_map_scaled,
                             group_dq = lin_dq) #keep group_dq=lin_dq when linearity is on otherwise None

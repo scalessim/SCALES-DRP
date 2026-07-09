@@ -1,35 +1,7 @@
 Modes of DRP Operation & the Execution
 ======================================
 
-The DRP consists of three main modules: (1) a calibration module, (2) a quicklook module, and (3) a science grade module. More details of modules and the data reduction steps involved are given below. 
-
-.. _quicklookmodule:
-
-Quicklook Pipeline
-------------------
-
-The quicklook module is used for real-time analysis during observations. It performs :ref:`referencepixel` and :ref:`onebyf` corrections, followed by pixel-by-pixel ramp fitting using a first-order polynomial and rectification-based :ref:`bpm` correction.
-
-For imaging mode, quicklook automatically displays the raw image and the final bad-pixel-corrected slope image. For IFS mode, in addition to the slope image, it displays a 3D data cube generated using fast :ref:`optimalextract` with an existing :ref:`rmatrix` created by the :ref:`calibmodule`.
-
-The quicklook module is designed for rapid automatic execution, allowing users to interactively visualize individual exposures and final 3D IFS data cubes through GUIs during observations. Typically, it takes approximately 0.2–0.3 seconds to produce the data cube.
-
-The quicklook pipeline continuously searches the input folder for newly arriving FITS files and produces slope images as they are detected. Once each analysis is complete, it waits indefinitely for the next FITS file to arrive.
-
-A user can access the ``Quicklook Pipeline`` using the following command. 
-
-.. code-block:: shell
-
-   start_scales_quicklook -m -W -d FULL PATH
-
-Here ``-m`` indicate monitoring, ``-W`` indicates wait for ever, and ``-d`` for directory. More details can seen :ref:`here <othercommand>`. The module will wait for the next file to arrive and analysis as they arrive. In real time observations, the quicklook module is integrated with the SCALES server and do analysis as the data readsout.
-
-.. figure:: /_static/plots/flowchart_quicklook.png
-   :width: 800px
-   :align: center
-
-   A flowchart of the SCLAES-DRP quicklook module.
-
+The DRP consists of two main modules: (1) a calibration module and a science grade module. More details of modules and the data reduction steps involved are given below. 
 
 
 .. _calibmodule:
@@ -79,7 +51,7 @@ The science module processes science exposures by applying the detector-level co
    :width: 800px
    :align: center
 
-   A flowchart of the SCLAES-DRP science-grad module.
+   A flowchart of the SCLAES-DRP science-grade module.
 
 
 A user can execute the ``science-grad pipeline`` using the following command:
