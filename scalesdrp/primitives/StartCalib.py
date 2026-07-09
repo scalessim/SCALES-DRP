@@ -297,7 +297,7 @@ class StartCalib(BasePrimitive):
                     self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
 
                     fits_writer_calib(
-                        data=final_slope,
+                        data=bpm_slope,
                         header=data_header,
                         output_dir=self.action.args.dirname,
                         input_filename=filename,
