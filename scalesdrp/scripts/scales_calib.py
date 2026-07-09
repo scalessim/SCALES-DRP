@@ -198,11 +198,12 @@ def main():
         #stop
     #print(args)
     #stop
+    framework.context.clobber = scales_config.clobber
     framework.context.calib_file_path = scales_config.calib_file_path
     framework.context.bpm_ifs_9mhz = scales_config.bpm_ifs_9mhz
     framework.context.bpmat_ifs_9mhz = scales_config.bpmat_ifs_9mhz
 
-    framework.append_event('centroid_estimate',args)
+    #framework.append_event('centroid_estimate',args)
     framework.append_event('calib_process_started',args)
     framework.start()
 

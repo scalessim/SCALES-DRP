@@ -136,32 +136,44 @@ class StartCalib(BasePrimitive):
                             input_filename = filename,
                             output_dir = redux_dir)
 
-                    if os.path.exists(l1_path):
-                        self.logger.info(f"Found existing L1 file: {l1_path}")
+                    if self.context.clobber==False:
+                        if os.path.exists(l1_path):
+                            self.logger.info(f"Found existing L1 file: {l1_path}")
+                            try:
+                                l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
+                                group_ramps.append(l1_slope)
+                                group_uncerts.append(l1_uncert)
+
+                                if group_header_for_master is None:
+                                    group_header_for_master = l1_header.copy()
+
+                                self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
+                                continue
+
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"Existing L1 file could not be used: {l1_path}. "
+                                    f"Reason: {e}. Reprocessing from raw file.")
                         try:
-                            l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
-                            group_ramps.append(l1_slope)
-                            group_uncerts.append(l1_uncert)
-
-                            if group_header_for_master is None:
-                                group_header_for_master = l1_header.copy()
-
-                            self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
+                            with fits.open(filename) as hdulist:
+                                sci_im_full_original1 = hdulist[0].data
+                                data_header = hdulist[0].header
+                                readtime = data_header['EXPTIME']
+                                det_config = data_header['MCLOCK']
+                        except Exception as e:
+                            self.logger.error(f"Failed to read {filename}: {e}")
                             continue
 
+                    else:
+                        try:
+                            with fits.open(filename) as hdulist:
+                                sci_im_full_original1 = hdulist[0].data
+                                data_header = hdulist[0].header
+                                readtime = data_header['EXPTIME']
+                                det_config = data_header['MCLOCK']
                         except Exception as e:
-                            self.logger.warning(
-                                f"Existing L1 file could not be used: {l1_path}. "
-                                f"Reason: {e}. Reprocessing from raw file.")
-                    try:
-                        with fits.open(filename) as hdulist:
-                            sci_im_full_original1 = hdulist[0].data
-                            data_header = hdulist[0].header
-                            readtime = data_header['EXPTIME']
-                            det_config = data_header['MCLOCK']
-                    except Exception as e:
-                        self.logger.error(f"Failed to read {filename}: {e}")
-                        continue
+                            self.logger.error(f"Failed to read {filename}: {e}")
+
 
 
                     package = __name__.split('.')[0]
@@ -410,8 +422,6 @@ class StartCalib(BasePrimitive):
 
                     package = __name__.split('.')[0]
                     simfile = 'sim_readnoise.fits'
-                    filepath = 'calib'
-                    calib_path = str(get_resource_path(package, filepath))+'/'
                     readnoise = fits.getdata(calib_path+simfile)
                     var_read_vector = (readnoise.flatten().astype(np.float64))**2
                     GAIN = 1.0#self.action.args.ccddata.header['GAIN']
@@ -502,6 +512,9 @@ class StartCalib(BasePrimitive):
                     wl_str = f"{wl_val:.3f}".rstrip("0").rstrip(".")
 
                     suffix = f"_{wl_str}_mcalunit"
+                    print('nans are in stack?',np.unique(np.isnan(group_ramps)))
+                    print('nans are in mcalunit?',np.unique(np.isnan(master)))
+                    print('zeros are in uncertainties?',np.where(group_uncerts==0))
                     fits_writer_calib(
                         data=master,
                         header=hdrm,
