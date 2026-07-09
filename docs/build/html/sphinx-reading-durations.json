@@ -1,3 +1,15 @@
 {
-    "Data_Products": 0.01
+    "Configuration_Parameters": 0.009,
+    "Data_Products": 0.003,
+    "FAQ": 0.0,
+    "Installation": 0.004,
+    "Mode_of_Pipelines": 0.006,
+    "Primitives": 0.024,
+    "Quick_Start": 0.005,
+    "Running_the_SCALES-DRP_Pipeline": 0.005,
+    "Support": 0.001,
+    "Updating_Documentation": 0.002,
+    "Versions": 0.001,
+    "calib_products": 0.03,
+    "index": 0.003
 }

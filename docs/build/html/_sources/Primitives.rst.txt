@@ -365,11 +365,6 @@ The related codes can be found here:
     /SCALES-DRP/scalesdrp/Primitives/SpectralExtract.py
     /SCALES-DRP/scalesdrp/Primitives/scales_basic.py
 
-.. figure:: /_static/plots/k_cube_spectra.png
-   :width: 600px
-   :align: center
-
-   The medium resolution K-band IFS cube slice at different wavelengths from 2.0-2.4 μm and a one dimensional extracted spectra at a slenslit position (7,8) using :ref:`Optimal Extraction <optimalextract>`. 
 
 .. _wcs:
 

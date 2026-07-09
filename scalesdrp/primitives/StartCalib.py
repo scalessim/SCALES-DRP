@@ -274,8 +274,8 @@ class StartCalib(BasePrimitive):
                         if True in np.isnan(SIG_map_scaled):
                             print('nans in startcalib sig_map_scaled')
                         final_slope,reset,uncert = scbasic.ramp_fit(
-                            #corrected_cube,
-                            sci_im_full_original3,
+                            corrected_cube,
+                            #sci_im_full_original3,
                             readtime,
                             SIG_map_scaled,
                             group_dq = lin_dq) #keep group_dq=lin_dq when linearity is on otherwise None

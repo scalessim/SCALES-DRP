@@ -130,42 +130,42 @@
 </div>
 <nav class="contents local" id="contents">
 <ul class="simple">
-<li><p><a class="reference internal" href="#reference-pixel-correction" id="id16">Reference Pixel Correction</a></p></li>
-<li><p><a class="reference internal" href="#f-noise-correction" id="id17">1/f Noise Correction</a></p></li>
-<li><p><a class="reference internal" href="#linearity-correction" id="id18">Linearity Correction</a></p>
+<li><p><a class="reference internal" href="#reference-pixel-correction" id="id15">Reference Pixel Correction</a></p></li>
+<li><p><a class="reference internal" href="#f-noise-correction" id="id16">1/f Noise Correction</a></p></li>
+<li><p><a class="reference internal" href="#linearity-correction" id="id17">Linearity Correction</a></p>
 <ul>
-<li><p><a class="reference internal" href="#behaviour" id="id19">Behaviour</a></p></li>
+<li><p><a class="reference internal" href="#behaviour" id="id18">Behaviour</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#ramp-fitting" id="id20">Ramp Fitting</a></p>
+<li><p><a class="reference internal" href="#ramp-fitting" id="id19">Ramp Fitting</a></p>
 <ul>
-<li><p><a class="reference internal" href="#id1" id="id21">Behaviour</a></p></li>
-<li><p><a class="reference internal" href="#output" id="id22">Output</a></p></li>
+<li><p><a class="reference internal" href="#id1" id="id20">Behaviour</a></p></li>
+<li><p><a class="reference internal" href="#output" id="id21">Output</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#bad-pixel-correction" id="id23">Bad Pixel Correction</a></p>
+<li><p><a class="reference internal" href="#bad-pixel-correction" id="id22">Bad Pixel Correction</a></p>
 <ul>
-<li><p><a class="reference internal" href="#id2" id="id24">Behaviour</a></p></li>
-<li><p><a class="reference internal" href="#id3" id="id25">Output</a></p></li>
+<li><p><a class="reference internal" href="#id2" id="id23">Behaviour</a></p></li>
+<li><p><a class="reference internal" href="#id3" id="id24">Output</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#applying-master-calibration-files" id="id26">Applying Master Calibration Files</a></p></li>
-<li><p><a class="reference internal" href="#spectral-extraction" id="id27">Spectral Extraction</a></p>
+<li><p><a class="reference internal" href="#applying-master-calibration-files" id="id25">Applying Master Calibration Files</a></p></li>
+<li><p><a class="reference internal" href="#spectral-extraction" id="id26">Spectral Extraction</a></p>
 <ul>
-<li><p><a class="reference internal" href="#optimal-extraction" id="id28">Optimal Extraction</a></p></li>
-<li><p><a class="reference internal" href="#extraction" id="id29">χ² Extraction</a></p></li>
+<li><p><a class="reference internal" href="#optimal-extraction" id="id27">Optimal Extraction</a></p></li>
+<li><p><a class="reference internal" href="#extraction" id="id28">χ² Extraction</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#world-coordinate-system-wcs" id="id30">World Coordinate System (WCS)</a></p>
+<li><p><a class="reference internal" href="#world-coordinate-system-wcs" id="id29">World Coordinate System (WCS)</a></p>
 <ul>
-<li><p><a class="reference internal" href="#id8" id="id31">Behaviour</a></p></li>
-<li><p><a class="reference internal" href="#id9" id="id32">Output</a></p></li>
+<li><p><a class="reference internal" href="#id8" id="id30">Behaviour</a></p></li>
+<li><p><a class="reference internal" href="#id9" id="id31">Output</a></p></li>
 </ul>
 </li>
 </ul>
 </nav>
 <section id="reference-pixel-correction">
-<span id="referencepixel"></span><h2><a class="toc-backref" href="#id16" role="doc-backlink">Reference Pixel Correction</a><a class="headerlink" href="#reference-pixel-correction" title="Link to this heading"></a></h2>
+<span id="referencepixel"></span><h2><a class="toc-backref" href="#id15" role="doc-backlink">Reference Pixel Correction</a><a class="headerlink" href="#reference-pixel-correction" title="Link to this heading"></a></h2>
 <p><strong>Matches all amplifier outputs to a common baseline level.</strong></p>
 <p>The primitive subtracts the average value of the top and bottom four reference rows for each amplifier and for every detector read. By default, it computes the sigma-clipped <code class="docutils literal notranslate"><span class="pre">median</span></code> of the reference pixels separately for the odd and even columns within each amplifier and subtracts the corresponding value from that amplifier channel. Alternatively, the averaging method can be changed to a sigma-clipped <code class="docutils literal notranslate"><span class="pre">mean</span></code>.</p>
 <p>An option is also provided to disable the odd/even correction, in which case a single sigma-clipped average value is computed from all horizontal reference pixels within each amplifier. The correction is applied to the entire 2048 × 2048 detector frame, including both the science region and the top, bottom, left, and right reference pixels.</p>
@@ -182,7 +182,7 @@
 </figure>
 </section>
 <section id="f-noise-correction">
-<span id="onebyf"></span><h2><a class="toc-backref" href="#id17" role="doc-backlink">1/f Noise Correction</a><a class="headerlink" href="#f-noise-correction" title="Link to this heading"></a></h2>
+<span id="onebyf"></span><h2><a class="toc-backref" href="#id16" role="doc-backlink">1/f Noise Correction</a><a class="headerlink" href="#f-noise-correction" title="Link to this heading"></a></h2>
 <p><strong>Estimates and subtracts the detector 1/f noise from each read.</strong></p>
 <p>This primitive performs a 1/f noise correction using the left and right four reference-pixel columns. It applies an optimal filtering algorithm to the vertical reference pixels to estimate and remove the low-frequency correlated noise responsible for horizontal striping in the detector image.</p>
 <p>For each read, the sigma-clipped average of the reference pixels is computed across all rows and subtracted to remove the global offset. The residual reference-pixel values are then combined into a one-dimensional reference profile of size (1, 2048), which is smoothed using a Fast Fourier Transform (FFT)-based filter. The resulting 1/f noise model is subtracted from the entire detector frame, including both the science region and the top, bottom, left, and right reference pixels. By default, the primitive uses a sigma-clipped <code class="docutils literal notranslate"><span class="pre">mean</span></code> to estimate the reference values, although a sigma-clipped <code class="docutils literal notranslate"><span class="pre">median</span></code> can also be selected.</p>
@@ -200,12 +200,12 @@
 </figure>
 </section>
 <section id="linearity-correction">
-<span id="linearity"></span><h2><a class="toc-backref" href="#id18" role="doc-backlink">Linearity Correction</a><a class="headerlink" href="#linearity-correction" title="Link to this heading"></a></h2>
+<span id="linearity"></span><h2><a class="toc-backref" href="#id17" role="doc-backlink">Linearity Correction</a><a class="headerlink" href="#linearity-correction" title="Link to this heading"></a></h2>
 <p><strong>Applies a per-pixel non-linearity correction using precomputed calibration coefficients.</strong></p>
 <p>This primitive applies a two-segment polynomial correction to each detector pixel using the calibration products generated by <a class="reference internal" href="calib_products.html#createlinearity"><span class="std std-ref">Linearity Coefficient Generation</span></a>. The correction converts the measured detector signal (DN) into an estimate of the corresponding linearized signal while preserving the original ramp shape. During this step, a data quality (DQ) map is also created and propagated through the remaining stages of the data reduction pipeline.</p>
 <p>The calibration reference file contains the per-pixel arrays <code class="docutils literal notranslate"><span class="pre">COEFFS1</span></code>, <code class="docutils literal notranslate"><span class="pre">COEFFS2</span></code>, <code class="docutils literal notranslate"><span class="pre">CUTOFF_M</span></code>, <code class="docutils literal notranslate"><span class="pre">SAT_INDEX</span></code>, and, when available, <code class="docutils literal notranslate"><span class="pre">GOODPIX</span></code> and <code class="docutils literal notranslate"><span class="pre">BPM_INPUT</span></code>. These products determine where the correction is valid, which polynomial segment should be applied, and which reads should be excluded after saturation.</p>
 <section id="behaviour">
-<h3><a class="toc-backref" href="#id19" role="doc-backlink">Behaviour</a><a class="headerlink" href="#behaviour" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id18" role="doc-backlink">Behaviour</a><a class="headerlink" href="#behaviour" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">CUTOFF_M</span></code> defines the measured DN threshold used to select between the low- and high-signal polynomial corrections.</p></li>
 <li><p>Pixels are considered invalid for linearity correction if they are masked by the optional input bad pixel mask, the calibration <code class="docutils literal notranslate"><span class="pre">BPM_INPUT</span></code> mask, or (when enabled) <code class="docutils literal notranslate"><span class="pre">GOODPIX</span></code>.</p></li>
@@ -238,7 +238,7 @@
 </section>
 </section>
 <section id="ramp-fitting">
-<span id="ramp"></span><h2><a class="toc-backref" href="#id20" role="doc-backlink">Ramp Fitting</a><a class="headerlink" href="#ramp-fitting" title="Link to this heading"></a></h2>
+<span id="ramp"></span><h2><a class="toc-backref" href="#id19" role="doc-backlink">Ramp Fitting</a><a class="headerlink" href="#ramp-fitting" title="Link to this heading"></a></h2>
 <p><strong>Fits a count rate to each detector pixel using nondestructive ramp reads.</strong></p>
 <p>The SCALES DRP adopts the <code class="docutils literal notranslate"><span class="pre">fitramp</span></code> algorithm developed by
 <a class="reference external" href="https://github.com/t-brandt/fitramp/tree/main">Brandt et al. (2024)</a>
@@ -250,7 +250,7 @@ and
 <a class="reference external" href="https://iopscience.iop.org/article/10.1088/1538-3873/ad38da">Brandt et al. (2024b)</a>.</p>
 <p>The saturation information propagated through the detector DQ flags is used to exclude saturated reads from the fit.</p>
 <section id="id1">
-<h3><a class="toc-backref" href="#id21" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id20" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Fits the count rate for each detector pixel using all valid nondestructive reads.</p></li>
 <li><p>Uses the per-pixel read noise estimated from the master bias calibration.</p></li>
@@ -262,7 +262,7 @@ and
 </ul>
 </section>
 <section id="output">
-<h3><a class="toc-backref" href="#id22" role="doc-backlink">Output</a><a class="headerlink" href="#output" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id21" role="doc-backlink">Output</a><a class="headerlink" href="#output" title="Link to this heading"></a></h3>
 <p>The primitive produces:</p>
 <ul class="simple">
 <li><p>A slope (count-rate) image.</p></li>
@@ -285,12 +285,12 @@ and
 </section>
 </section>
 <section id="bad-pixel-correction">
-<span id="bpmcorrect"></span><h2><a class="toc-backref" href="#id23" role="doc-backlink">Bad Pixel Correction</a><a class="headerlink" href="#bad-pixel-correction" title="Link to this heading"></a></h2>
+<span id="bpmcorrect"></span><h2><a class="toc-backref" href="#id22" role="doc-backlink">Bad Pixel Correction</a><a class="headerlink" href="#bad-pixel-correction" title="Link to this heading"></a></h2>
 <p><strong>Corrects detector bad pixels using a precomputed sparse interpolation matrix.</strong></p>
 <p>This primitive corrects pixels flagged in the master bad pixel mask generated by <a class="reference internal" href="calib_products.html#createbpm"><span class="std std-ref">Creating Master Bad Pixel Mask</span></a>. Rather than interpolating each bad pixel individually for every exposure, the pipeline applies a precomputed sparse correction matrix that reconstructs bad pixels from neighboring valid pixels using inverse-distance weighted interpolation.</p>
 <p>The sparse correction matrix is generated once for a given bad pixel mask and detector geometry (see <a class="reference internal" href="calib_products.html#createbpm"><span class="std std-ref">Creating Master Bad Pixel Mask</span></a>) and can be reused for all subsequent exposures. This significantly reduces the computational cost of bad pixel correction during routine data reduction.</p>
 <section id="id2">
-<h3><a class="toc-backref" href="#id24" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id2" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id23" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id2" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Pixels not flagged as bad remain unchanged.</p></li>
 <li><p>Each bad pixel is reconstructed from nearby valid pixels using normalized inverse-distance interpolation weights.</p></li>
@@ -307,7 +307,7 @@ and
 </ul>
 </section>
 <section id="id3">
-<h3><a class="toc-backref" href="#id25" role="doc-backlink">Output</a><a class="headerlink" href="#id3" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id24" role="doc-backlink">Output</a><a class="headerlink" href="#id3" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Returns a detector image with bad pixels replaced by interpolated values while preserving all unaffected pixels.</p></li>
 <li><p>Pixels that are not flagged in the bad pixel mask retain their original values.</p></li>
@@ -326,7 +326,7 @@ and
 </section>
 </section>
 <section id="applying-master-calibration-files">
-<h2><a class="toc-backref" href="#id26" role="doc-backlink">Applying Master Calibration Files</a><a class="headerlink" href="#applying-master-calibration-files" title="Link to this heading"></a></h2>
+<h2><a class="toc-backref" href="#id25" role="doc-backlink">Applying Master Calibration Files</a><a class="headerlink" href="#applying-master-calibration-files" title="Link to this heading"></a></h2>
 <p>Master bias, dark, and flat calibration files generated during the afternoon calibration process are automatically applied to the science data as appropriate. If matching calibration files are unavailable, the pipeline falls back to a default set of master calibration files supplied with the pipeline.</p>
 <p>The selection of master calibration files is based on the relevant detector and observing configuration (e.g., detector, clocking mode, exposure time, or observing mode, depending on the calibration type).</p>
 <p>Additional details on the generation and selection of master calibration products are provided in <a class="reference internal" href="calib_products.html"><span class="doc">Calibration products</span></a>.</p>
@@ -336,7 +336,7 @@ and
 </div>
 </section>
 <section id="spectral-extraction">
-<span id="spectralextract"></span><h2><a class="toc-backref" href="#id27" role="doc-backlink">Spectral Extraction</a><a class="headerlink" href="#spectral-extraction" title="Link to this heading"></a></h2>
+<span id="spectralextract"></span><h2><a class="toc-backref" href="#id26" role="doc-backlink">Spectral Extraction</a><a class="headerlink" href="#spectral-extraction" title="Link to this heading"></a></h2>
 <p><strong>Extracts calibrated detector images into three-dimensional IFS data cubes.</strong></p>
 <p>After detector-level calibrations have been applied, the pipeline reconstructs the two-dimensional detector image into a three-dimensional integral field spectroscopy (IFS) data cube. The extracted cube contains two spatial dimensions corresponding to the lenslet array and one spectral dimension corresponding to wavelength.</p>
 <figure class="align-center" id="id14">
@@ -358,7 +358,7 @@ and
 </ul>
 <p>The dimensions of the output cube are determined by the observing mode, including the number of spatial lenslets and wavelength bins.</p>
 <section id="optimal-extraction">
-<span id="optimalextract"></span><h3><a class="toc-backref" href="#id28" role="doc-backlink">Optimal Extraction</a><a class="headerlink" href="#optimal-extraction" title="Link to this heading"></a></h3>
+<span id="optimalextract"></span><h3><a class="toc-backref" href="#id27" role="doc-backlink">Optimal Extraction</a><a class="headerlink" href="#optimal-extraction" title="Link to this heading"></a></h3>
 <p>This routine extracts spectra using variance-weighted optimal extraction.</p>
 <p>The pipeline implements the optimal extraction algorithm described by
 <a class="reference external" href="https://ui.adsabs.harvard.edu/abs/1986PASP...98..609H/abstract">Horne (1986)</a>.</p>
@@ -382,7 +382,7 @@ and
 </section>
 </section>
 <section id="extraction">
-<span id="leastextract"></span><h3><a class="toc-backref" href="#id29" role="doc-backlink">χ² Extraction</a><a class="headerlink" href="#extraction" title="Link to this heading"></a></h3>
+<span id="leastextract"></span><h3><a class="toc-backref" href="#id28" role="doc-backlink">χ² Extraction</a><a class="headerlink" href="#extraction" title="Link to this heading"></a></h3>
 <p><strong>Extracts spectra by fitting a forward model to the complete detector image.</strong></p>
 <p>The χ² extraction treats spectral extraction as a linear inverse problem. Instead of extracting each spectrum independently, the method simultaneously fits the complete detector image using the instrument rectification matrix generated during calibration (see <a class="reference internal" href="Mode_of_Pipelines.html"><span class="doc">Calibration module</span></a>).</p>
 <p>The detector image is modeled as</p>
@@ -419,23 +419,16 @@ and
 /SCALES-DRP/scalesdrp/Primitives/scales_basic.py
 </pre></div>
 </div>
-<figure class="align-center" id="id15">
-<a class="reference internal image-reference" href="_images/k_cube_spectra.png"><img alt="_images/k_cube_spectra.png" src="_images/k_cube_spectra.png" style="width: 600px;" />
-</a>
-<figcaption>
-<p><span class="caption-text">The medium resolution K-band IFS cube slice at different wavelengths from 2.0-2.4 μm and a one dimensional extracted spectra at a slenslit position (7,8) using <a class="reference internal" href="#optimalextract"><span class="std std-ref">Optimal Extraction</span></a>.</span><a class="headerlink" href="#id15" title="Link to this image"></a></p>
-</figcaption>
-</figure>
 </section>
 </section>
 </section>
 <section id="world-coordinate-system-wcs">
-<span id="wcs"></span><h2><a class="toc-backref" href="#id30" role="doc-backlink">World Coordinate System (WCS)</a><a class="headerlink" href="#world-coordinate-system-wcs" title="Link to this heading"></a></h2>
+<span id="wcs"></span><h2><a class="toc-backref" href="#id29" role="doc-backlink">World Coordinate System (WCS)</a><a class="headerlink" href="#world-coordinate-system-wcs" title="Link to this heading"></a></h2>
 <p><strong>Constructs a three-dimensional World Coordinate System (WCS) for an IFS data cube.</strong></p>
 <p>This primitive creates an <code class="docutils literal notranslate"><span class="pre">astropy.wcs.WCS</span></code> object that defines the spatial and spectral coordinate system of an extracted integral field spectroscopy (IFS) data cube. The resulting WCS maps the two spatial axes to right ascension and declination using a tangent-plane (TAN) projection and the third axis to wavelength.</p>
 <p>The WCS is constructed from the FITS header together with a detector-specific reference pixel map. The routine is designed to accommodate variations in FITS header conventions by automatically interpreting sky coordinates provided in different formats, handling optional keywords, and applying sensible defaults when required.</p>
 <section id="id8">
-<h3><a class="toc-backref" href="#id31" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id8" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id30" role="doc-backlink">Behaviour</a><a class="headerlink" href="#id8" title="Link to this heading"></a></h3>
 <ul class="simple">
 <li><p>Reads the reference sky coordinates (RA and Dec) from the FITS header.</p></li>
 <li><p>Determines the wavelength solution from the observing mode and filter configuration.</p></li>
@@ -446,7 +439,7 @@ and
 </ul>
 </section>
 <section id="id9">
-<h3><a class="toc-backref" href="#id32" role="doc-backlink">Output</a><a class="headerlink" href="#id9" title="Link to this heading"></a></h3>
+<h3><a class="toc-backref" href="#id31" role="doc-backlink">Output</a><a class="headerlink" href="#id9" title="Link to this heading"></a></h3>
 <p>Returns a fully populated <code class="docutils literal notranslate"><span class="pre">astropy.wcs.WCS</span></code> object describing the spatial and spectral coordinate system of the IFS data cube.</p>
 <p>The related codes can be found here:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>/SCALES-DRP/scalesdrp/Primitives/SpectralExtract.py
