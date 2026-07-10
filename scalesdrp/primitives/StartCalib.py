@@ -220,7 +220,7 @@ class StartCalib(BasePrimitive):
                             master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_9mhz)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_9mhz)
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
+                            #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
 
                         elif det_config =='20.0 MHz': #slow
                             SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_slow_cd5.fits')
@@ -263,8 +263,8 @@ class StartCalib(BasePrimitive):
                             return_aux=True)
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                         final_slope,reset,uncert = scbasic.ramp_fit(
-                            corrected_cube,
-                            #sci_im_full_original3,
+                            #corrected_cube,
+                            sci_im_full_original3,
                             readtime,
                             SIG_map_scaled,
                             group_dq = lin_dq) #keep group_dq=lin_dq when linearity is on otherwise None
@@ -507,7 +507,7 @@ class StartCalib(BasePrimitive):
                     hdrm['HISTORY'] = f"CALUNIT wavelength group: {wavelength}"
                     wl_val = float(wavelength)
                     wl_str = f"{wl_val:.3f}".rstrip("0").rstrip(".")
-                    hdrm['CALFILETYPE'] = 'MCALUNIT'
+                    hdrm['IMTYPE'] = 'MCALUNIT'
                     suffix = f"_{wl_str}_mcalunit"
                     fits_writer_calib(
                         data=master,

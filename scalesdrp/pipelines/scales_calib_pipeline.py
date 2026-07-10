@@ -13,7 +13,7 @@ from keckdrpframework.pipelines.base_pipeline import BasePipeline
 from keckdrpframework.models.processing_context import ProcessingContext
 #from scalesdrp.primitives.CalibFilePrimitives import *
 #from scalesdrp.primitives import CentroidEstimate
-#import scalesdrp.primitives 
+#import scalesdrp.primitives
 
 class Scales_Calib_Pipeline(BasePipeline):
     """
@@ -30,7 +30,11 @@ class Scales_Calib_Pipeline(BasePipeline):
                                       None,
                                       "calib_process_started"),
 
-        "calib_process_started":    ("StartCalib",None,None),
+        "calib_process_started":    ("StartCalib",None,'calib_process_done'),
+
+        "calib_process_done": ("ProcessMonochrom",None,None)
+
+
 
 
     }

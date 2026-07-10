@@ -252,6 +252,52 @@ def load_single_master_file_calib(expected_keywords, master_type):
 
     return (None, None)
 
+def fits_headers_to_dataframe(directory, pattern="*.fits", recursive=False, include_filename=True):
+    """
+    Build a pandas DataFrame from the headers of all FITS files in a directory.
+
+    Parameters
+    ----------
+    directory : str or Path
+        Directory containing the FITS files.
+    pattern : str, optional
+        Glob pattern to match files (default "*.fits"). Use "*.fit" or
+        "*.fits.gz" etc. if your files use different extensions.
+    recursive : bool, optional
+        If True, search subdirectories as well.
+    include_filename : bool, optional
+        If True, add a "filename" column with each file's name.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per FITS file, one column per unique header keyword.
+        Missing keywords are filled with NaN.
+    """
+    directory = Path(directory)
+    glob_fn = directory.rglob if recursive else directory.glob
+    files = sorted(glob_fn(pattern))
+
+    if not files:
+        raise FileNotFoundError(f"No files matching '{pattern}' found in {directory}")
+
+    rows = []
+    for f in files:
+        with fits.open(f) as hdul:
+            header = hdul[0].header  # primary HDU header
+            row = dict(header)
+            if include_filename:
+                row["filename"] = f.name
+            rows.append(row)
+
+    df = pd.DataFrame(rows)
+
+    if include_filename:
+        # move filename to the front for readability
+        cols = ["filename"] + [c for c in df.columns if c != "filename"]
+        df = df[cols]
+
+    return df
 
 
 #######################################################################################

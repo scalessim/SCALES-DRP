@@ -191,19 +191,22 @@ def main():
     elif args.infiles is not None or args.dirname is not None:
         print('dirname')
         framework.ingest_data(args.dirname, args.infiles, args.monitor)
-        #print(framework.context.data_set.data_table.columns.tolist())
-        dt = framework.context.data_set.data_table
-        print(dt[dt['IMTYPE']=='CALUNIT'])
-        print(dt[(dt['IFSMODE'] == 'LowRes-L') & (dt['IMTYPE'] == 'CALUNIT')])
+        #dt = framework.context.data_set.data_table
+        #print(dt[dt['IMTYPE']=='MCALUNIT'])
+        #print(dt[(dt['IFSMODE'] == 'LowRes-L') & (dt['IMTYPE'] == 'CALUNIT')])
         #stop
     #print(args)
     framework.context.clobber = scales_config.clobber
     framework.context.calib_file_path = scales_config.calib_file_path
     framework.context.bpm_ifs_9mhz = scales_config.bpm_ifs_9mhz
     framework.context.bpmat_ifs_9mhz = scales_config.bpmat_ifs_9mhz
+    framework.context.flat_ifs_9mhz = scales_config.flat_ifs_9mhz
 
-    #framework.append_event('centroid_estimate',args)
-    framework.append_event('calib_process_started',args)
+
+    if scales_config.skip_mcal_generation == False:
+        framework.append_event('calib_process_started',args)
+    else:
+        framework.append_event('calib_process_done',args)
     framework.start()
 
 
