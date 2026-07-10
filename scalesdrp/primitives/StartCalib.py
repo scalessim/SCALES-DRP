@@ -209,7 +209,7 @@ class StartCalib(BasePrimitive):
 
                     elif obsmode =='IFS':
                         if det_config =='5.0 MHz':  #fast1.0
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast0.6_cd5.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
                             rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                             lin_coeff = calib_path+"lin_coeffs_ifs_fast1.0_cd5.fits"
                             master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
@@ -254,27 +254,24 @@ class StartCalib(BasePrimitive):
                     elif sci_im_full_original3.ndim == 3:
 
                         self.logger.info("+++++++++++ linearity correction started +++++++++++")
-<<<<<<< HEAD
-                        corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_fast(
-=======
+                        
+
                         print('before linearity corr: ',np.unique(np.isnan(sci_im_full_original3)))
-                                 
+                            
                         corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_safe_fast(
->>>>>>> e6046e3 (linearity changes)
                             input_cube=sci_im_full_original3,
                             coeff_file=lin_coeff,
                             bpm_2d=master_bpm,
                             invalid_read_behavior="raw",
+                            chunk_size=4096,
                             return_aux=True)
-<<<<<<< HEAD
-=======
                         
                         print('after linearity corr: ',np.unique(np.isnan(corrected_cube)))
->>>>>>> e6046e3 (linearity changes)
+
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                         final_slope,reset,uncert = scbasic.ramp_fit(
-                            #corrected_cube,
-                            sci_im_full_original3,
+                            corrected_cube,
+                            #sci_im_full_original3,
                             readtime,
                             SIG_map_scaled,
                             group_dq = lin_dq) #keep group_dq=lin_dq when linearity is on otherwise None
