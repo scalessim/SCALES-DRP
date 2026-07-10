@@ -96,7 +96,7 @@ class RampFit(BasePrimitive):
                     rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                     lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
                 elif det_config =='9.0 MHz': #fast1.0
-                    SIG_map_scaled = fits.getdata(calib_path+'sim_readnoise.fits')
+                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
                     master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
                     rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                     lin_coeff = calib_path+"lin_coeffs_ifs_fast1.0_cd5.fits"
@@ -163,12 +163,13 @@ class RampFit(BasePrimitive):
 
             elif sci_im_full_original.ndim ==3:
                 self.logger.info("+++++++++++ linearity correction started +++++++++++")
-                
+
                 corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_safe_fast(
                     input_cube=sci_im_full_original,
                     coeff_file=lin_coeff,
                     bpm_2d=master_bpm,
                     invalid_read_behavior="raw",
+                    chunk_size=4096,
                     return_aux=True)
                 
                 self.action.args.ccddata.header['HISTORY'] = 'Non-linearity correction applied'

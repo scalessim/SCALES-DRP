@@ -1586,7 +1586,7 @@ CORR_INVALID  = np.uint8(0)  # BPM / unusable pixel
 CORR_IDENTITY = np.uint8(1)  # safe identity transform L=M
 CORR_FITTED   = np.uint8(2)  # accepted two-piece correction
 
-def apply_linearity_coeffs_to_cube_safe_fast(
+def apply_linearity_coeffs_to_cube_safe_fast1(
     input_cube,
     coeff_file,
     bpm_2d=None,
@@ -1873,4 +1873,560 @@ def apply_linearity_coeffs_to_cube_safe_fast(
 
     return corrected
 
+import numpy as np
+from astropy.io import fits
+from tqdm import tqdm
 
+
+# ============================================================
+# CORR_TYPE values stored in coefficient file
+# ============================================================
+CORR_INVALID = np.uint8(0)   # BPM / unusable coefficient entry
+CORR_IDENTITY = np.uint8(1)  # identity mapping: L = M
+CORR_FITTED = np.uint8(2)    # accepted fitted piecewise correction
+
+
+# ============================================================
+# Read-level linearity DQ flags
+#
+# IMPORTANT:
+# LIN_SATURATED must use the same bit value expected by the
+# ramp-fitting code.
+# ============================================================
+LIN_BPM = np.uint8(1 << 0)
+LIN_IDENTITY = np.uint8(1 << 1)
+LIN_SATURATED = np.uint8(1 << 2)
+LIN_BAD_COEFF = np.uint8(1 << 3)
+LIN_APPLIED = np.uint8(1 << 4)
+LIN_BAD_VALUE = np.uint8(1 << 5)
+
+
+def apply_linearity_coeffs_to_cube_safe_fast(
+    input_cube,
+    coeff_file,
+    bpm_2d=None,
+    *,
+    invalid_read_behavior="raw",
+    chunk_size=4096,
+    return_aux=False,
+):
+    """
+    Apply safe measured-DN -> linearized-DN coefficients to a read cube.
+
+    Correction policy
+    -----------------
+    CORR_INVALID:
+        Leave the complete pixel ramp unchanged and flag it.
+
+    CORR_IDENTITY:
+        Leave the complete pixel ramp unchanged. Saturated reads are still
+        flagged using SAT_INDEX.
+
+    CORR_FITTED:
+        Apply the fitted piecewise polynomial to every finite pre-saturation
+        read. If any coefficient or mapped pre-saturation value is invalid,
+        leave the entire pixel ramp unchanged.
+
+    No per-read mixture of corrected and uncorrected values is allowed.
+
+    Parameters
+    ----------
+    input_cube : ndarray, shape (N, H, W)
+        Input cube of measured detector reads.
+
+    coeff_file : str
+        FITS coefficient file containing COEFFS1, COEFFS2, CUTOFF_M,
+        SAT_INDEX, and preferably CORR_TYPE.
+
+    bpm_2d : ndarray, optional, shape (H, W)
+        Additional bad-pixel mask. Nonzero pixels are not corrected.
+
+    invalid_read_behavior : {"raw", "flat_last_valid", "nan"}
+        Treatment of reads at/after SAT_INDEX.
+
+        "raw"
+            Preserve the original values. Recommended before ramp fitting,
+            because group DQ will exclude these reads.
+
+        "flat_last_valid"
+            Replace post-saturation reads with the final valid corrected read.
+
+        "nan"
+            Replace post-saturation reads with NaN.
+
+    chunk_size : int
+        Number of fitted pixels processed per chunk. Values around
+        2048--8192 are usually suitable for long H2RG ramps.
+
+    return_aux : bool
+        If True, return corrected_cube, lin_dq, and lin_mask.
+
+    Returns
+    -------
+    corrected_cube : ndarray, float32, shape (N, H, W)
+        Corrected cube. Pixels that cannot be safely corrected remain equal
+        to the input cube.
+
+    lin_dq : ndarray, uint8, shape (N, H, W), optional
+        Read-level DQ cube.
+
+    lin_mask : ndarray, bool, shape (H, W), optional
+        True only where an actual fitted correction was successfully applied.
+        Identity pixels remain False.
+    """
+
+    # ------------------------------------------------------------
+    # Validate input cube
+    # ------------------------------------------------------------
+    cube = np.asarray(input_cube, dtype=np.float32)
+
+    if cube.ndim != 3:
+        raise ValueError("input_cube must have shape (N, H, W)")
+
+    n_reads, ny, nx = cube.shape
+    npix = ny * nx
+
+    if invalid_read_behavior not in {
+        "raw",
+        "flat_last_valid",
+        "nan",
+    }:
+        raise ValueError(
+            "invalid_read_behavior must be "
+            "'raw', 'flat_last_valid', or 'nan'"
+        )
+
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
+
+    # ------------------------------------------------------------
+    # Additional BPM supplied at application time
+    # ------------------------------------------------------------
+    if bpm_2d is None:
+        bpm = np.zeros((ny, nx), dtype=bool)
+    else:
+        bpm = np.asarray(bpm_2d) != 0
+
+        if bpm.shape != (ny, nx):
+            raise ValueError(
+                f"bpm_2d must have shape {(ny, nx)}, got {bpm.shape}"
+            )
+
+    # ------------------------------------------------------------
+    # Load calibration products
+    # ------------------------------------------------------------
+    with fits.open(coeff_file, memmap=True) as hdul:
+        coeffs1 = np.asarray(
+            hdul["COEFFS1"].data,
+            dtype=np.float64,
+        )
+        coeffs2 = np.asarray(
+            hdul["COEFFS2"].data,
+            dtype=np.float64,
+        )
+        cutoff_m = np.asarray(
+            hdul["CUTOFF_M"].data,
+            dtype=np.float64,
+        )
+        sat_index = np.asarray(
+            hdul["SAT_INDEX"].data,
+            dtype=np.int32,
+        )
+
+        coeff_bpm = (
+            np.asarray(hdul["BPM_INPUT"].data, dtype=bool)
+            if "BPM_INPUT" in hdul
+            else np.zeros((ny, nx), dtype=bool)
+        )
+
+        if "CORR_TYPE" in hdul:
+            corr_type = np.asarray(
+                hdul["CORR_TYPE"].data,
+                dtype=np.uint8,
+            )
+        else:
+            # Compatibility fallback for older files.
+            if "GOODPIX" in hdul:
+                goodpix = np.asarray(
+                    hdul["GOODPIX"].data,
+                    dtype=bool,
+                )
+            else:
+                goodpix = np.ones((ny, nx), dtype=bool)
+
+            p1_finite = np.all(np.isfinite(coeffs1), axis=0)
+            p2_finite = np.all(np.isfinite(coeffs2), axis=0)
+
+            corr_type = np.full(
+                (ny, nx),
+                CORR_INVALID,
+                dtype=np.uint8,
+            )
+
+            usable = goodpix & p1_finite & p2_finite
+            corr_type[usable] = CORR_FITTED
+
+    # ------------------------------------------------------------
+    # Shape checks
+    # ------------------------------------------------------------
+    expected_shape = (ny, nx)
+
+    if coeffs1.shape[1:] != expected_shape:
+        raise ValueError(
+            "COEFFS1 spatial shape does not match input cube: "
+            f"{coeffs1.shape[1:]} versus {expected_shape}"
+        )
+
+    if coeffs2.shape[1:] != expected_shape:
+        raise ValueError(
+            "COEFFS2 spatial shape does not match input cube: "
+            f"{coeffs2.shape[1:]} versus {expected_shape}"
+        )
+
+    if cutoff_m.shape != expected_shape:
+        raise ValueError(
+            f"CUTOFF_M must have shape {expected_shape}"
+        )
+
+    if sat_index.shape != expected_shape:
+        raise ValueError(
+            f"SAT_INDEX must have shape {expected_shape}"
+        )
+
+    if corr_type.shape != expected_shape:
+        raise ValueError(
+            f"CORR_TYPE must have shape {expected_shape}"
+        )
+
+    if coeff_bpm.shape != expected_shape:
+        raise ValueError(
+            f"BPM_INPUT must have shape {expected_shape}"
+        )
+
+    # ------------------------------------------------------------
+    # Initialize output as an exact copy of input
+    #
+    # This is the main safety fallback. Unless a complete pixel ramp
+    # passes all application checks, its values remain unchanged.
+    # ------------------------------------------------------------
+    corrected = cube.copy()
+
+    lin_dq = np.zeros(
+        cube.shape,
+        dtype=np.uint8,
+    )
+
+    # True only when a fitted correction is applied successfully.
+    lin_mask = np.zeros(
+        (ny, nx),
+        dtype=bool,
+    )
+
+    # ------------------------------------------------------------
+    # Flatten spatial dimensions
+    # ------------------------------------------------------------
+    cube_flat = cube.reshape(n_reads, npix)
+    corrected_flat = corrected.reshape(n_reads, npix)
+    dq_flat = lin_dq.reshape(n_reads, npix)
+    lin_mask_flat = lin_mask.ravel()
+
+    bpm_combined = bpm | coeff_bpm
+    bpm_flat = bpm_combined.ravel()
+
+    corr_type_flat = corr_type.ravel()
+    cutoff_flat = cutoff_m.ravel()
+    sat_flat = sat_index.ravel()
+
+    coeffs1_flat = coeffs1.reshape(
+        coeffs1.shape[0],
+        npix,
+    )
+    coeffs2_flat = coeffs2.reshape(
+        coeffs2.shape[0],
+        npix,
+    )
+
+    read_number = np.arange(
+        n_reads,
+        dtype=np.int32,
+    )[:, None]
+
+    # ------------------------------------------------------------
+    # BPM / invalid pixels
+    # ------------------------------------------------------------
+    bpm_indices = np.flatnonzero(bpm_flat)
+
+    if bpm_indices.size:
+        dq_flat[:, bpm_indices] |= LIN_BPM
+
+    invalid_indices = np.flatnonzero(
+        (~bpm_flat)
+        & (corr_type_flat == CORR_INVALID)
+    )
+
+    if invalid_indices.size:
+        dq_flat[:, invalid_indices] |= LIN_BAD_COEFF
+
+    # ------------------------------------------------------------
+    # Identity pixels
+    #
+    # Data remain unchanged. We only propagate saturation information.
+    # ------------------------------------------------------------
+    identity_indices = np.flatnonzero(
+        (~bpm_flat)
+        & (corr_type_flat == CORR_IDENTITY)
+    )
+
+    for start in range(
+        0,
+        identity_indices.size,
+        chunk_size,
+    ):
+        idx = identity_indices[start:start + chunk_size]
+
+        dq_flat[:, idx] |= LIN_IDENTITY
+
+        kval = sat_flat[idx]
+
+        # SAT_INDEX < 0 means no detected saturation.
+        effective_k = np.where(
+            kval < 0,
+            n_reads,
+            np.clip(kval, 0, n_reads),
+        )
+
+        post_sat = (
+            read_number >= effective_k[None, :]
+        )
+
+        dq_chunk = dq_flat[:, idx]
+        dq_chunk[post_sat] |= LIN_SATURATED
+        dq_flat[:, idx] = dq_chunk
+
+        if invalid_read_behavior == "nan":
+            output_chunk = corrected_flat[:, idx]
+            output_chunk[post_sat] = np.nan
+            corrected_flat[:, idx] = output_chunk
+
+        elif invalid_read_behavior == "flat_last_valid":
+            output_chunk = corrected_flat[:, idx]
+
+            for j, kpix in enumerate(effective_k):
+                if 0 < kpix < n_reads:
+                    output_chunk[kpix:, j] = output_chunk[kpix - 1, j]
+
+            corrected_flat[:, idx] = output_chunk
+
+        # "raw": no change is required.
+
+    # ------------------------------------------------------------
+    # Fitted pixels
+    # ------------------------------------------------------------
+    fitted_indices = np.flatnonzero(
+        (~bpm_flat)
+        & (corr_type_flat == CORR_FITTED)
+    )
+
+    for start in tqdm(
+        range(0, fitted_indices.size, chunk_size),
+        desc="Applying fitted linearity correction",
+    ):
+        idx = fitted_indices[start:start + chunk_size]
+        n_chunk = idx.size
+
+        # Input values for this spatial chunk.
+        y = np.asarray(
+            cube_flat[:, idx],
+            dtype=np.float64,
+        )
+
+        cm = cutoff_flat[idx]
+        kval = sat_flat[idx]
+
+        effective_k = np.where(
+            kval < 0,
+            n_reads,
+            np.clip(kval, 0, n_reads),
+        )
+
+        pre_sat = (
+            read_number < effective_k[None, :]
+        )
+        post_sat = ~pre_sat
+
+        # --------------------------------------------------------
+        # Pixel-level coefficient validation
+        # --------------------------------------------------------
+        p1 = coeffs1_flat[:, idx]
+        p2 = coeffs2_flat[:, idx]
+
+        coeff_ok = (
+            np.all(np.isfinite(p1), axis=0)
+            & np.all(np.isfinite(p2), axis=0)
+            & np.isfinite(cm)
+            & (effective_k > 0)
+        )
+
+        # --------------------------------------------------------
+        # Prevent polynomial evaluation outside valid reads
+        #
+        # Post-saturation values are replaced by zero only for polynomial
+        # evaluation. Their original values remain in corrected_flat.
+        # --------------------------------------------------------
+        y_eval = np.where(
+            pre_sat,
+            y,
+            0.0,
+        )
+
+        # --------------------------------------------------------
+        # Evaluate low branch with Horner's method
+        # --------------------------------------------------------
+        low_value = np.zeros_like(
+            y_eval,
+            dtype=np.float64,
+        )
+
+        for coefficient_row in p1:
+            low_value = (
+                low_value * y_eval
+                + coefficient_row[None, :]
+            )
+
+        # --------------------------------------------------------
+        # Evaluate high branch with Horner's method
+        # --------------------------------------------------------
+        high_value = np.zeros_like(
+            y_eval,
+            dtype=np.float64,
+        )
+
+        for coefficient_row in p2:
+            high_value = (
+                high_value * y_eval
+                + coefficient_row[None, :]
+            )
+
+        low_branch = y_eval <= cm[None, :]
+
+        mapped = np.where(
+            low_branch,
+            low_value,
+            high_value,
+        )
+
+        # Only pre-saturation reads are relevant.
+        read_finite = (
+            np.isfinite(y)
+            & np.isfinite(mapped)
+        )
+
+        # --------------------------------------------------------
+        # All-or-nothing pixel decision
+        #
+        # Every pre-saturation read must be finite. If one fails,
+        # the complete pixel ramp remains unchanged.
+        # --------------------------------------------------------
+        pixel_ok = (
+            coeff_ok
+            & np.all(
+                (~pre_sat) | read_finite,
+                axis=0,
+            )
+        )
+
+        good_columns = np.flatnonzero(pixel_ok)
+        bad_columns = np.flatnonzero(~pixel_ok)
+
+        # --------------------------------------------------------
+        # Apply every pre-saturation read for accepted pixels
+        # --------------------------------------------------------
+        if good_columns.size:
+            output_chunk = corrected_flat[:, idx]
+
+            apply_mask = (
+                pre_sat[:, good_columns]
+            )
+
+            mapped_good = mapped[:, good_columns]
+
+            output_good = output_chunk[:, good_columns]
+            output_good[apply_mask] = (
+                mapped_good[apply_mask].astype(np.float32)
+            )
+
+            output_chunk[:, good_columns] = output_good
+            corrected_flat[:, idx] = output_chunk
+
+            dq_chunk = dq_flat[:, idx]
+
+            dq_good = dq_chunk[:, good_columns]
+            dq_good[apply_mask] |= LIN_APPLIED
+            dq_good[post_sat[:, good_columns]] |= LIN_SATURATED
+
+            dq_chunk[:, good_columns] = dq_good
+            dq_flat[:, idx] = dq_chunk
+
+            lin_mask_flat[idx[good_columns]] = True
+
+        # --------------------------------------------------------
+        # Rejected fitted pixels remain exactly raw
+        # --------------------------------------------------------
+        if bad_columns.size:
+            dq_chunk = dq_flat[:, idx]
+
+            dq_bad = dq_chunk[:, bad_columns]
+            dq_bad |= LIN_BAD_VALUE
+
+            dq_bad[post_sat[:, bad_columns]] |= LIN_SATURATED
+
+            dq_chunk[:, bad_columns] = dq_bad
+            dq_flat[:, idx] = dq_chunk
+
+        # --------------------------------------------------------
+        # Post-saturation data treatment
+        # --------------------------------------------------------
+        if invalid_read_behavior == "nan":
+            output_chunk = corrected_flat[:, idx]
+            output_chunk[post_sat] = np.nan
+            corrected_flat[:, idx] = output_chunk
+
+        elif invalid_read_behavior == "flat_last_valid":
+            output_chunk = corrected_flat[:, idx]
+
+            for j, kpix in enumerate(effective_k):
+                if 0 < kpix < n_reads:
+                    output_chunk[kpix:, j] = output_chunk[kpix - 1, j]
+
+            corrected_flat[:, idx] = output_chunk
+
+        # "raw": post-saturation values remain equal to input.
+
+    # ------------------------------------------------------------
+    # Return output
+    # ------------------------------------------------------------
+    corrected = corrected_flat.reshape(
+        n_reads,
+        ny,
+        nx,
+    )
+
+    lin_dq = dq_flat.reshape(
+        n_reads,
+        ny,
+        nx,
+    )
+
+    lin_mask = lin_mask_flat.reshape(
+        ny,
+        nx,
+    )
+
+    if return_aux:
+        return (
+            corrected.astype(np.float32, copy=False),
+            lin_dq,
+            lin_mask,
+        )
+
+    return corrected.astype(np.float32, copy=False)
