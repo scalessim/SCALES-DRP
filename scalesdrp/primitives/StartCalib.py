@@ -258,7 +258,7 @@ class StartCalib(BasePrimitive):
 
                         print('before linearity corr: ',np.unique(np.isnan(sci_im_full_original3)))
                             
-                        corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_safe_fast(
+                        corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_safe_fast1(
                             input_cube=sci_im_full_original3,
                             coeff_file=lin_coeff,
                             bpm_2d=master_bpm,

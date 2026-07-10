@@ -91,7 +91,7 @@ class RampFit(BasePrimitive):
 
             elif obsmode =='IFS':
                 if det_config =='5.0 MHz': #fast0.6
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
+                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast0.6_cd5.fits')
                     master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
                     rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
                     lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
