@@ -179,7 +179,6 @@ def main():
             sys.exit(0)
 
     elif args.frames:
-        print('frames')
         for frame in args.frames:
             # ingesting and triggering the default ingestion event specified in the configuration file
             framework.ingest_data(None, args.frames, False)
@@ -190,14 +189,14 @@ def main():
     # ingest an entire directory, trigger "next_file" on each file, optionally continue to monitor if -m is specified
 
     elif args.infiles is not None or args.dirname is not None:
+        print('dirname')
         framework.ingest_data(args.dirname, args.infiles, args.monitor)
         #print(framework.context.data_set.data_table.columns.tolist())
-        #dt = framework.context.data_set.data_table
-        #print(framework.context.data_set.data_table['IMTYPE'])
-        #print(dt[dt['IMTYPE']=='CALUNIT'])
-        #stop
+        dt = framework.context.data_set.data_table
+        print(dt[dt['IMTYPE']=='CALUNIT'])
+        print(dt[(dt['IFSMODE'] == 'LowRes-L') & (dt['IMTYPE'] == 'CALUNIT')])
+        stop
     #print(args)
-    #stop
     framework.context.clobber = scales_config.clobber
     framework.context.calib_file_path = scales_config.calib_file_path
     framework.context.bpm_ifs_9mhz = scales_config.bpm_ifs_9mhz

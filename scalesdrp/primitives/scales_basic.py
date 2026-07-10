@@ -726,10 +726,7 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
         if i % 128 == 0:
             print(f"Fitting row {i}/{H}...")
 
-
         sig_row   = SIG_map_scaled[i, :]
-        if True in np.isnan(sig_row):
-            print('nans in sig_row to begin with')
         d_row     = diffs[:, i, :]
         m_row     = pair_mask[:, i, :]
         resetval  = resetval_map[i, :]
@@ -829,8 +826,6 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
                 row_slope[idx_final_fit]  = final_res.countrate
                 row_ped[idx_final_fit]    = final_res.pedestal
                 row_uncert[idx_final_fit] = final_res.uncert     # <-- from fitramp
-                if True in np.unique(np.isnan(final_res.uncert)):
-                    print('uncert 3: ',np.unique(np.isnan(final_res.uncert)))
             except Exception:
                 pass
 
@@ -843,9 +838,6 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
                 t, sig_row)
             row_slope[need_fallback]  = ols_row[need_fallback]
             row_uncert[need_fallback] = ols_unc[need_fallback]
-            if True in np.isnan(ols_unc[need_fallback]):
-                print('uncert 4: ',np.unique(np.isnan(ols_unc[need_fallback])))
-                print(np.unique(base_valid[:,i,:]))
             row_ped[need_fallback]    = resetval[need_fallback]  # prior mean
 
         # 5) Final sanitation: any remaining non-finite → seed; then OLS
@@ -856,8 +848,6 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
                 t, sig_row)
             row_slope[bad_final]  = ols_row[bad_final]
             row_uncert[bad_final] = ols_unc[bad_final]
-            if True in np.isnan(ols_unc[bad_final]):
-                print('uncert 5: ',np.unique(np.isnan(ols_unc[bad_final])))
             row_ped[bad_final]    = resetval[bad_final]
 
         slope[i, :]  = row_slope
