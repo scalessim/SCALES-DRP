@@ -507,7 +507,7 @@ class StartCalib(BasePrimitive):
                     hdrm['HISTORY'] = f"CALUNIT wavelength group: {wavelength}"
                     wl_val = float(wavelength)
                     wl_str = f"{wl_val:.3f}".rstrip("0").rstrip(".")
-
+                    hdrm['CALFILETYPE'] = 'MCALUNIT'
                     suffix = f"_{wl_str}_mcalunit"
                     fits_writer_calib(
                         data=master,

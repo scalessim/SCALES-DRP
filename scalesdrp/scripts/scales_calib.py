@@ -195,7 +195,7 @@ def main():
         dt = framework.context.data_set.data_table
         print(dt[dt['IMTYPE']=='CALUNIT'])
         print(dt[(dt['IFSMODE'] == 'LowRes-L') & (dt['IMTYPE'] == 'CALUNIT')])
-        stop
+        #stop
     #print(args)
     framework.context.clobber = scales_config.clobber
     framework.context.calib_file_path = scales_config.calib_file_path
