@@ -620,6 +620,7 @@ class QuickLook(BasePrimitive):
             self.logger.info("BPM correction completed")
 
             self.fits_writer_steps(
+                #data=img_corr,
                 data=slope_filled,
                 header=hdr,
                 output_dir=output_dir,

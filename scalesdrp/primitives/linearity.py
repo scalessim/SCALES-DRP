@@ -1558,6 +1558,319 @@ def plot_linearity_correction_examples(
 #    savefile="linearity_correction_examples_ifs.png",
 #)
 
+LIN_BPM          = np.uint8(1 << 0)
+LIN_IDENTITY     = np.uint8(1 << 1)
+LIN_SATURATED    = np.uint8(1 << 2)
+LIN_BAD_VALUE    = np.uint8(1 << 3)
+LIN_APPLIED      = np.uint8(1 << 4)
+LIN_TOO_LARGE    = np.uint8(1 << 5)
+DQ_BPM_INPUT           = np.uint32(1 << 0)
+DQ_NONFINITE           = np.uint32(1 << 1)
+DQ_LOW_DYNAMIC_RANGE   = np.uint32(1 << 2)
+DQ_TOO_FEW_POINTS      = np.uint32(1 << 3)
+DQ_NEGATIVE_JUMPS      = np.uint32(1 << 4)
+DQ_NO_SATURATION_FOUND = np.uint32(1 << 5)
+DQ_BAD_BASELINE        = np.uint32(1 << 6)
+DQ_NO_BREAK_FOUND      = np.uint32(1 << 7)
+DQ_BAD_LOWFIT          = np.uint32(1 << 8)
+DQ_BAD_HIGHFIT         = np.uint32(1 << 9)
+DQ_IDENTITY_USED       = np.uint32(1 << 10)
+DQ_NONMONOTONIC        = np.uint32(1 << 11)
+DQ_TRANSITION_BAD      = np.uint32(1 << 12)
+DQ_RMS_TOO_HIGH        = np.uint32(1 << 13)
+DQ_UNPHYSICAL_CORR     = np.uint32(1 << 14)
 
+
+# CORR_TYPE values
+CORR_INVALID  = np.uint8(0)  # BPM / unusable pixel
+CORR_IDENTITY = np.uint8(1)  # safe identity transform L=M
+CORR_FITTED   = np.uint8(2)  # accepted two-piece correction
+
+def apply_linearity_coeffs_to_cube_safe_fast(
+    input_cube,
+    coeff_file,
+    bpm_2d=None,
+    *,
+    invalid_read_behavior="raw",
+    max_corr_frac=None,
+    max_corr_abs=None,
+    chunk_size=65536,
+    return_aux=False,
+):
+    """
+    Apply safe linearity coefficients to a read cube.
+
+    Identity pixels are copied unchanged.
+
+    Fitted corrections are applied only to reads before SAT_INDEX.
+    Reads at/after SAT_INDEX are marked with LIN_SATURATED for ramp fitting.
+
+    Returns
+    -------
+    corrected_cube : float32, shape (N,H,W)
+
+    If return_aux=True:
+        corrected_cube, lin_dq, lin_mask
+    """
+
+    cube = np.asarray(input_cube, dtype=np.float32)
+
+    if cube.ndim != 3:
+        raise ValueError("input_cube must have shape (N,H,W)")
+
+    n_reads, ny, nx = cube.shape
+    npix = ny * nx
+
+    if invalid_read_behavior not in {
+        "raw",
+        "flat_last_valid",
+        "nan",
+    }:
+        raise ValueError(
+            "invalid_read_behavior must be "
+            "'raw', 'flat_last_valid', or 'nan'"
+        )
+
+    if bpm_2d is None:
+        bpm = np.zeros((ny, nx), dtype=bool)
+    else:
+        bpm = np.asarray(bpm_2d) != 0
+        if bpm.shape != (ny, nx):
+            raise ValueError("bpm_2d must have shape (H,W)")
+
+    with fits.open(coeff_file) as hdul:
+        coeffs1 = hdul["COEFFS1"].data.astype(np.float64)
+        coeffs2 = hdul["COEFFS2"].data.astype(np.float64)
+        cutoff_m = hdul["CUTOFF_M"].data.astype(np.float64)
+        sat_index = hdul["SAT_INDEX"].data.astype(np.int32)
+
+        if "CORR_TYPE" in hdul:
+            corr_type = hdul["CORR_TYPE"].data.astype(np.uint8)
+        else:
+            goodpix = hdul["GOODPIX"].data.astype(bool)
+            corr_type = np.where(
+                goodpix,
+                CORR_FITTED,
+                CORR_INVALID,
+            ).astype(np.uint8)
+
+        coeff_bpm = (
+            hdul["BPM_INPUT"].data.astype(bool)
+            if "BPM_INPUT" in hdul
+            else np.zeros((ny, nx), dtype=bool)
+        )
+
+        hdr = hdul[0].header
+
+    if coeffs1.shape[1:] != (ny, nx):
+        raise ValueError(
+            "Coefficient spatial shape does not match input cube"
+        )
+
+    if coeffs2.shape[1:] != (ny, nx):
+        raise ValueError(
+            "Coefficient spatial shape does not match input cube"
+        )
+
+    if cutoff_m.shape != (ny, nx):
+        raise ValueError("CUTOFF_M shape mismatch")
+
+    if sat_index.shape != (ny, nx):
+        raise ValueError("SAT_INDEX shape mismatch")
+
+    if max_corr_frac is None:
+        max_corr_frac = float(hdr.get("MAXCFR", 0.05))
+
+    if max_corr_abs is None:
+        max_corr_abs = float(hdr.get("MAXCABS", 50.0))
+
+    corrected = cube.copy()
+
+    # uint8 is sufficient for the current six flags and is much smaller
+    # than uint32 for a full read cube.
+    lin_dq = np.zeros(
+        cube.shape,
+        dtype=np.uint8,
+    )
+
+    lin_mask = np.zeros((ny, nx), dtype=bool)
+
+    cube_flat = cube.reshape(n_reads, npix)
+    corrected_flat = corrected.reshape(n_reads, npix)
+    dq_flat = lin_dq.reshape(n_reads, npix)
+
+    bpm_combined = bpm | coeff_bpm
+    bpm_flat = bpm_combined.ravel()
+
+    corr_type_flat = corr_type.ravel()
+    cutoff_flat = cutoff_m.ravel()
+    sat_flat = sat_index.ravel()
+
+    coeffs1_flat = coeffs1.reshape(
+        coeffs1.shape[0],
+        npix,
+    )
+    coeffs2_flat = coeffs2.reshape(
+        coeffs2.shape[0],
+        npix,
+    )
+
+    read_number = np.arange(n_reads)[:, None]
+
+    # ------------------------------------------------------------
+    # BPM pixels
+    # ------------------------------------------------------------
+    bpm_indices = np.flatnonzero(bpm_flat)
+    if bpm_indices.size:
+        dq_flat[:, bpm_indices] |= LIN_BPM
+
+    # ------------------------------------------------------------
+    # Identity pixels: leave data exactly unchanged
+    # ------------------------------------------------------------
+    identity_indices = np.flatnonzero(
+        (~bpm_flat)
+        & (corr_type_flat == CORR_IDENTITY)
+    )
+
+    if identity_indices.size:
+        dq_flat[:, identity_indices] |= LIN_IDENTITY
+        lin_mask.ravel()[identity_indices] = True
+
+        identity_sat = sat_flat[identity_indices]
+        valid_sat = (
+            (identity_sat >= 0)
+            & (identity_sat < n_reads)
+        )
+
+        for start in range(
+            0,
+            identity_indices.size,
+            chunk_size,
+        ):
+            idx = identity_indices[start:start + chunk_size]
+            kval = sat_flat[idx]
+
+            sat_mask = (
+                (kval[None, :] >= 0)
+                & (read_number >= kval[None, :])
+            )
+
+            dq_flat[:, idx] |= (
+                sat_mask.astype(np.uint8)
+                * LIN_SATURATED
+            )
+
+    # ------------------------------------------------------------
+    # Fitted pixels
+    # ------------------------------------------------------------
+    fitted_indices = np.flatnonzero(
+        (~bpm_flat)
+        & (corr_type_flat == CORR_FITTED)
+    )
+
+    for start in tqdm(
+        range(0, fitted_indices.size, chunk_size),
+        desc="Applying fitted linearity correction",
+    ):
+        idx = fitted_indices[start:start + chunk_size]
+
+        y = np.asarray(
+            cube_flat[:, idx],
+            dtype=np.float64,
+        )
+
+        cm = cutoff_flat[idx]
+        kval = sat_flat[idx]
+
+        # No detected saturation means all reads are valid.
+        k_effective = np.where(
+            kval < 0,
+            n_reads,
+            np.clip(kval, 0, n_reads),
+        )
+
+        pre_sat = read_number < k_effective[None, :]
+        post_sat = ~pre_sat
+
+        # Evaluate polynomial maps with Horner's method.
+        low_value = np.zeros_like(y, dtype=np.float64)
+        high_value = np.zeros_like(y, dtype=np.float64)
+
+        for coefficient in coeffs1_flat[:, idx]:
+            low_value = low_value * y + coefficient[None, :]
+
+        for coefficient in coeffs2_flat[:, idx]:
+            high_value = high_value * y + coefficient[None, :]
+
+        mapped = np.where(
+            y <= cm[None, :],
+            low_value,
+            high_value,
+        )
+
+        finite_ok = np.isfinite(mapped) & np.isfinite(y)
+
+        delta = mapped - y
+        allowed_delta = np.maximum(
+            max_corr_abs,
+            max_corr_frac * np.maximum(np.abs(y), 1.0),
+        )
+
+        amplitude_ok = np.abs(delta) <= allowed_delta
+
+        valid_correction = (
+            pre_sat
+            & finite_ok
+            & amplitude_ok
+        )
+
+        # Apply only safe pre-saturation values.
+        output_chunk = corrected_flat[:, idx]
+
+        output_chunk[valid_correction] = (
+            mapped[valid_correction].astype(np.float32)
+        )
+
+        corrected_flat[:, idx] = output_chunk
+
+        dq_chunk = dq_flat[:, idx]
+
+        dq_chunk[valid_correction] |= LIN_APPLIED
+        dq_chunk[pre_sat & ~finite_ok] |= LIN_BAD_VALUE
+        dq_chunk[pre_sat & finite_ok & ~amplitude_ok] |= LIN_TOO_LARGE
+        dq_chunk[post_sat] |= LIN_SATURATED
+
+        dq_flat[:, idx] = dq_chunk
+
+        # A pixel is considered applied if every finite pre-saturation
+        # read passed the application checks.
+        successful_pixel = np.all(
+            (~pre_sat) | valid_correction,
+            axis=0,
+        )
+
+        lin_mask.ravel()[idx[successful_pixel]] = True
+
+        # Handle post-saturation values.
+        if invalid_read_behavior == "nan":
+            output_chunk = corrected_flat[:, idx]
+            output_chunk[post_sat] = np.nan
+            corrected_flat[:, idx] = output_chunk
+
+        elif invalid_read_behavior == "flat_last_valid":
+            output_chunk = corrected_flat[:, idx]
+
+            for j, kpix in enumerate(k_effective):
+                if 0 < kpix < n_reads:
+                    output_chunk[kpix:, j] = output_chunk[kpix - 1, j]
+
+            corrected_flat[:, idx] = output_chunk
+
+        # "raw" requires no assignment because corrected started as a copy.
+
+    if return_aux:
+        return corrected, lin_dq, lin_mask
+
+    return corrected
 
 

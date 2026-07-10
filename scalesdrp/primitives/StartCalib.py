@@ -254,13 +254,23 @@ class StartCalib(BasePrimitive):
                     elif sci_im_full_original3.ndim == 3:
 
                         self.logger.info("+++++++++++ linearity correction started +++++++++++")
+<<<<<<< HEAD
                         corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_fast(
+=======
+                        print('before linearity corr: ',np.unique(np.isnan(sci_im_full_original3)))
+                                 
+                        corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_safe_fast(
+>>>>>>> e6046e3 (linearity changes)
                             input_cube=sci_im_full_original3,
                             coeff_file=lin_coeff,
                             bpm_2d=master_bpm,
                             invalid_read_behavior="raw",
-                            use_goodpix=True,
                             return_aux=True)
+<<<<<<< HEAD
+=======
+                        
+                        print('after linearity corr: ',np.unique(np.isnan(corrected_cube)))
+>>>>>>> e6046e3 (linearity changes)
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                         final_slope,reset,uncert = scbasic.ramp_fit(
                             #corrected_cube,
