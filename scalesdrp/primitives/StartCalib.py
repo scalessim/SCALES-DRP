@@ -89,7 +89,7 @@ class StartCalib(BasePrimitive):
                 organized_groups[imtype] = []
             organized_groups[imtype].append(group)
 
-        processing_order = ['BIAS', 'DARK', 'FLATLAMP','FLATLENS', 'CALUNIT']
+        processing_order = ['BIAS', 'DARK', 'FLATLAMP','CALUNIT']
         self.logger.info(f"Found groups for IMTYPEs: {list(organized_groups.keys())}")
 
         for imtype in processing_order:
@@ -177,62 +177,58 @@ class StartCalib(BasePrimitive):
 
 
                     package = __name__.split('.')[0]
-                    #filepath = 'calib/'
-                    #calib_path = str(get_resource_path(package, filepath))+'/'
 
                     calibfilepath = self.context.calib_file_path
                     calib_path = str(get_resource_path(package, calibfilepath))+'/'
                     if obsmode =='Im':
                         if det_config =='5.0 MHz':  #fast1.0
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
-                            rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
-                            lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast1)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpm_img_fast1)
+                            lin_coeff = calib_path+self.context.lin_coeff_img_fast1
+                            master_bpm = fits.getdata(calib_path+self.context_bpm_img_fast1)
 
                         elif det_config =='9.0 MHz': #fast0.6
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast0.6_cd5.fits')
-                            lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
-                            rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
-                            master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpm_img_fast0p6)
+                            lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
+                            master_bpm = fits.getdata(calib_path+self.context_bpm_img_fast0p6)
 
                         elif det_config =='20.0 MHz': #slow
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_slow_cd5.fits')
-                            lin_coeff = calib_path+"lin_coeffs_img_slow_cd5.fits"
-                            rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
-                            master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_slow)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpm_img_slow)
+                            lin_coeff = calib_path+self.context.lin_coeff_img_slow
+                            master_bpm = fits.getdata(calib_path+self.context_bpm_img_slow)
 
-                        else: #default if MCLCOCK is not the specified one above
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
-                            lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
-                            rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
-                            master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
+                        else: #default if MCLCOCK is not one of those specified above
+                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpm_img_fast0p6)
+                            lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
+                            master_bpm = fits.getdata(calib_path+self.context_bpm_img_fast0p6)
 
                     elif obsmode =='IFS':
                         if det_config =='5.0 MHz':  #fast1.0
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                            rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                            lin_coeff = calib_path+"lin_coeffs_ifs_fast1.0_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpm_ifs_fast1)
+                            lin_coeff = calib_path+self.context.lin_coeff_ifs_fast1
+                            master_bpm = fits.getdata(calib_path+self.context_bpm_ifs_fast1)
 
                         elif det_config =='9.0 MHz': #fast1.0
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                            SIG_map_scaled[np.where(np.isnan(SIG_map_scaled)==True)] = np.nanmedian(SIG_map_scaled)
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_9mhz)
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_9mhz)
-                            lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
-                            #master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpm_ifs_fast0p6)
+                            lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
+                            master_bpm = fits.getdata(calib_path+self.context_bpm_ifs_fast0p6)
 
                         elif det_config =='20.0 MHz': #slow
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_slow_cd5.fits')
-                            rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                            lin_coeff = calib_path+"lin_coeffs_ifs_slow_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_slow)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpm_ifs_slow)
+                            lin_coeff = calib_path+self.context.lin_coeff_ifs_slow
+                            master_bpm = fits.getdata(calib_path+self.context_bpm_ifs_slow)
 
                         else: #default
-                            SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                            rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                            lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
-                            master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
+                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
+                            rmat1 = sparse.load_npz(calib_path+self.context.bpm_ifs_fast0p6)
+                            lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
+                            master_bpm = fits.getdata(calib_path+self.context_bpm_ifs_fast0p6)
 
                     #self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = scbasic.swap_odd_even_columns(sci_im_full_original1,do_swap=False)
@@ -254,18 +250,18 @@ class StartCalib(BasePrimitive):
                     elif sci_im_full_original3.ndim == 3:
 
                         self.logger.info("+++++++++++ linearity correction started +++++++++++")
-                        
+
 
                         print('before linearity corr: ',np.unique(np.isnan(sci_im_full_original3)))
-                            
-                        corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_safe_fast1(
+
+                        corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_safe_fast(
                             input_cube=sci_im_full_original3,
                             coeff_file=lin_coeff,
                             bpm_2d=master_bpm,
                             invalid_read_behavior="raw",
                             chunk_size=4096,
                             return_aux=True)
-                        
+
                         print('after linearity corr: ',np.unique(np.isnan(corrected_cube)))
 
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
@@ -404,6 +400,7 @@ class StartCalib(BasePrimitive):
                         proctab=self.proctab)
                     self.logger.info("+++++++++++ Creating master bias +++++++++++")
 
+                """
                 if imtype == 'FLATLENS':
                     hdrm['HISTORY'] = "master lenslet flat created"
                     fits_writer_calib(
@@ -442,15 +439,15 @@ class StartCalib(BasePrimitive):
                         R_for_extract = load_npz(calib_path+'M_C2_rectmat_lowres.npz')
                         R_matrix = load_npz(calib_path+'M_QL_rectmat_lowres.npz')
                         FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='LowRes-SED':
+                    elif ifsmode=='LowRes-KLM':
                         R_for_extract = load_npz(calib_path+'SED_C2_rectmat_lowres.npz')
                         R_matrix = load_npz(calib_path+'SED_QL_rectmat_lowres.npz')
                         FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='LowRes-H2O':
+                    elif ifsmode=='LowRes-KL':
                         R_for_extract = load_npz(calib_path+'H2O_C2_rectmat_lowres.npz')
                         R_matrix = load_npz(calib_path+'H2O_QL_rectmat_lowres.npz')
                         FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='LowRes-PAH':
+                    elif ifsmode=='LowRes-Ls':
                         R_for_extract = load_npz(calib_path+'PAH_C2_rectmat_lowres.npz')
                         R_matrix = load_npz(calib_path+'PAH_QL_rectmat_lowres.npz')
                         FLUX_SHAPE_3D = (56, 103, 110)
@@ -489,6 +486,9 @@ class StartCalib(BasePrimitive):
                         suffix="_cube_flatlens",
                         frame=None,
                         proctab=self.proctab)
+
+                """
+
 
                 if imtype == 'FLATLAMP':
                     hdrm['HISTORY'] = "master detector flat created"

@@ -18,6 +18,8 @@ from scipy.ndimage import median_filter, gaussian_filter, shift
 from skimage.feature import peak_local_max
 from scipy.ndimage import gaussian_filter
 from scipy.spatial import KDTree
+from astropy.modeling.functional_models import Gaussian2D
+from astropy.modeling import fitting
 
 
 
@@ -39,13 +41,20 @@ class ProcessMonochrom(BasePrimitive):
         """
         """
         df2 = df[df['IFSMODE'] == scmode]
+        if len(df2) == 0:
+            return [], []
+
         det_config = np.unique(df2['MCLOCK'])[0]
 
         calibfilepath = self.context.calib_file_path
         package = __name__.split('.')[0]
         calib_path = str(get_resource_path(package, calibfilepath))+'/'
         if det_config =='9.0 MHz': #fast0.6
-            flat = pyfits.getdata(calib_path+self.context.flat_ifs_9mhz)
+            flat = pyfits.getdata(calib_path+self.context.flat_ifs_fast0p6)
+        elif det_config =='5.0 MHz': #fast1.0
+            flat = pyfits.getdata(calib_path+self.context.flat_ifs_fast1)
+        elif det_config =='5.0 MHz': #fast1.0
+            flat = pyfits.getdata(calib_path+self.context.flat_ifs_fast1)
 
         lams = df2['MONOWAVE']
         names = df2['filename'][np.argsort(lams)]
@@ -53,9 +62,12 @@ class ProcessMonochrom(BasePrimitive):
         lams = np.sort(lams)
         ims = []
         for name in names:
-            ims.append(pyfits.getdata(self.redux_dir+'/'+name)/flat)
+            image = pyfits.getdata(self.redux_dir+'/'+name,memmap=False)
+            ims.append(image/flat)
+            #ims.append(pyfits.getdata(self.redux_dir+'/'+name))
+            #ims.append(pyfits.getdata(self.redux_dir+'/'+name)/flat)
         ims = np.array(ims)
-        return ims, lams
+        return ims, lams/1000.0
 
     def monochrom_bksub(self,ims,method='mean'):
         if method=='mean':
@@ -92,9 +104,8 @@ class ProcessMonochrom(BasePrimitive):
                     lmin=3.44805
                     lmax=4.09241
                     length=878
-                ycent,ymin,ymax=get_spot_yrange_medres(lams_u[ii],y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
+                ycent,ymin,ymax=self.get_spot_yrange_medres(lams_u[ii],y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
 
-                print(ycent,ymin,ymax,lams_u[ii])
                 dy = (ymax-ymin)*0.5
                 im_cal = im_cal[int(ymin):int(ymax)]
             data_smooth = gaussian_filter(im_cal, sigma=sigma)
@@ -113,11 +124,7 @@ class ProcessMonochrom(BasePrimitive):
                     yc,xc = coords_yx[i]
                     ydiff = coords_yx[:,0]-yc
                     testrow = ydiff[np.where(np.abs(ydiff) < 15)]
-                    #print(len(testrow))
                     if len(testrow) < 80:
-                        #plt.scatter(coords_yx[:,1],ydiff)
-                        #plt.scatter(xc,0)
-                        #plt.show()
                         todel.append(i)
                 coords_yx = np.delete(coords_yx,todel,axis=0)
                 #"""
@@ -318,13 +325,10 @@ class ProcessMonochrom(BasePrimitive):
         #define list of spot track indices that are duplicates
         rem = []
         for i in range(len(spots_d)):
-            print('----------------------------------')
-            print('doing '+str(i)+' of '+str(len(spots_d)))
             keys = list(spots_d[i].keys())
             #grab spot's first x,y position and first wavelength
             x0,y0 = spots_d[i][keys[0]][0],spots_d[i][keys[0]][1]
             lam0 = spots_d[i][keys[0]][3]
-            print(x0,y0,lam0)
             #get average wavelength and calculate expected x,y position
             #at that wavelength
 
@@ -346,8 +350,7 @@ class ProcessMonochrom(BasePrimitive):
                     length=878
                 xi = x0
                 lam = 0.5*(lmin+lmax)
-                yi,ymin,ymax=get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
-                print(lam,yi)
+                yi,ymin,ymax=self.get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
             #if my track isn't already flagged as a duplicate
             if i not in rem:
                 merged = spots_d[i]
@@ -366,7 +369,7 @@ class ProcessMonochrom(BasePrimitive):
 
                             if medres==True:
                                 xj = x0
-                                yj,ymin,ymax=get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
+                                yj,ymin,ymax=self.get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
                             #get the distance between the other spot's central wavelength
                             #position and the original one
                             dist = np.sqrt((xi-xj)**2+(yi-yj)**2)
@@ -376,11 +379,6 @@ class ProcessMonochrom(BasePrimitive):
                                 #append j index to list to be removed
                                 rem.append(j)
                                 merged = merged | spots_d[j]
-                #if you accidentally merged tracks and ended up with more positions
-                #than the number of wavelengths, then throw an error
-                if len(merged) > len(lams_u):
-                    print('uh oh bad merging!!!')
-                    stop
                 #append merged track to dictionary containing unique lenslet tracks
                 spots_u[uc] = merged
                 uc += 1
@@ -462,14 +460,10 @@ class ProcessMonochrom(BasePrimitive):
                 diff = kd1.data[neighbors] - kd0.data
                 if len(diff[0])<3:
                     todel.append(i)
-                #print(diff)
-                #stop
                 diff2 = kd0.data - kd1.data
                 xdiff = np.abs(diff2[:,0])
                 ydiff = np.abs(diff2[:,1])
 
-                #####add this test (looking for being in line with other spots)
-                #### to the initial spot finding step!!
                 testrow = diff2[np.where(np.abs(ydiff) < 15)]
                 if len(testrow) < 80:
                     todel.append(i)
@@ -478,14 +472,8 @@ class ProcessMonochrom(BasePrimitive):
                 if np.sort(nearestdiffs)[1] > 2:
                     todel.append(i)
 
-
-                #####LEFT OFF HERE
                 if len(spot_tracks[i]) < 0.3*mlen:
                     todel.append(i)
-                #print(kd0.data)
-                #plt.scatter(diff2[:,0],diff2[:,1])
-                #plt.show()
-                #stop
 
         avgs_new = np.delete(avgs,todel,axis=0)
 
@@ -527,7 +515,7 @@ class ProcessMonochrom(BasePrimitive):
                     length=878
                 lam = 0.5*(lmin+lmax)
                 xj = x0
-                yj,ymin,ymax=get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
+                yj,ymin,ymax=self.get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
             avgs.append([xj,yj])
         avgs = np.array(avgs)
 
@@ -596,15 +584,14 @@ class ProcessMonochrom(BasePrimitive):
         ddone=1
         #while ((len(done_searching_around) < len(avgs)) and (ddone > 0)):
         while len(done_searching_around) < len(to_search_around):
-            print(ddone)
             #while a search is needed, go through entries in list
             #of lenslets that have yet to be searched
             for search_lens in to_search_around:
-                print("done searching", len(done_searching_around))#, done_searching_around)
-                print("avgs", len(avgs))#, avgs)
-                print("tosearch", len(to_search_around))#, to_search_around)
+                #print("done searching", len(done_searching_around))#, done_searching_around)
+                #print("avgs", len(avgs))#, avgs)
+                #print("tosearch", len(to_search_around))#, to_search_around)
                 #confirm that this lenslet is not marked as done
-                print("search lens pos:",search_lens,avgs[search_lens:search_lens+1])
+                #print("search lens pos:",search_lens,avgs[search_lens:search_lens+1])
                 if search_lens not in done_searching_around:
                     #create KDTree from single lenslet to be searched
                     kd0 = KDTree(avgs[search_lens:search_lens+1])
@@ -684,15 +671,15 @@ class ProcessMonochrom(BasePrimitive):
                                 to_search_around.append(neighbors[0][ii])
                                 positions.append([xind_new,yind_new])
                                 #done.append(neighbors[0][ii])
-                            elif (abs(entry[0]) < 15) and (abs(entry[1]) < 15):
-                                print('found search lenslet - do nothing!')
                             else:
-                                print('uh oh didnt find a neighbor!')
-                                #stop
+                                continue
+                            #elif (abs(entry[0]) < 15) and (abs(entry[1]) < 15):
+                            #    print('')
+                            #else:
+                            #    print('')
                     done0=len(done_searching_around)
                     done_searching_around.append(search_lens)
                     ddone = len(done_searching_around)-done0
-                    print(ddone)
 
 
         minx = np.nanmin(posns_idx[:,:,0])
@@ -731,293 +718,147 @@ class ProcessMonochrom(BasePrimitive):
         return final_posns
 
 
-###########################################################################################
+    def make_posarr(self,ims_cal,final_posns,spot_tracks_u,medres=False,show_plots=False,cropsize=10):
+        maxy = final_posns.shape[0]
+        maxx = final_posns.shape[1]
+        if medres==False:
+            sizex = 112
+            sizey = 112
+            diffx = sizex-maxx
+            diffy = sizey-maxy
+        if medres==True:
+            sizex=18
+            sizey=17
+            diffx=0
+            diffy=0
+
+        posarr = np.zeros([len(ims_cal),sizey,sizex,7])
+        posarr[:,:,:,:] = np.nan
+        for i in range(maxy):
+            for j in range(maxx):
+                xpos,ypos,lind = final_posns[i,j]
+                if np.isnan(xpos)==False:
+                    tofill = list(spot_tracks_u[lind].keys())
+                    for k in tofill:
+                        x,y,intens = spot_tracks_u[lind][k][:3]
+                        xs = np.max([0,int(x-cropsize/2)])
+                        xe = np.min([int(x+cropsize/2),len(ims_cal[k])])
+                        ys = np.max([0,int(y-cropsize/2)])
+                        ye = np.min([int(y+cropsize/2),len(ims_cal[k])])
+                        posarr[k,i+diffy,j+diffx] = [x,xs,xe,y,ys,ye,intens]
+
+        if show_plots==True:
+            f = plt.figure(clear=True)
+            if medres==False:
+                for i in range(20,40):
+                    for j in range(40,60):
+                        plt.scatter(posarr[:,i,j,0],posarr[:,i,j,3],c=range(len(posarr)))
+                plt.show()
+            if medres==True:
+                for i in range(17):
+                    for j in range(18):
+                        plt.scatter(posarr[:,i,j,0],posarr[:,i,j,3],c=range(len(posarr)))
+                plt.show()
+        return posarr
 
 
+    def fit_gauss_spots(self,calims,posarr,show_plots=False):
+        fitarr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],6])
+        fitarr[:,:,:,:] = np.nan
+        modims = []
+        for ll in range(len(calims)):
+            modim = np.zeros(calims[ll].shape)
+            for lensx in range(posarr.shape[2]):
+                        for lensy in range(posarr.shape[1]):
+                            xc,xs,xe,yc,ys,ye,intens = posarr[ll,lensy,lensx]
+                            if True not in np.isnan([xs,xe,ys,ye]):
+                                xc = int(xc)
+                                yc = int(yc)
+                                xs = int(xs)
+                                xe = int(xe)
+                                ys = int(ys)
+                                ye = int(ye)
+                                cropped = np.zeros(calims[ll,ys:ye,xs:xe].shape)
+                                cropped[:] = calims[ll,ys:ye,xs:xe]
+
+                                initial_guess = Gaussian2D(amplitude=intens, x_mean=(xe-xs)*0.5, y_mean=(ye-ys)*0.5,
+                                          x_stddev=1., y_stddev=1.)
+
+                                fitter = fitting.LevMarLSQFitter()
+                                y, x = np.mgrid[:(ye-ys), :(xe-xs)]
+                                fitted_model = fitter(initial_guess, x, y, cropped)
+
+                                modim[ys:ye,xs:xe]+=fitted_model(x,y)
+                                fitarr[ll,lensy,lensx] = [fitted_model.amplitude.value,
+                                                          fitted_model.x_mean.value+xs,
+                                                          fitted_model.y_mean.value+ys,
+                                                          fitted_model.x_stddev.value,
+                                                          fitted_model.y_stddev.value,
+                                                          fitted_model.theta.value]
+                                if show_plots==True:
+                                    print("--- Fit Results ---")
+                                    print(f"Amplitude: {fitted_model.amplitude.value:.2f}")
+                                    print(f"X Center:  {fitted_model.x_mean.value:.2f}")
+                                    print(f"Y Center:  {fitted_model.y_mean.value:.2f}")
+                                    print(f"X Sigma:   {fitted_model.x_stddev.value:.2f}")
+                                    print(f"Y Sigma:   {fitted_model.y_stddev.value:.2f}")
+                                    print(f"Theta:     {fitted_model.theta.value:.2f} rad")
+
+                                    plt.figure(figsize=(12, 4),clear=True)
+                                    plt.subplot(1, 3, 1)
+                                    plt.title("Original Noisy Data")
+                                    plt.imshow(cropped, origin='lower', cmap='viridis')
+                                    plt.colorbar()
+
+                                    plt.subplot(1, 3, 2)
+                                    plt.title("Fitted Model Image")
+                                    plt.imshow(fitted_model(x, y), origin='lower', cmap='viridis')
+                                    plt.colorbar()
+
+                                    plt.subplot(1, 3, 3)
+                                    plt.title("Residuals (Data - Model)")
+                                    plt.imshow(cropped - fitted_model(x, y), origin='lower', cmap='bwr')
+                                    plt.colorbar()
+                                    plt.tight_layout()
+                                    plt.show()
+                                    stop
+            modims.append(modim)
+
+        resims = calims-modims
+        return fitarr,modims,resims
 
 
-    def get_init_centroid_region(self,lensx,lensy,xstart,ystart,
-                                 spaxsize=19, subf=8):
-        """
-        Function to get initial cropped image around expected
-        lenslet PSF region.
-        """
-
-        x = xstart + spaxsize*lensx
-        y = ystart + spaxsize*lensy
-        xs = np.max([0,x-subf])
-        ys = np.max([0,y-subf])
-        xe = np.min([x+subf,2048])
-        ye = np.min([y+subf,2048])
-        return xs,ys,xe,ye
-
-
-    def get_medres_init_pos(self):
-        shifts = np.zeros([18,17,2]) #x spaxel, y spaxel, x and y shifts
-
-        dx = 1.5e-3/18e-6 ##x shift between supercols (pix)
-        dy = 18.0 #y shift between spaxels in each supercol (pix)
-        dy0 = 17*18 + 3 #y shift between starting spaxel in each supercol (pix)
-        #dy0 = 6.0 #y shift between starting spaxel in each supercol (pix)
-
-        scol1 = [1,17,4,13,7,10] ##spaxel cols in each supercol, indexed from 1
-        scol2 = [18,3,15,6,12,9]
-        scol3 = [2,16,5,14,8,11]
+    def interp_gauss_spots(self,lams_in,lams_des,fitarr,show_plots=False,method='poly'):
+        interp_arr = np.zeros([len(lams_des),fitarr.shape[1],fitarr.shape[2],fitarr.shape[3]])
+        interp_arr[:,:,:,:] = np.nan
+        for lensy in range(fitarr.shape[1]):
+            for lensx in range(fitarr.shape[2]):
+                gausspars = fitarr[:,lensy,lensx]#A,xm,ym,xstd,ystd,theta
+                if False in np.isnan(gausspars):
+                    for i in range(len(gausspars[0])):
+                        #fint = LinearNDInterpolator(lams_in,gausspars[:,i])
+                        tofit = gausspars[:,i]
+                        lamsfit = lams_in[np.where(np.isnan(tofit)==False)]
+                        tofit = tofit[np.where(np.isnan(tofit)==False)]
+                        if method=='poly':
+                            res=np.polyfit(lamsfit,tofit,3)
+                            fint = np.polynomial.polynomial.Polynomial(res[::-1])
+                        if method=='interp':
+                            fint = interp1d(lamsfit,tofit)
+                        gausspars_new = fint(lams_des)
+                        if show_plots==True:
+                            f = plt.figure(clear=True)
+                            plt.scatter(lams_des,gausspars_new)
+                            plt.scatter(lams_in,gausspars[:,i])
+                            plt.plot(lams_des,gausspars_new)
+                            plt.show()
+                        interp_arr[:,lensy,lensx,i] = gausspars_new
 
 
-        scols = [scol1,scol2,scol3]
-        for i in range(len(scols)):
-            for j in range(len(scols[i])):
-                sc = scols[i][j]
-                shifts[sc-1,:,0] = i*dx ###big shift between each supercolumn (there are 3)
-                shifts[sc-1,:,1] = j*dy0 + i*dy/3.0  ###shift each column so that there's an extra pixel between them (there are 6 in each supercolumn)
-                for ii in range(len(shifts[sc-1])):
-                    shifts[sc-1,ii,1] += dy*ii
-        shifts[:,:,0]+=10
-        shifts[:,:,1]+=10
-
-        return shifts
+        return interp_arr
 
 
-    def get_init_centroid_region_medres(self,lensx,lensy,shifts,subf=8):
-        """
-        Function to get initial cropped image around expected
-        lenslet PSF region.
-        """
-
-        x,y = shifts[lensx,lensy]
-
-        xs = np.max([0,int(x-subf)])
-        ys = np.max([0,int(y-subf)])
-        xe = np.min([int(x+subf),2048])
-        ye = np.min([int(y+subf),2048])
-        return xs,ys,xe,ye
-
-    def crop_image(self,image,xs,ys,xe,ye):
-        """
-        Function to crop a 2D image in x and y to desired coords.
-        """
-        return image[ys:ye,xs:xe]
-
-    def pixel_centroid(self,image):
-        """
-        Function to centroid based on brightest pixel in image.
-        """
-        peak = np.where(image==np.max(image))
-        x,y = peak[1][0],peak[0][0]
-        return x,y
-
-    def replace_edge_centroids(self,xc,yc):
-        """
-        Function to replace centroids that are on edge of frame
-        with nan values. Helps with figuring out whether lenslet
-        PSFs have fallen off (or started off) the detector.
-        """
-
-        if 2048-xc < 2:
-            return np.nan,np.nan
-        if 2048-yc < 2:
-            return np.nan,np.nan
-        else:
-            return xc,yc
-
-    def get_init_centers_lowres(self,names,lams):
-        """
-        Function to get the starting point lenslet PSF position
-        for the first wavelength in the set of cal-unit images.
-        This just centroids based on brightest pixels, and then
-        replaces edge PSF centroids with nans.
-        """
-        xstart = 0
-        ystart = 0
-        cents = np.zeros([108,108,2])
-        calim = fits.getdata(names[0])
-        for lensx in range(108):
-            for lensy in range(108):
-                xs,ys,xe,ye = self.get_init_centroid_region(lensx,lensy,xstart=xstart,ystart=ystart)
-                calcrop = self.crop_image(calim,xs,ys,xe,ye)
-                cx,cy = self.pixel_centroid(calcrop)
-                cx,cy = self.replace_edge_centroids(cx,cy)
-                cents[lensy,lensx] = [cy+ys,cx+xs]
-        return cents
-
-    def get_init_centers_medres(self,names,lams):
-        """
-        Function to get the starting point lenslet PSF position
-        for the first wavelength in the set of cal-unit images.
-        This just centroids based on brightest pixels, and then
-        replaces edge PSF centroids with nans.
-        """
-        xstart = 0
-        ystart = 0
-        cents = np.zeros([17,18,2])
-        calim = fits.getdata(names[0])
-        for lensx in range(18):
-            for lensy in range(17):
-                shifts = self.get_medres_init_pos()
-                xs,ys,xe,ye = self.get_init_centroid_region_medres(lensx,lensy,shifts)
-                calcrop = self.crop_image(calim,xs,ys,xe,ye)
-                #plt.imshow(calcrop)
-                #plt.title(str(shifts[lensx,lensy])+' '+str(xs)+' '+str(xe)+' '+str(ys)+' '+str(ye))
-                #plt.savefig('test.png')
-                #stop
-                cx,cy = self.pixel_centroid(calcrop)
-                cx,cy = self.replace_edge_centroids(cx,cy)
-                cents[lensy,lensx] = [cy+ys,cx+xs]
-        return cents
-
-    def gen_linear_trace_medres(self,lls,lmin,lmax,length=1900,x0=0,y0=0):
-        """
-        Returns rough coordinates of linear trace for given set of
-        wavelengths and with a given starting point
-        """
-        dlam = lmax-lmin
-        xoffs = np.zeros(lls.shape)
-        yoffs = (lls-lmin)/dlam*length
-        return xoffs+x0,yoffs+y0
-
-    def gen_linear_trace_lowres(self,lls,lmin,lmax,tilt=18,length=54,x0=0,y0=0):
-        """
-        Returns rough coordinates of linear trace for given set of
-        wavelengths and with a given starting point
-        """
-        dlam = lmax-lmin
-        xoffs = (lls-lmin)/dlam*length*np.sin(np.radians(tilt))
-        yoffs = (lls-lmin)/dlam*length*np.cos(np.radians(tilt))
-        return xoffs+x0,yoffs+y0
-
-    def ingest_calims_cube(self,names):
-        """
-        Ingests cube of cal unit images according to list of wavelengths.
-        Need to replace this with something that actually follows file naming
-        scheme at Keck!
-        """
-        calims = np.array([fits.getdata(name,memmap=False) for name in names])
-        print(calims.shape)
-        #calims = np.array([fits.getdata(name)[0] for name in names])
-        return calims
-
-    def get_trace_centroid_region(self,xx,yy,imsize=2048,subf=8):
-        """
-        Returns starting and ending coordinates of trace.
-        """
-        xs = np.max([int(np.round(xx-subf)),0])
-        ys = np.max([int(np.round(yy-subf)),0])
-        xe = np.min([int(np.round(xx+subf)),2048])
-        ye = np.min([int(np.round(yy+subf)),2048])
-        return xs,ys,xe,ye
-
-    def get_pixcoords(self,image):
-        """
-        Returns pixel coordinates of cropped image. These will get used
-        to fill specific indices in a sparse matrix array.
-        """
-        xys = np.array([[[y,x] for x in range(len(image[0]))] for y in range(len(image))])
-        return xys
-
-    def check_allnans_centroid(self,image):
-        """
-        check for nans in images to flag bad centroid values.
-        """
-        imsize = len(image)
-        if len(np.where(np.isnan(image)==False)[0])==0:
-            cx,cy = np.nan,np.nan
-        else:
-            peak = np.where(image==np.nanmax(image))
-            cx,cy = peak[1][0],peak[0][0]
-        if (cx == imsize or cy == imsize):
-            cx,cy = np.nan,np.nan
-        return cx,cy
-
-    def get_pixel_trace_medres(self,lams,calcube,lensx,lensy,x0,y0,subf=10):
-        """
-        Function that returns wavelength-dependent centroid values for cube of
-        cal unit images taken at a range of wavelengths, for one lenslet.
-        """
-        cents = []
-        for ll in range(len(lams)):
-            xx,yy = self.gen_linear_trace_medres(lams[ll],self.lmin,self.lmax,x0=x0,y0=y0)
-            xs,ys,xe,ye = self.get_trace_centroid_region(xx,yy)
-            calcrop = self.crop_image(calcube[ll],xs,ys,xe,ye).copy()
-            xys = self.get_pixcoords(calcrop)
-            if np.prod(xys.shape)!=0:
-                dists = self.get_dists(xys,xx,yy,xs,ys)
-                calcrop[np.where(dists > subf)] = np.nan
-                cx,cy = self.check_allnans_centroid(calcrop)
-                centx,centy = cx+xs,cy+ys
-            else:
-                centx,centy = np.nan,np.nan
-            cents.append([centx,centy])
-        return np.array(cents)
-
-    def get_pixel_trace(self,lams,calcube,lensx,lensy,x0,y0,subf=10):
-        """
-        Function that returns wavelength-dependent centroid values for cube of
-        cal unit images taken at a range of wavelengths, for one lenslet.
-        """
-        cents = []
-        for ll in range(len(lams)):
-            xx,yy = self.gen_linear_trace_lowres(lams[ll],self.lmin,self.lmax,x0=x0,y0=y0)
-            xs,ys,xe,ye = self.get_trace_centroid_region(xx,yy)
-            calcrop = self.crop_image(calcube[ll],xs,ys,xe,ye).copy()
-            xys = self.get_pixcoords(calcrop)
-            if np.prod(xys.shape)!=0:
-                dists = self.get_dists(xys,xx,yy,xs,ys)
-                calcrop[np.where(dists > subf)] = np.nan
-                cx,cy = self.check_allnans_centroid(calcrop)
-                centx,centy = cx+xs,cy+ys
-            else:
-                centx,centy = np.nan,np.nan
-            cents.append([centx,centy])
-        return np.array(cents)
-
-    def get_dists(self,xys,xx,yy,xs,ys):
-        """
-        Function to calculate distances between xy coordinates
-        """
-        diffs = np.array(xys - np.array([yy-ys,xx-xs]))
-        dists = np.sqrt(diffs[:,:,0]**2 + diffs[:,:,1]**2)
-        return dists
-
-    def get_calunit_centroids_medres(self,names,lams,calims,init_cents):
-        """
-        Function that returns all 108 x 108 pixel traces measured from cube of
-        cal-unit images.
-        """
-        centsarr = np.empty([len(names),17,18,2])
-        for lensx in range(18):
-            for lensy in range(17):
-                x0,y0 = init_cents[lensy,lensx]
-                pixtrace = self.get_pixel_trace_medres(lams,calims,lensx,lensy,x0,y0)
-                centsarr[:,lensy,lensx] = pixtrace
-                #plt.imshow(np.sum(calims,axis=0))
-                #plt.scatter(centsarr[:,lensy,lensx,0],centsarr[:,lensy,lensx,1])
-                #plt.savefig('test.png')
-                #stop
-        return centsarr
-
-    def get_calunit_centroids(self,names,lams,calims,init_cents):
-        """
-        Function that returns all 108 x 108 pixel traces measured from cube of
-        cal-unit images.
-        """
-        centsarr = np.empty([len(names),108,108,2])
-        for lensx in range(108):
-            for lensy in range(108):
-                x0,y0 = init_cents[lensy,lensx]
-                pixtrace = self.get_pixel_trace(lams,calims,lensx,lensy,x0,y0)
-                centsarr[:,lensy,lensx] = pixtrace
-        return centsarr
-
-    def parse_centers(self,centsarr,ll,lensy,lensx):
-        """
-        Function to pull lenslet PSF centers from 3D array.
-        """
-        centx,centy = centsarr[ll,lensy,lensx]
-        return centx,centy
-
-
-    def gen_sparse_inds(self,xs,ys,xe,ye):
+    def gen_sparse_inds(self,xs,ys,xe,ye,ypix=2048,xpix=2048):
         """
         Function to take 2d x,y pixel coordinates and turn them into flattened
         coordinates for sparse matrix construction.
@@ -1026,103 +867,108 @@ class ProcessMonochrom(BasePrimitive):
         indsx = np.array([xval for xval in range(xs,xe) for yval in range(ys,ye)])
         indsy = np.array([yval for xval in range(xs,xe) for yval in range(ys,ye)])
 
-        flatinds = np.ravel_multi_index((indsy,indsx),(2048,2048))
+        flatinds = np.ravel_multi_index((indsy,indsx),(ypix,xpix))
         return flatinds
 
-    def crop_sparse_vals(self,image,xs,xe,ys,ye,cut=0.05):
+
+    def crop_interpd_sparse_vals(self,gauss_pars,cut=0.05,method='optimal'):
+        """
+        Function to take gaussian spots and turn them into weights for a sparse
+        extraction matrix.
+        """
+
+        if True not in np.isnan(gauss_pars):
+            amplitude=gauss_pars[0]
+            x_mean=gauss_pars[1]
+            y_mean=gauss_pars[2]
+            x_stddev=gauss_pars[3]
+            y_stddev=gauss_pars[4]
+            theta=gauss_pars[5]
+
+            fitted_model = Gaussian2D(amplitude=gauss_pars[0],
+                             x_mean=gauss_pars[1],
+                             y_mean=gauss_pars[2],
+                             x_stddev=gauss_pars[3],
+                             y_stddev=gauss_pars[4],
+                             theta=gauss_pars[5])
+
+            ys = int(y_mean-5*y_stddev)
+            ye = int(y_mean+5*y_stddev)
+            xs = int(x_mean-5*x_stddev)
+            xe = int(x_mean+5*x_stddev)
+
+            if ys<0: ys=0
+            if ye>2047:ye=2047
+            if xs<0: xs=0
+            if xe>2047: xe=2047
+
+            if xe < 0:
+                return [], []
+            if ye < 0:
+                return [], []
+            if xs > 2047:
+                return [], []
+            if ys > 2047:
+                return [], []
+            if ye-ys <= 0:
+                return [], []
+            if xe-xs <= 0:
+                return [], []
+
+            y, x = np.mgrid[ys:ye,xs:xe]
+            modspot = fitted_model(x,y)
+
+            modspot[np.where(modspot < cut*np.max(modspot))]=0
+            modspot/=np.sum(modspot)
+
+            vals = np.array([modspot[yind,xind] for xind in range(0,xe-xs) for yind in range(0,ye-ys)])
+            if method=='optimal':
+                vals = vals
+
+            if method=='aperture':
+                vals[np.where(vals!=0)] = 1.0
+            flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
+        return flatinds,vals
+
+    def crop_sparse_vals(self,image,xs,xe,ys,ye,cut=0.05,method='optimal'):
         """
         Function to crop lenslet PSFs down and then only select pixels above
-        a certain flux threshold (currently set to 5% of max by default).
+        a certain flux threshold
         """
         cropped = image[ys:ye,xs:xe]
+
         cropped[np.where(cropped < cut*np.max(cropped))]=0
         cropped/=np.sum(cropped)
+
         vals = np.array([cropped[yind,xind] for xind in range(0,xe-xs) for yind in range(0,ye-ys)])
+        if method=='average':
+            vals = vals
+
+        if method=='sum':
+            vals[np.where(vals!=0)]=1.0
         return vals
 
-    def gen_rectmat_inds_medres(self,calims,centsarr,apsize=8):
-
-        """
-        Function to generate row and column indices for sparse matrix
-        for all 108 x 108 lenslets and wavelengths.
-        """
-
-        matrowinds = []
-        matcolinds = []
-        matvals = []
-        count=0
-
-        for ll in range(len(calims)):
-            for lensx in range(18):
-                for lensy in range(17):
-                    centx,centy = self.parse_centers(centsarr,ll,lensy,lensx)
-
-                    if np.isnan(centx)==False:
-                        centx = int(centx)
-                        centy = int(centy)
-                        xs,ys,xe,ye = self.get_trace_centroid_region(centx,centy,subf=apsize//2)
-                        flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
-                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye)
-                        for i in range(len(vals)):
-                            matvals.append(vals[i])
-                            matcolinds.append(flatinds[i])
-                            matrowinds.append(count)
-                    count+=1
-        return matrowinds, matcolinds, matvals
-
-    def gen_rectmat_inds(self,calims,centsarr,apsize=8):
-
-        """
-        Function to generate row and column indices for sparse matrix
-        for all 108 x 108 lenslets and wavelengths.
-        """
-
-        matrowinds = []
-        matcolinds = []
-        matvals = []
-        count=0
-
-        for ll in range(len(calims)):
-            for lensx in range(108):
-                for lensy in range(108):
-                    centx,centy = self.parse_centers(centsarr,ll,lensy,lensx)
-
-                    if np.isnan(centx)==False:
-                        centx = int(centx)
-                        centy = int(centy)
-                        xs,ys,xe,ye = self.get_trace_centroid_region(centx,centy,subf=apsize//2)
-                        flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
-                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye)
-                        for i in range(len(vals)):
-                            matvals.append(vals[i])
-                            matcolinds.append(flatinds[i])
-                            matrowinds.append(count)
-                    count+=1
-        return matrowinds, matcolinds, matvals
-
-
-    def gen_QL_rectmat_medres(self,calims,centsarr,apsize=8):
+    def gen_QL_rectmat(self,calims,posarr,cut=0.05,method='optimal',interp=False):
         """
         Function to generate rectmat from cube of cal unit images.
         """
 
-        matrowinds,matcolinds,matvals = self.gen_rectmat_inds_medres(calims,centsarr,apsize=apsize)
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(1900*17*18,2048*2048))
+        matrowinds,matcolinds,matvals = self.gen_rectmat_inds(calims,posarr,cut=cut,method=method)
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(posarr.shape[:3]),np.prod(calims[0].shape)))
         return rmat
 
-
-    def gen_QL_rectmat(self,calims,centsarr,apsize=8):
+    def gen_QL_rectmat_interpd(self,calims,interp_arr,cut=0.05,method='optimal',interp=False):
         """
         Function to generate rectmat from cube of cal unit images.
         """
 
-        matrowinds,matcolinds,matvals = self.gen_rectmat_inds(calims,centsarr,apsize=apsize)
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(54*108*108,2048*2048))
+        matrowinds,matcolinds,matvals = self.gen_rectmat_inds_interpd(interp_arr,cut=cut,method=method)
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(interp_arr.shape[:3]),np.prod(calims[0].shape)))
         return rmat
 
 
 
-    def gen_c2_rectmat_inds_medres(self,calims,centsarr,apsize=8,cut=0.001):
+    def gen_c2_rectmat_inds(self,calims,posarr,cut=0.05):
 
         """
         Function to generate row and column indices for sparse matrix
@@ -1132,86 +978,224 @@ class ProcessMonochrom(BasePrimitive):
         matrowinds = []
         matcolinds = []
         matvals = []
-        count=0
-
         for ll in range(len(calims)):
-            for lensx in range(18):
-                for lensy in range(17):
-                    #print('lenslet:',lensy,lensx)
-                    centx,centy = self.parse_centers(centsarr,ll,lensy,lensx)
-
-                    if np.isnan(centx)==False:
-                        centx = int(centx)
-                        centy = int(centy)
-                        xs,ys,xe,ye = self.get_trace_centroid_region(centx,centy,subf=apsize//2)
+            for lensx in range(posarr.shape[2]):
+                for lensy in range(posarr.shape[1]):
+                    xc,xs,xe,yc,ys,ye,intens = posarr[ll,lensy,lensx]
+                    if np.isnan(xc)==False:
+                        xc = int(xc)
+                        yc = int(yc)
+                        xs = int(xs)
+                        xe = int(xe)
+                        ys = int(ys)
+                        ye = int(ye)
                         flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
-                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye,cut=cut)
+                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye,cut=cut,method='optimal')
                         for i in range(len(vals)):
-                            if vals[i]>cut:
+                            if vals[i] > 0:
                                 matvals.append(vals[i])
                                 matrowinds.append(flatinds[i])
-                                matcolinds.append(count)
-                    count+=1
+                                matcolinds.append(lensx+lensy*posarr.shape[2]+ll*posarr.shape[1]*posarr.shape[2])
         return matrowinds, matcolinds, matvals
 
-    def gen_c2_rectmat_inds(self,calims,centsarr,apsize=8,cut=0.001):
+    def gen_c2_rectmat_inds_interpd(self,interp_arr,cut=0.05):
 
         """
         Function to generate row and column indices for sparse matrix
-        for all 108 x 108 lenslets and wavelengths.
         """
 
         matrowinds = []
         matcolinds = []
         matvals = []
-        count=0
 
-        for ll in range(len(calims)):
-            for lensx in range(108):
-                for lensy in range(108):
-                    #print('lenslet:',lensy,lensx)
-                    centx,centy = self.parse_centers(centsarr,ll,lensy,lensx)
-
-                    if np.isnan(centx)==False:
-                        centx = int(centx)
-                        centy = int(centy)
-                        xs,ys,xe,ye = self.get_trace_centroid_region(centx,centy,subf=apsize//2)
-                        flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
-                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye,cut=cut)
+        for ll in range(len(interp_arr)):
+            for lensx in range(interp_arr.shape[2]):
+                for lensy in range(interp_arr.shape[1]):
+                    if True not in np.isnan(interp_arr[ll,lensy,lensx]):
+                        flatinds,vals = self.crop_interpd_sparse_vals(interp_arr[ll,lensy,lensx],cut=cut,method='optimal')
                         for i in range(len(vals)):
-                            if vals[i]>cut:
+                            if vals[i] > 0:
                                 matvals.append(vals[i])
                                 matrowinds.append(flatinds[i])
-                                matcolinds.append(count)
-                    count+=1
+                                matcolinds.append(lensx+lensy*interp_arr.shape[2]+ll*interp_arr.shape[1]*interp_arr.shape[2])
         return matrowinds, matcolinds, matvals
 
 
 
-
-    def gen_C2_rectmat_medres(self,calims,centsarr,apsize=8):
+    def gen_C2_rectmat(self,calims,posarr,cut=0.05):
         """
         Function to generate rectmat from cube of cal unit images.
         """
 
-        matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds_medres(calims,centsarr,apsize=apsize)
-        print(len(matrowinds),len(matcolinds),len(matvals))
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(2048*2048,len(calims)*17*18))
+        #print('doing c2 rectmat lowres')
+        matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds(calims,posarr,cut=cut)
+        #print(len(matrowinds),len(matcolinds),len(matvals))
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(calims[0].shape),np.prod(posarr.shape[:3])))
         return rmat
 
-    def gen_C2_rectmat(self,calims,centsarr,apsize=8):
+    def gen_C2_rectmat_interpd(self,calims,interp_arr,cut=0.05):
         """
         Function to generate rectmat from cube of cal unit images.
         """
 
-        matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds(calims,centsarr,apsize=apsize)
-        print(len(matrowinds),len(matcolinds),len(matvals))
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(2048*2048,len(calims)*108*108))
+        matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds_interpd(interp_arr,cut=cut)
+        #print(len(matrowinds),len(matcolinds),len(matvals))
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(calims[0].shape),np.prod(interp_arr.shape[:3]),))
         return rmat
+
+    def get_medres_lensarr_xy(self,avgs,show_plots=True):
+        inds0 = np.array(range(len(avgs)),dtype='int')
+        dist=26
+        row1 = avgs[np.where(avgs[:,1] < np.min(avgs[:,1]) + dist)]
+        row1inds = inds0[np.where(avgs[:,1] < np.min(avgs[:,1]) + dist)]
+        rem = np.delete(avgs,np.where(avgs[:,1] < np.min(avgs[:,1]) + dist),axis=0)
+        indsrem = np.delete(inds0,np.where(avgs[:,1] < np.min(avgs[:,1]) + dist),axis=0)
+        row2 = rem[np.where(rem[:,1] < np.min(rem[:,1])+dist)]
+        row2inds = indsrem[np.where(rem[:,1] < np.min(rem[:,1])+dist)]
+        row3 = np.delete(rem,np.where(rem[:,1] < np.min(rem[:,1])+dist),axis=0)
+        row3inds = np.delete(indsrem,np.where(rem[:,1] < np.min(rem[:,1])+dist),axis=0)
+
+        if show_plots==True:
+            f = plt.figure(clear=True)
+            plt.scatter(row1[:,0],row1[:,1],label=str(len(row1)))
+            plt.scatter(row2[:,0],row2[:,1],label=str(len(row2)))
+            plt.scatter(row3[:,0],row3[:,1],label=str(len(row3)))
+            plt.legend()
+            plt.show()
+        #stop
+
+        posns_idx = np.zeros([3,102,3])
+        posns_idx[:,:,:] = np.nan
+        posns_pix = np.zeros([3,102,5])
+        posns_pix[:,:,:] = np.nan
+
+
+        row1sortx = row1[np.argsort(row1[:,0])]
+        row1indsortx = row1inds[np.argsort(row1[:,0])]
+        row2sortx = row2[np.argsort(row2[:,0])]
+        row2indsortx = row2inds[np.argsort(row2[:,0])]
+        row3sortx = row3[np.argsort(row3[:,0])]
+        row3indsortx = row3inds[np.argsort(row3[:,0])]
+
+
+        for yc,rowarr,rowind in [[0,row1sortx,row1indsortx],
+                                 [1,row2sortx,row2indsortx],
+                                 [2,row3sortx,row3indsortx]]:
+            if len(rowarr) == 102:
+                for i in range(len(row1sortx)):
+                    posns_idx[yc,i] = [i,yc,rowind[i]]
+                    posns_pix[yc,i] = [i,yc,rowarr[i,0],rowarr[i,1],rowind[i]]
+            if len(rowarr) < 102:
+
+                minx = np.min(rowarr)
+                maxx = np.max(rowarr)
+                if minx < 50 and maxx < 1998:
+                    print('spots are off on the left!')
+                    for i in range(102-len(rowarr),102):
+                        posns_idx[yc,i] = [i,yc,rowind[i-(102-len(rowarr))]]
+                        posns_pix[yc,i] = [i,yc,
+                                            rowarr[i-(102-len(rowarr)),0],
+                                            rowarr[i-(102-len(rowarr)),1],
+                                            rowind[i-(102-len(rowarr))]]
+                elif minx > 50 and maxx > 1998:
+                    print('spots are off on the right!')
+                    for i in range(len(rowarr)):
+                        posns_idx[yc,i] = [i,yc,rowind[i]]
+                        posns_pix[yc,i] = [i,yc,rowarr[i,0],rowarr[i,1],rowind[i]]
+                else:
+                    print('I cant tell which direction we lost a spot!!')
+
+        if show_plots==True:
+            f = plt.figure(clear=True)
+            plt.imshow(posns_idx[:,:,2])
+            plt.colorbar()
+            plt.show()
+
+            f = plt.figure(clear=True)
+            plt.title('x pixel')
+            plt.imshow(posns_pix[:,:,2])
+            plt.colorbar()
+            plt.show()
+
+            f = plt.figure(clear=True)
+            plt.title('y pixel')
+            plt.imshow(posns_pix[:,:,3])
+            plt.colorbar()
+            plt.show()
+
+
+        ###supercolumn map: [row (bottom=lower), column on slicer]
+        scol_map = [[0, [ 1, 15,  4, 12,  7,  9]],
+                    [1, [17,  2, 14,  5, 11,  8]],
+                    [2, [ 0, 16,  3, 13,  6, 10]]]
+
+        posns_idx_2 = np.zeros([17,18,3])
+        posns_pix_2 = np.zeros([17,18,7])
+
+        for i in range(len(scol_map)):
+            row = scol_map[i][0]
+            cols = scol_map[i][1]
+            for j in range(len(cols)):
+                col = cols[j]
+                posns_pix_2[:,col,:5]=posns_pix[row,j*17:(j+1)*17]
+                posns_pix_2[:,col,5]=np.ones([17])*row
+                posns_pix_2[:,col,6]=np.ones([17])*j
+                posns_idx_2[:,col]=posns_idx[row,j*17:(j+1)*17]
+
+        if show_plots==True:
+            f = plt.figure(clear=True)
+            plt.title('x pixel')
+            plt.imshow(posns_pix_2[:,:,2])
+            plt.colorbar()
+            plt.show()
+
+            f = plt.figure(clear=True)
+            plt.title('y pixel')
+            plt.imshow(posns_pix_2[:,:,3])
+            plt.colorbar()
+            plt.show()
+
+            f = plt.figure(clear=True)
+            plt.title('row number (on det; superrow)')
+            plt.imshow(posns_pix_2[:,:,5])
+            plt.colorbar()
+            plt.show()
+
+            f = plt.figure(clear=True)
+            plt.title('row number (on det; within superrow)')
+            plt.imshow(posns_pix_2[:,:,6])
+            plt.colorbar()
+            plt.show()
+
+        return posns_idx_2
+
+    def get_spot_yrange_medres(self,lam,y0=180,lam0=2.0248,chy=1,lmin=1.95,lmax=2.45,length=1822):
+        """
+        Function to get the expected position of a certain wavelength
+        within a trace.
+
+        Args:
+            lam: wavelength at which to calculate trace position
+            y0: reference y position of trace
+            lam0: reference wavelength for trace position (x0,y0)
+            chy: direction of trace y movement with +ve lambda
+            length: trace length in pixels
+
+        Returns:
+            ymin: trace y lower limit
+            ymax: trace y upper limit
+
+        """
+        dlam = lam-lam0
+        yoff = dlam/(lmax-lmin)*length*chy
+        ypos = y0+yoff
+        ystart = np.max([ypos-250,0])
+        yend = np.min([ypos+250,2048])
+        return ypos,ystart,yend
 
 
     def set_lamlimits(self,scmode):
-        if scmode == "LowRes-SED":
+        if scmode == "LowRes-KLM":
             self.lmin = 2.0
             self.lmax = 5.2
         if scmode == 'LowRes-K':
@@ -1220,6 +1204,7 @@ class ProcessMonochrom(BasePrimitive):
         if scmode == 'MedRes-K':
             self.lmin = 1.95
             self.lmax = 2.45
+            self.mfilt = 'imgK'
         if scmode == 'LowRes-L':
             self.lmin = 2.9
             self.lmax = 4.15
@@ -1232,10 +1217,10 @@ class ProcessMonochrom(BasePrimitive):
         if scmode == 'MedRes-M':
             self.lmin = 4.5
             self.lmax = 5.2
-        if scmode == 'LowRes-H2O':
+        if scmode == 'LowRes-KL':
             self.lmin = 2.0
             self.lmax = 4.0
-        if scmode == 'LowRes-PAH':
+        if scmode == 'LowRes-Ls':
             self.lmin = 3.1
             self.lmax = 3.5
 
@@ -1248,46 +1233,72 @@ class ProcessMonochrom(BasePrimitive):
         df = fits_headers_to_dataframe(self.redux_dir,pattern="*mcalunit.fits")
 
 
-        for scmode in ['LowRes-L']:
+        for scmode in ['LowRes-L','MedRes-K']:
             ims, lams = self.parse_files(df,scmode)
-            ims_cal = self.monochrom_bksub(ims)
-            print(np.nanmean(ims_cal,axis=(1,2)))
-            spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=90.0,sigma=1.2,medres=False)
-            spot_tracks = self.track_sequentially(spots,max_match_distance=3)
-            spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,lmin=2.9,lmax=4.15,medres=False)
-            avgs = self.find_avg_spotpos(spot_tracks_u,2.9,4.15,medres=False,show_plots=False)
-            avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=False)
-            final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
-
-            stop
-
-
-
-
-            stop
-            self.set_lamlimits(scmode)
-            print(names,lams_fs)
-
-            calims = self.ingest_calims_cube(names)
-            if scmode[:3]=='Low':
-                icents = self.get_init_centers_lowres(names, lams_fs)
-                cents = self.get_calunit_centroids(names, lams_fs, calims, icents)
-                QL_rmat = self.gen_QL_rectmat(calims,cents)
-                C2_rmat = self.gen_C2_rectmat(calims,cents)
-            else:
-                icents = self.get_init_centers_medres(names, lams_fs)
-                cents = self.get_calunit_centroids_medres(names, lams_fs, calims, icents)
-                QL_rmat = self.gen_QL_rectmat_medres(calims,cents)
-                C2_rmat = self.gen_C2_rectmat_medres(calims,cents)
-
-            print("started saving the files")
-
-            sparse.save_npz(self.action.args.dirname+'/'+
-                            scmode+'_QL_rectmat.npz',QL_rmat)
-            sparse.save_npz(self.action.args.dirname+'/'+
-                            scmode+'_C2_rectmat.npz',C2_rmat)
+            if len(ims) > 0:
+                self.set_lamlimits(scmode)
+                ims_cal = self.monochrom_bksub(ims)
+                print(ims_cal.shape)
+                if scmode.split('-')[0] == 'LowRes':
+                    self.logger.info("finding spots")
+                    spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=90.0,sigma=1.2,medres=False,mfilt=self.mfilt)
+                    self.logger.info("tracking spots sequentially")
+                    spot_tracks = self.track_sequentially(spots,max_match_distance=3)
+                    self.logger.info("removing duplicates and silos")
+                    spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,
+                                                lmin=self.lmin,lmax=self.lmax,medres=False)
+                    avgs = self.find_avg_spotpos(spot_tracks_u,self.lmin,self.lmax,medres=False,show_plots=False)
+                    avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=False)
+                    self.logger.info("registering lenslets to array")
+                    final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
+                    posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=8)
 
 
-            log_string = CentroidEstimate.__module__
+                if scmode.split('-')[0] == 'MedRes':
+                    spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=70.0,sigma=1.2,medres=True)
+                    spot_tracks = self.track_sequentially(spots, max_match_distance=13)
+                    self.logger.info("removing duplicates and silos")
+                    spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,lmin=self.lmin,lmax=self.lmax,medres=True)
+                    avgs = self.find_avg_spotpos(spot_tracks_u,self.lmin,self.lmax,medres=True,show_plots=False)
+                    avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=True,show_plots=True)
+                    self.logger.info("registering lenslets to array")
+                    final_posns = self.get_medres_lensarr_xy(avgs_new,show_plots=False)
+                    posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=8)
+
+                fitarr,modims,resims = self.fit_gauss_spots(ims_cal,posarr,show_plots=False)
+                interp_arr = self.interp_gauss_spots(lams,lams,fitarr)
+                C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.01)
+                C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.01)
+                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=cut,method='optimal')
+                OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=cut,method='optimal')
+                if self.context.rectmat_xshift!=0 or self.context.rectmat_yshift!=0:
+                    interp_shift_arr = np.zeros(interp_arr.shape)
+                    interp_shift_arr[:,:,:,:] = np.nan
+                    interp_shift_arr[:] = interp_arr[:]
+                    interp_shift_arr[:,:,:,1]+=self.context_rectmat_xshift
+                    interp_shift_arr[:,:,:,2]+=self.context_rectmat_yshift
+
+                    OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01,method='optimal')
+                    C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01)
+
+                sparse.save_npz(self.redux_dir+'/'+
+                                scmode+'_OPT_rectmat.npz',QL_rmat)
+                sparse.save_npz(self.redux_dir+'/'+
+                                scmode+'_OPT_intp_rectmat.npz',QL_rmat_interpd)
+                sparse.save_npz(self.redux_dir+'/'+
+                                scmode+'_OPT_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
+                                '_dy'+str(self.context.rectmat_yshift)+
+                                '.npz',QL_rmat_interpd_shift)
+                sparse.save_npz(self.redux_dir+'/'+
+                                scmode+'_C2_rectmat.npz',C2_rmat)
+                sparse.save_npz(self.redux_dir+'/'+
+                                scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd)
+                sparse.save_npz(self.redux_dir+'/'+
+                                scmode+'_C2_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
+                                '_dy'+str(self.context.rectmat_yshift)+
+                                '.npz',C2_rmat_interpd_shift)
+
+
+            log_string = ProcessMonochrom.__module__
             self.logger.info(log_string)
         return self.action.args
