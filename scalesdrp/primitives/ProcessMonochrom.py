@@ -1261,6 +1261,8 @@ class ProcessMonochrom(BasePrimitive):
             self.lmin = 1.95
             self.lmax = 2.45
             self.mfilt = 'imgK'
+            self.lmin_i = 2.0217
+            self.lmax_i = 2.386071
         if scmode == 'LowRes-L':
             self.lmin = 2.9
             self.lmax = 4.15
@@ -1327,8 +1329,11 @@ class ProcessMonochrom(BasePrimitive):
 
                 if scmode.split('-')[0] == 'LowRes':
                     interp_arr = self.interp_gauss_spots(lams,lams,fitarr)
-                if scmode.split('-')[0] == 'MedRes':
+                if scmode.split('-')[0] == 'MedRes' and scmode!='MedRes-K':
                     lams_interp = np.linspace(self.lmin,self.lmax,1900)
+                    interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
+                if scmode.split('-')[0] == 'MedRes-K':
+                    lams_interp = np.linspace(self.lmin_i,self.lmax_i,1900)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
                 C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.05)
                 C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.05)
