@@ -12,7 +12,7 @@ from scipy.sparse import load_npz
 import scipy.sparse as sp
 from astropy.nddata import CCDData
 import astropy.units as u
-from scipy.optimize import lsq_linear 
+from scipy.optimize import lsq_linear
 import time
 from astropy.nddata import StdDevUncertainty
 from astropy.coordinates import Angle
@@ -28,11 +28,11 @@ pt = Proctab(logger=log)
 class SpectralExtract(BasePrimitive):
     """
 	This primitive will perform spectral cube extraction using Optimal extraction and
-    the chi square extraction method. A linear WCS informations are updated to the 
+    the chi square extraction method. A linear WCS informations are updated to the
     the final output header. More details are listed below.
     Args:
         data_image: The (H,W) input slope image & uncertainty.
-            
+
     Returns:
         A 3D cube with two spatial and one spectral dimension
         A 3D uncertainty cube
@@ -74,6 +74,11 @@ class SpectralExtract(BasePrimitive):
             GAIN = 1.0#self.action.args.ccddata.header['GAIN']
 
             data_image = self.action.args.ccddata.data
+
+            if self.context.subtract_row_median==True:
+                for ii in range(len(data_image)):
+                    data_image[ii]-=np.nanmedian(data_image[ii])
+
             data_vector_d = data_image.flatten().astype(np.float64)
             sigma_image = self.action.args.ccddata.uncertainty
 
@@ -122,7 +127,7 @@ class SpectralExtract(BasePrimitive):
                 input_filename=filename,
                 suffix="_opt_L2",
                 redux_dir=self.config.instrument.output_directory)
-            
+
             if existing_l1_name is not None:
                 l1_path = os.path.join(
                     self.config.instrument.output_directory,
@@ -130,7 +135,7 @@ class SpectralExtract(BasePrimitive):
             else:
                 l1_path = scbasic.get_l2_path_from_raw(
                     input_filename = filename,
-                    output_dir = self.config.instrument.output_directory)    
+                    output_dir = self.config.instrument.output_directory)
 
             if os.path.exists(l1_path):
                 self.logger.info(f"Found existing L2 file: {l1_path}")
@@ -141,7 +146,7 @@ class SpectralExtract(BasePrimitive):
                     self.action.args.ccddata.uncertainty = StdDevUncertainty(l1_uncert)
 
                     self.logger.info(f"Reusing existing L2 for {filename}. Skipping raw processing.")
-                    
+
                     return self.action.args
 
                 except Exception as e:
@@ -156,7 +161,7 @@ class SpectralExtract(BasePrimitive):
                 var_read_vector)
 
             A_guess_vector = A_guess_cube.flatten()
-        
+
             A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
             A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
 
@@ -191,13 +196,13 @@ class SpectralExtract(BasePrimitive):
             wcs, wave_info = scbasic.create_scales_wcs(
                 cube_shape=A_opt.shape,
                 header=self.action.args.ccddata.header)
-            
+
             final_header = scbasic.wcs_header_update(
                 data_cube=A_opt,
                 input_header=self.action.args.ccddata.header,
                 wcs=wcs,
                 wave_info=wave_info)
-            
+
             chi_rslt = CCDData(
                 data=Amp_chi_square,
                 uncertainty=StdDevUncertainty(Amp_chi_square_err),
@@ -221,12 +226,12 @@ class SpectralExtract(BasePrimitive):
             self.logger.info(log_string)
 
 
-            scales_fits_writer(ccddata = chi_rslt, 
+            scales_fits_writer(ccddata = chi_rslt,
                 table=self.action.args.table,
                 output_file=self.action.args.name,
                 output_dir=self.config.instrument.output_directory,
                 suffix="chi_L2")
-            
+
             scbasic.proctab_update(
                 header=self.action.args.ccddata.header,
                 output_dir=self.config.instrument.output_directory,
@@ -235,7 +240,7 @@ class SpectralExtract(BasePrimitive):
                 frame=None,
                 proctab=self.proctab)
 
-            scales_fits_writer(ccddata = opt_rslt, 
+            scales_fits_writer(ccddata = opt_rslt,
                 table=self.action.args.table,
                 output_file=self.action.args.name,
                 output_dir=self.config.instrument.output_directory,

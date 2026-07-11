@@ -993,7 +993,7 @@ class ProcessMonochrom(BasePrimitive):
                         xe = int(xe)
                         ys = int(ys)
                         ye = int(ye)
-                        flatinds = gen_sparse_inds(xs,ys,xe,ye)
+                        flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
                         vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye,cut=cut,method=method)
                         for i in range(len(vals)):
                             if vals[i] > 0:
@@ -1338,13 +1338,13 @@ class ProcessMonochrom(BasePrimitive):
                     C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01)
 
                 sparse.save_npz(self.redux_dir+'/'+
-                                scmode+'_OPT_rectmat.npz',QL_rmat)
+                                scmode+'_OPT_rectmat.npz',OPT_rmat)
                 sparse.save_npz(self.redux_dir+'/'+
-                                scmode+'_OPT_intp_rectmat.npz',QL_rmat_interpd)
+                                scmode+'_OPT_intp_rectmat.npz',OPT_rmat_interpd)
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_OPT_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
                                 '_dy'+str(self.context.rectmat_yshift)+
-                                '.npz',QL_rmat_interpd_shift)
+                                '.npz',OPT_rmat_interpd_shift)
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_C2_rectmat.npz',C2_rmat)
                 sparse.save_npz(self.redux_dir+'/'+
