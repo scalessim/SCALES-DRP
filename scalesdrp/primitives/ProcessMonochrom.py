@@ -1289,7 +1289,9 @@ class ProcessMonochrom(BasePrimitive):
         df = fits_headers_to_dataframe(self.redux_dir,pattern="*mcalunit.fits")
 
 
-        for scmode in ['LowRes-L','MedRes-K']:
+        for scmode in ['LowRes-KLM','LowRes-K','LowRes-L',
+                       'LowRes-M','LowRes-KL','LowRes-Ls',
+                       'MedRes-K','MedRes-L','MedRes-M']:
             ims, lams = self.parse_files(df,scmode)
             if len(ims) > 0:
                 self.set_lamlimits(scmode)
@@ -1336,23 +1338,23 @@ class ProcessMonochrom(BasePrimitive):
 
                     OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01,method='optimal')
                     C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01)
+                    sparse.save_npz(self.redux_dir+'/'+
+                                    scmode+'_C2_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
+                                    '_dy'+str(self.context.rectmat_yshift)+
+                                    '.npz',C2_rmat_interpd_shift)
+                    sparse.save_npz(self.redux_dir+'/'+
+                                    scmode+'_OPT_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
+                                    '_dy'+str(self.context.rectmat_yshift)+
+                                    '.npz',OPT_rmat_interpd_shift)
 
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_OPT_rectmat.npz',OPT_rmat)
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_OPT_intp_rectmat.npz',OPT_rmat_interpd)
                 sparse.save_npz(self.redux_dir+'/'+
-                                scmode+'_OPT_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
-                                '_dy'+str(self.context.rectmat_yshift)+
-                                '.npz',OPT_rmat_interpd_shift)
-                sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_C2_rectmat.npz',C2_rmat)
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd)
-                sparse.save_npz(self.redux_dir+'/'+
-                                scmode+'_C2_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
-                                '_dy'+str(self.context.rectmat_yshift)+
-                                '.npz',C2_rmat_interpd_shift)
 
 
             log_string = ProcessMonochrom.__module__
