@@ -1333,8 +1333,8 @@ class ProcessMonochrom(BasePrimitive):
                     interp_shift_arr = np.zeros(interp_arr.shape)
                     interp_shift_arr[:,:,:,:] = np.nan
                     interp_shift_arr[:] = interp_arr[:]
-                    interp_shift_arr[:,:,:,1]+=self.context_rectmat_xshift
-                    interp_shift_arr[:,:,:,2]+=self.context_rectmat_yshift
+                    interp_shift_arr[:,:,:,1]+=self.context.rectmat_xshift
+                    interp_shift_arr[:,:,:,2]+=self.context.rectmat_yshift
 
                     OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01,method='optimal')
                     C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01)
