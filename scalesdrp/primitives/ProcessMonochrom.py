@@ -1324,7 +1324,12 @@ class ProcessMonochrom(BasePrimitive):
                     posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=8)
 
                 fitarr,modims,resims = self.fit_gauss_spots(ims_cal,posarr,show_plots=False)
-                interp_arr = self.interp_gauss_spots(lams,lams,fitarr)
+
+                if scmode.split('-')[0] == 'LowRes':
+                    interp_arr = self.interp_gauss_spots(lams,lams,fitarr)
+                if scmode.split('-')[0] == 'MedRes':
+                    lams_interp = np.linspace(self.lmin,self.lmax,1900)
+                    interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
                 C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.05)
                 C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.05)
                 OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=0.05,method='optimal')
