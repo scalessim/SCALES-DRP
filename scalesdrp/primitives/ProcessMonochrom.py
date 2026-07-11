@@ -948,6 +948,62 @@ class ProcessMonochrom(BasePrimitive):
             vals[np.where(vals!=0)]=1.0
         return vals
 
+
+    def gen_rectmat_inds_interpd(self,interp_arr,cut=0.05,method='optimal'):
+
+        """
+        Function to generate row and column indices for sparse matrix
+        """
+
+        matrowinds = []
+        matcolinds = []
+        matvals = []
+
+        for ll in range(len(interp_arr)):
+            for lensx in range(interp_arr.shape[2]):
+                for lensy in range(interp_arr.shape[1]):
+                    if True not in np.isnan(interp_arr[ll,lensy,lensx]):
+                        flatinds,vals = self.crop_interpd_sparse_vals(interp_arr[ll,lensy,lensx],cut=cut,method=method)
+                        for i in range(len(vals)):
+                            if vals[i] > 0:
+                                matvals.append(vals[i])
+                                matcolinds.append(flatinds[i])
+                                matrowinds.append(lensx+lensy*interp_arr.shape[2]+ll*interp_arr.shape[1]*interp_arr.shape[2])
+        return matrowinds, matcolinds, matvals
+
+
+    def gen_rectmat_inds(self,calims,posarr,cut=0.05,method='optimal'):
+
+        """
+        Function to generate row and column indices for sparse matrix
+        """
+
+        matrowinds = []
+        matcolinds = []
+        matvals = []
+
+        for ll in range(len(calims)):
+            for lensx in range(posarr.shape[2]):
+                for lensy in range(posarr.shape[1]):
+                    xc,xs,xe,yc,ys,ye,intens = posarr[ll,lensy,lensx]
+                    if np.isnan(xc)==False:
+                        xc = int(xc)
+                        yc = int(yc)
+                        xs = int(xs)
+                        xe = int(xe)
+                        ys = int(ys)
+                        ye = int(ye)
+                        flatinds = gen_sparse_inds(xs,ys,xe,ye)
+                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye,cut=cut,method=method)
+                        for i in range(len(vals)):
+                            if vals[i] > 0:
+                                matvals.append(vals[i])
+                                #matvals.append(1.0)
+                                matcolinds.append(flatinds[i])
+                                matrowinds.append(lensx+lensy*posarr.shape[2]+ll*posarr.shape[1]*posarr.shape[2])
+        return matrowinds, matcolinds, matvals
+
+
     def gen_QL_rectmat(self,calims,posarr,cut=0.05,method='optimal',interp=False):
         """
         Function to generate rectmat from cube of cal unit images.
@@ -1267,10 +1323,10 @@ class ProcessMonochrom(BasePrimitive):
 
                 fitarr,modims,resims = self.fit_gauss_spots(ims_cal,posarr,show_plots=False)
                 interp_arr = self.interp_gauss_spots(lams,lams,fitarr)
-                C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.01)
-                C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.01)
-                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=cut,method='optimal')
-                OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=cut,method='optimal')
+                C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.05)
+                C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.05)
+                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=0.05,method='optimal')
+                OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=0.05,method='optimal')
                 if self.context.rectmat_xshift!=0 or self.context.rectmat_yshift!=0:
                     interp_shift_arr = np.zeros(interp_arr.shape)
                     interp_shift_arr[:,:,:,:] = np.nan

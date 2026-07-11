@@ -189,19 +189,50 @@ def main():
     # ingest an entire directory, trigger "next_file" on each file, optionally continue to monitor if -m is specified
 
     elif args.infiles is not None or args.dirname is not None:
-        print('dirname')
         framework.ingest_data(args.dirname, args.infiles, args.monitor)
-        #dt = framework.context.data_set.data_table
-        #print(dt[dt['IMTYPE']=='MCALUNIT'])
-        #print(dt[(dt['IFSMODE'] == 'LowRes-L') & (dt['IMTYPE'] == 'CALUNIT')])
-        #stop
-    #print(args)
+
     framework.context.clobber = scales_config.clobber
     framework.context.calib_file_path = scales_config.calib_file_path
-    framework.context.bpm_ifs_9mhz = scales_config.bpm_ifs_9mhz
-    framework.context.bpmat_ifs_9mhz = scales_config.bpmat_ifs_9mhz
-    framework.context.flat_ifs_9mhz = scales_config.flat_ifs_9mhz
 
+    framework.context.bpm_ifs_fast0p6 = scales_config.bpm_ifs_fast0p6
+    framework.context.bpmat_ifs_fast0p6 = scales_config.bpmat_ifs_fast0p6
+    framework.context.flat_ifs_fast0p6 = scales_config.flat_ifs_fast0p6
+    framework.context.sig_map_ifs_fast0p6 = scales_config.sig_map_ifs_fast0p6
+    framework.context.lin_coeff_ifs_fast0p6 = scales_config.lin_coeff_ifs_fast0p6
+
+    framework.context.bpm_ifs_fast1 = scales_config.bpm_ifs_fast1
+    framework.context.bpmat_ifs_fast1 = scales_config.bpmat_ifs_fast1
+    framework.context.flat_ifs_fast1 = scales_config.flat_ifs_fast1
+    framework.context.sig_map_ifs_fast1 = scales_config.sig_map_ifs_fast1
+    framework.context.lin_coeff_ifs_fast1 = scales_config.lin_coeff_ifs_fast1
+
+    framework.context.bpm_ifs_slow = scales_config.bpm_ifs_slow
+    framework.context.bpmat_ifs_slow = scales_config.bpmat_ifs_slow
+    framework.context.flat_ifs_slow = scales_config.flat_ifs_slow
+    framework.context.sig_map_ifs_slow = scales_config.sig_map_ifs_slow
+    framework.context.lin_coeff_ifs_slow = scales_config.lin_coeff_ifs_slow
+
+
+    framework.context.bpm_img_fast0p6 = scales_config.bpm_img_fast0p6
+    framework.context.bpmat_img_fast0p6 = scales_config.bpmat_img_fast0p6
+    framework.context.flat_img_fast0p6 = scales_config.flat_img_fast0p6
+    framework.context.sig_map_img_fast0p6 = scales_config.sig_map_img_fast0p6
+    framework.context.lin_coeff_img_fast0p6 = scales_config.lin_coeff_img_fast0p6
+
+    framework.context.bpm_img_fast1 = scales_config.bpm_img_fast1
+    framework.context.bpmat_img_fast1 = scales_config.bpmat_img_fast1
+    framework.context.flat_img_fast1 = scales_config.flat_img_fast1
+    framework.context.sig_map_img_fast1 = scales_config.sig_map_img_fast1
+    framework.context.lin_coeff_img_fast1 = scales_config.lin_coeff_img_fast1
+
+    framework.context.bpm_img_slow = scales_config.bpm_img_slow
+    framework.context.bpmat_img_slow = scales_config.bpmat_img_slow
+    framework.context.flat_img_slow = scales_config.flat_img_slow
+    framework.context.sig_map_img_slow = scales_config.sig_map_img_slow
+    framework.context.lin_coeff_img_slow = scales_config.lin_coeff_img_slow
+
+    framework.context.rectmat_xshift = scales_config.rectmat_xshift
+    framework.context.rectmat_yshift = scales_config.rectmat_yshift
 
     if scales_config.skip_mcal_generation == False:
         framework.append_event('calib_process_started',args)

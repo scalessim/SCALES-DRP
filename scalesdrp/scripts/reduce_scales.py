@@ -122,7 +122,7 @@ def main():
         for in_frame in in_subset.index:
             arguments = Arguments(name=in_frame)
             framework.append_event('next_file', arguments, recurrent=True)
-    
+
     def process_list(in_list):
         for in_frame in in_list:
             arguments = Arguments(name=in_frame)
@@ -190,14 +190,6 @@ def main():
         )
         framework.config.instrument.procfile = args.proctab
 
-    framework.config.instrument.arc_min_nframes = \
-	scales_config.arc_min_nframes
-    framework.config.instrument.contbars_min_nframes = \
-	scales_config.contbars_min_nframes = \
-    framework.config.instrument.object_min_nframes = \
-	scales_config.object_min_nframes
-    framework.config.instrument.minoscanpix = scales_config.minoscanpix
-    framework.config.instrument.oscanbuf = scales_config.oscanbuf
 
     # initialize the proctab and read it
     framework.context.proctab = Proctab()
@@ -243,6 +235,52 @@ def main():
     elif args.dirname is not None:
 
         framework.ingest_data(args.dirname, None, args.monitor)
+
+
+    framework.context.clobber = scales_config.clobber
+    framework.context.calib_file_path = scales_config.calib_file_path
+
+    framework.context.bpm_ifs_fast0p6 = scales_config.bpm_ifs_fast0p6
+    framework.context.bpmat_ifs_fast0p6 = scales_config.bpmat_ifs_fast0p6
+    framework.context.flat_ifs_fast0p6 = scales_config.flat_ifs_fast0p6
+    framework.context.sig_map_ifs_fast0p6 = scales_config.sig_map_ifs_fast0p6
+    framework.context.lin_coeff_ifs_fast0p6 = scales_config.lin_coeff_ifs_fast0p6
+
+    framework.context.bpm_ifs_fast1 = scales_config.bpm_ifs_fast1
+    framework.context.bpmat_ifs_fast1 = scales_config.bpmat_ifs_fast1
+    framework.context.flat_ifs_fast1 = scales_config.flat_ifs_fast1
+    framework.context.sig_map_ifs_fast1 = scales_config.sig_map_ifs_fast1
+    framework.context.lin_coeff_ifs_fast1 = scales_config.lin_coeff_ifs_fast1
+
+    framework.context.bpm_ifs_slow = scales_config.bpm_ifs_slow
+    framework.context.bpmat_ifs_slow = scales_config.bpmat_ifs_slow
+    framework.context.flat_ifs_slow = scales_config.flat_ifs_slow
+    framework.context.sig_map_ifs_slow = scales_config.sig_map_ifs_slow
+    framework.context.lin_coeff_ifs_slow = scales_config.lin_coeff_ifs_slow
+
+
+    framework.context.bpm_img_fast0p6 = scales_config.bpm_img_fast0p6
+    framework.context.bpmat_img_fast0p6 = scales_config.bpmat_img_fast0p6
+    framework.context.flat_img_fast0p6 = scales_config.flat_img_fast0p6
+    framework.context.sig_map_img_fast0p6 = scales_config.sig_map_img_fast0p6
+    framework.context.lin_coeff_img_fast0p6 = scales_config.lin_coeff_img_fast0p6
+
+    framework.context.bpm_img_fast1 = scales_config.bpm_img_fast1
+    framework.context.bpmat_img_fast1 = scales_config.bpmat_img_fast1
+    framework.context.flat_img_fast1 = scales_config.flat_img_fast1
+    framework.context.sig_map_img_fast1 = scales_config.sig_map_img_fast1
+    framework.context.lin_coeff_img_fast1 = scales_config.lin_coeff_img_fast1
+
+    framework.context.bpm_img_slow = scales_config.bpm_img_slow
+    framework.context.bpmat_img_slow = scales_config.bpmat_img_slow
+    framework.context.flat_img_slow = scales_config.flat_img_slow
+    framework.context.sig_map_img_slow = scales_config.sig_map_img_slow
+    framework.context.lin_coeff_img_slow = scales_config.lin_coeff_img_slow
+
+    framework.context.rectmat_xshift = scales_config.rectmat_xshift
+    framework.context.rectmat_yshift = scales_config.rectmat_yshift
+
+    framework.context.subtract_row_median = scales_config.subtract_row_median
 
     # implement the group mode
     if args.group_mode is True:
