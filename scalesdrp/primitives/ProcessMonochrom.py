@@ -1332,7 +1332,7 @@ class ProcessMonochrom(BasePrimitive):
                 if scmode.split('-')[0] == 'MedRes' and scmode!='MedRes-K':
                     lams_interp = np.linspace(self.lmin,self.lmax,1900)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
-                if scmode.split('-')[0] == 'MedRes-K':
+                if scmode == 'MedRes-K':
                     lams_interp = np.linspace(self.lmin_i,self.lmax_i,1900)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
                 C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.05)
