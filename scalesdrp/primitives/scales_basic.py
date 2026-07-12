@@ -525,7 +525,8 @@ def build_master_from_stack(
     """
     # --- normalize inputs to arrays ---
     data = np.asarray(data_stack)
-
+    if True in np.isnan(data_stack): print('nan in data trying to stack')
+    if True in np.isnan(sigma_stack): print('nan in sigma trying to stack')
     if data.ndim == 2:
         return data
 
@@ -638,6 +639,8 @@ def build_master_from_stack(
         master[good_pix] = val[good_pix]
         master_unc[good_pix] = unc[good_pix]
 
+
+
     # enforce min_valid
     #master[~good_pix] = np.nan
     #master_unc[~good_pix] = np.nan
@@ -648,8 +651,9 @@ def build_master_from_stack(
 
 ########################### ramp fitting #####################################################
 def _ols_row_and_uncert(row_reads,valid_reads_mask,t,sig_row):
-    if True in np.isnan(sig_row):
-        print('input sigmas have nans')
+
+    #if True in np.isnan(sig_row):
+    #    print('input sigmas have nans')
     N, W = row_reads.shape
     v = valid_reads_mask.astype(bool)
     S0 = v.sum(axis=0)
@@ -663,16 +667,16 @@ def _ols_row_and_uncert(row_reads,valid_reads_mask,t,sig_row):
     num = Sty - tbar * Sy
     den = np.where(Stt_centered > 0, Stt_centered, np.nan)
     slope_row = num / den
-    if True in np.isnan(slope_row):
-        print('divide by den put nans into slope')
+    #if True in np.isnan(slope_row):
+    #    print('divide by den put nans into slope')
     slope_unc_row = sig_row / np.sqrt(den)
-    if True in np.isnan(slope_unc_row):
-        print('is den negative?',np.unique(den < 0))
-        print('is den zero?',np.unique(den==0))
-        print('divide by sqrt(den) made nans')
+    #if True in np.isnan(slope_unc_row):
+    #    print('is den negative?',np.unique(den < 0))
+    #    print('is den zero?',np.unique(den==0))
+    #    print('divide by sqrt(den) made nans')
     slope_unc_row[(S0 < 2) | ~np.isfinite(den)] = np.nan
-    if True in np.isnan(slope_unc_row):
-        print('S0 mask made nans')
+    #if True in np.isnan(slope_unc_row):
+    #    print('S0 mask made nans')
     return slope_row, slope_unc_row
 
 

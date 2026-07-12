@@ -63,6 +63,7 @@ class ProcessMonochrom(BasePrimitive):
         ims = []
         for name in names:
             image = pyfits.getdata(self.redux_dir+'/'+name,memmap=False)
+            if True in np.isnan(image): print('nan in image')
             ims.append(image/flat)
             #ims.append(pyfits.getdata(self.redux_dir+'/'+name))
             #ims.append(pyfits.getdata(self.redux_dir+'/'+name)/flat)
@@ -1301,7 +1302,7 @@ class ProcessMonochrom(BasePrimitive):
                 print(ims_cal.shape)
                 if scmode.split('-')[0] == 'LowRes':
                     self.logger.info("finding spots")
-                    spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=90.0,sigma=1.2,medres=False,mfilt=self.mfilt)
+                    spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=90.0,sigma=1.2,medres=False)
                     self.logger.info("tracking spots sequentially")
                     spot_tracks = self.track_sequentially(spots,max_match_distance=3)
                     self.logger.info("removing duplicates and silos")
@@ -1315,7 +1316,7 @@ class ProcessMonochrom(BasePrimitive):
 
 
                 if scmode.split('-')[0] == 'MedRes':
-                    spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=70.0,sigma=1.2,medres=True)
+                    spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=70.0,sigma=1.2,medres=True,mfilt=self.mfilt)
                     spot_tracks = self.track_sequentially(spots, max_match_distance=13)
                     self.logger.info("removing duplicates and silos")
                     spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,lmin=self.lmin,lmax=self.lmax,medres=True)

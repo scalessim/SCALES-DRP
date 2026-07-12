@@ -30,7 +30,7 @@ class RampFit(BasePrimitive):
     """
     This function convert a raw read to a slope image of an OBJECT.
     Include a ACN, 1/f correction, linearity correction, ramp fitting, and a bad pixel correction.
-    We adopt the ramp fitting method of Brandt et. al. 2024. 
+    We adopt the ramp fitting method of Brandt et. al. 2024.
     This method perform an optimal fit to a pixel’s count rate nondestructively in the
     presence of both read and photon noise. The method construct a covarience matrix by
     estimating the difference in the read in a ramp, propagation of the read noise,
@@ -38,10 +38,10 @@ class RampFit(BasePrimitive):
     to the differences, using the inverse of the covariance matrix as weights.
     This gives optimal weight to each difference.
     The jumps are detected iteratively checking the goodness of
-    fit at each possible jump location. 
+    fit at each possible jump location.
         Args:
             data_image: The (N,H,W) input ramp cube.
-            
+
         Returns:
             A 2D image of ramp fitted slope
             A 2D image of uncetainty of the ramp fitted slope
@@ -54,7 +54,7 @@ class RampFit(BasePrimitive):
 
         if not hasattr(self, "proctab") or self.proctab is None:
             self.proctab = Proctab(logger=self.logger if hasattr(self, "logger") else logging.getLogger("SCALES"))
-        
+
     def _perform(self):
         imtype = self.action.args.ccddata.header['IMTYPE']
         if imtype =='OBJECT':
@@ -67,7 +67,7 @@ class RampFit(BasePrimitive):
             det_config = str(det_config).strip()
 
             if obsmode =='Im':
-                
+
                 if det_config =='5.0 MHz': #fast1.0
                     SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
                     master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
@@ -112,22 +112,22 @@ class RampFit(BasePrimitive):
                     lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
 
             input_data = self.action.args.ccddata.data
-            
+
             filename = self.action.args.ccddata.header.get("OFNAME")
             existing_l1_name = scbasic.find_existing_proc_file(
                 input_filename=filename,
                 suffix="_L1",
                 redux_dir=self.config.instrument.output_directory)
-            
+
             #print(self.config.instrument.output_directory)
-            
+
             if existing_l1_name is not None:
                 l1_path = existing_l1_name
                 #print(l1_path)
             else:
                 l1_path = scbasic.get_l1_path_from_raw(
                     input_filename = filename,
-                    output_dir = self.config.instrument.output_directory)    
+                    output_dir = self.config.instrument.output_directory)
 
             if os.path.exists(l1_path):
                 self.logger.info(f"Found existing L1 file: {l1_path}")
@@ -171,7 +171,7 @@ class RampFit(BasePrimitive):
                     invalid_read_behavior="raw",
                     chunk_size=4096,
                     return_aux=True)
-                
+
                 self.action.args.ccddata.header['HISTORY'] = 'Non-linearity correction applied'
                 self.logger.info("+++++++++++ linearity correction finished +++++++++++")
                 self.logger.info("+++++++++++ ramp fitting started +++++++++++")
@@ -197,12 +197,12 @@ class RampFit(BasePrimitive):
             #rmat = bpm.bpm_correction(final_mask)
             final_ramp1 = rmat1*np.matrix(final_slope.flatten().reshape([np.prod(final_slope.shape),1]))
             final_ramp = np.array(final_ramp1).reshape(final_slope.shape)
-            
+
             final_ramp1_uncert = rmat1*np.matrix(uncert.flatten().reshape([np.prod(uncert.shape),1]))
             final_uncert = np.array(final_ramp1_uncert).reshape(uncert.shape)
 
             self.action.args.ccddata.header['HISTORY'] = 'Bad pixel correction applied'
-            
+
             self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
             keywords_unique = {
                 key: self.action.args.ccddata.header.get(key)
@@ -221,7 +221,7 @@ class RampFit(BasePrimitive):
                     imtype='DARK')
                 self.action.args.ccddata.header['HISTORY'] = 'Dark subtracted.'
                 self.logger.info("+++++++++++ Master dark subtracted +++++++++++")
-        
+
             if m_bias is not None:
                 final_ramp, final_uncert = scbasic.apply_calibration(
                     final_ramp,

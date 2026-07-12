@@ -235,9 +235,8 @@ def main():
     framework.context.rectmat_yshift = scales_config.rectmat_yshift
 
     if scales_config.skip_mcal_generation == False:
-        framework.append_event('calib_process_started',args)
-    else:
-        framework.append_event('calib_process_done',args)
+        framework.append_event('start_calib_process',args)
+    #framework.append_event('calib_process_done',args)
     framework.start()
 
 

@@ -185,50 +185,54 @@ class StartCalib(BasePrimitive):
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast1)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast1)
                             lin_coeff = calib_path+self.context.lin_coeff_img_fast1
-                            master_bpm = fits.getdata(calib_path+self.context_bpm_img_fast1)
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast1)
 
                         elif det_config =='9.0 MHz': #fast0.6
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
+                            SIG_map_scaled[np.where(np.isnan(SIG_map_scaled)==True)] = np.nanmedian(SIG_map_scaled)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
                             lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
-                            master_bpm = fits.getdata(calib_path+self.context_bpm_img_fast0p6)
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast0p6)
 
                         elif det_config =='20.0 MHz': #slow
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_slow)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_slow)
                             lin_coeff = calib_path+self.context.lin_coeff_img_slow
-                            master_bpm = fits.getdata(calib_path+self.context_bpm_img_slow)
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_img_slow)
 
                         else: #default if MCLCOCK is not one of those specified above
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
                             lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
-                            master_bpm = fits.getdata(calib_path+self.context_bpm_img_fast0p6)
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast0p6)
 
                     elif obsmode =='IFS':
                         if det_config =='5.0 MHz':  #fast1.0
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast1)
                             lin_coeff = calib_path+self.context.lin_coeff_ifs_fast1
-                            master_bpm = fits.getdata(calib_path+self.context_bpm_ifs_fast1)
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast1)
 
                         elif det_config =='9.0 MHz': #fast1.0
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
+                            if True in np.isnan(SIG_map_scaled):
+                                print('nans in sig map')
+                                stop
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
                             lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
-                            master_bpm = fits.getdata(calib_path+self.context_bpm_ifs_fast0p6)
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast0p6)
 
                         elif det_config =='20.0 MHz': #slow
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_slow)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_slow)
                             lin_coeff = calib_path+self.context.lin_coeff_ifs_slow
-                            master_bpm = fits.getdata(calib_path+self.context_bpm_ifs_slow)
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_slow)
 
                         else: #default
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
                             lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
-                            master_bpm = fits.getdata(calib_path+self.context_bpm_ifs_fast0p6)
+                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast0p6)
 
                     #self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = scbasic.swap_odd_even_columns(sci_im_full_original1,do_swap=False)
@@ -350,11 +354,16 @@ class StartCalib(BasePrimitive):
                 #        "Skipping master creation.")
                     #continue
 
+                if True in np.isnan(group_ramps): print('nan in group ramps')
+                if True in np.isnan(group_uncerts): print('nan in group uncs')
                 master, master_unc = scbasic.build_master_from_stack(
                     group_ramps,
                     group_uncerts,
                     method='median',
                     iterations=0)
+                if True in np.isnan(master):
+                    print('nan in mcalunit')
+                    stop
 
                 hdrm = group_header_for_master.copy()
                 hdrm['HISTORY'] = f"Master {imtype} built from {len(group_ramps)} frames"
