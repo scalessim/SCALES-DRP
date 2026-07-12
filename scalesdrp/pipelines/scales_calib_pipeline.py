@@ -12,7 +12,7 @@ queue in the KeckDRPFramework gets started.
 from keckdrpframework.pipelines.base_pipeline import BasePipeline
 from keckdrpframework.models.processing_context import ProcessingContext
 #from scalesdrp.primitives.CalibFilePrimitives import *
-#from scalesdrp.primitives import CentroidEstimate
+from scalesdrp.primitives import *
 #import scalesdrp.primitives
 
 class Scales_Calib_Pipeline(BasePipeline):
@@ -26,11 +26,10 @@ class Scales_Calib_Pipeline(BasePipeline):
 
         "add_only":                 ("add_to_dataframe_only", None, None),
 
-        "centroid_estimate":         ("CentroidEstimate",
-                                      None,
-                                      "calib_process_started"),
+        #"start_calib_process":    ("StartCalib","calib_processing","calib_process_done"),
 
-        "calib_process_started":    ("StartCalib",None,'calib_process_done'),
+        #"calib_process_done": ("ProcessMonochrom","monochrom_processing",None)
+        "start_calib_process":    ("StartCalib",None,None),
 
         "calib_process_done": ("ProcessMonochrom",None,None)
 
