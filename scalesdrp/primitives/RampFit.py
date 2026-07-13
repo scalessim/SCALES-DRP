@@ -259,6 +259,17 @@ class RampFit(BasePrimitive):
                 for ii in range(len(final_ramp)):
                     final_ramp[ii]-=np.nanmedian(final_ramp[ii])
 
+            if self.config.instrument.subtract_img_readout_channels==True:
+                bounds = 4+510*np.array(range(5))
+                bias = np.zeros([2048,2048])
+                for i in range(4):
+                    xstart = bounds[i]
+                    xstop = bounds[i+1]
+                    arr = final_ramp[:,xstart:xstop]
+                    med = np.nanmedian(arr)
+                    bias[:,xstart:xstop] = med
+                final_ramp = final_ramp-bias
+
             self.action.args.ccddata.data = final_ramp
             self.action.args.ccddata.uncertainty = StdDevUncertainty(final_uncert.astype(np.float32))
 
