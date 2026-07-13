@@ -169,8 +169,7 @@ class SpectralExtract(BasePrimitive):
             A_guess_cube,A_guess_cube_err = scbasic.optimal_extract_with_error(
                 R_matrix,
                 data_image,
-                sigma_image,
-                var_read_vector)
+                sigma_image)
 
             A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
             A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)

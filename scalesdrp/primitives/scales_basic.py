@@ -321,33 +321,112 @@ def swap_odd_even_columns(cube,n_amps=4,do_swap=True):
     return ramp
 
 ############### spectral extraction ###############################################
-
 def optimal_extract_with_error(
-    R_transpose,
+    R_matrix,
     data_image,
     sigma_image,
-    read_noise_variance_vector,gain = 1.0):
+):
+    """
+    Extract a cube and propagate the detector uncertainty.
 
-    print('Optimal extraction started')
-    start_time1 = time.time()
-    data_vector_d = data_image.flatten().astype(np.float64)
-    sigma_vector = sigma_image.array.flatten().astype(np.float64)
-    variance_from_map = sigma_vector**2
-    photon_noise_variance = data_vector_d.clip(min=0) / gain
-    total_variance = read_noise_variance_vector + photon_noise_variance + variance_from_map
-    inverse_variance = 1.0 / total_variance
-    weighted_data = data_vector_d * inverse_variance
-    numerator = R_transpose @ weighted_data
-    R_transpose_squared = R_transpose.power(2)
-    denominator = R_transpose_squared @ inverse_variance
-    denominator_safe = np.maximum(denominator, 1e-9)
-    optimized_flux = numerator / denominator_safe
-    flux_variance = 1.0 / denominator_safe
-    flux_error = np.sqrt(flux_variance)
-    end_time1 = time.time()
-    t1 = (end_time1 - start_time1)
-    print(f"Optimal extraction finished in {t1:.4f} seconds.")
-    return optimized_flux, flux_error
+    Assumptions
+    -----------
+    - R_matrix is a detector-to-cube rectification matrix.
+    - R_matrix contains nonnegative, already-normalized extraction weights.
+    - sigma_image is the ramp-fit 1-sigma uncertainty and already includes
+      the relevant read-noise and photon-noise terms.
+
+    Parameters
+    ----------
+    R_matrix : scipy sparse matrix
+        Shape (N_cube_voxels, N_detector_pixels).
+
+    data_image : ndarray
+        Two-dimensional detector slope image.
+
+    sigma_image : ndarray or uncertainty object
+        Two-dimensional ramp-fit 1-sigma uncertainty image.
+
+    cube_shape : tuple
+        Output cube shape, for example (179, 17, 18).
+
+    Returns
+    -------
+    flux_cube : ndarray
+        Extracted flux cube.
+
+    error_cube : ndarray
+        Propagated 1-sigma error cube.
+    """
+
+    print("Optimal extraction started")
+    start_time = time.time()
+
+    data_vector = np.asarray(
+        data_image,
+        dtype=np.float64,
+    ).ravel()
+
+    if hasattr(sigma_image, "array"):
+        sigma_vector = np.asarray(
+            sigma_image.array,
+            dtype=np.float64,
+        ).ravel()
+    else:
+        sigma_vector = np.asarray(
+            sigma_image,
+            dtype=np.float64,
+        ).ravel()
+
+    # Invalid science pixels contribute zero to the extracted cube.
+    data_safe = np.where(
+        np.isfinite(data_vector),
+        data_vector,
+        0.0,
+    )
+
+    # Extract flux using the existing rectification matrix.
+    flux_vector = np.asarray(
+        R_matrix @ data_safe
+    ).ravel()
+
+    # Ramp-fit variance.
+    variance_vector = sigma_vector**2
+
+    # Invalid uncertainties contribute no propagated variance.
+    variance_safe = np.where(
+        np.isfinite(variance_vector) & (variance_vector >= 0),
+        variance_vector,
+        0.0,
+    )
+
+    # Propagate independent detector-pixel variances:
+    #
+    # Var(f_j) = sum_i R_ji^2 Var(d_i)
+    R_squared = R_matrix.multiply(R_matrix)
+
+    flux_variance_vector = np.asarray(
+        R_squared @ variance_safe
+    ).ravel()
+
+    error_vector = np.sqrt(
+        np.maximum(flux_variance_vector, 0.0)
+    )
+
+    elapsed = time.time() - start_time
+
+    print(
+        f"Optimal extraction finished in {elapsed:.4f} seconds."
+    )
+
+    return flux_vector, error_vector
+
+def optimal_extract_fast(
+    R_transpose: sp.spmatrix,
+    data_image: np.ndarray) -> np.ndarray:
+    t0 = time.time()
+    optimized_flux = np.array(R_transpose*np.matrix(data_image.reshape([2048*2048,1])))
+    return optimized_flux
 
 def solve_bounded_weighted_nnls(
     R_matrix: sp.spmatrix,

@@ -59,6 +59,7 @@ The latest version of 1.0.0 of the SCALES-DRP includes:
    Running_the_SCALES-DRP_Pipeline
    Primitives
    calib_products
+   Configuration_Parameters
    Data_Products
    Support
    Versions

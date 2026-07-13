@@ -18,7 +18,9 @@
       <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
-    <link rel="search" title="Search" href="search.html" /> 
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Data Products" href="Data_Products.html" />
+    <link rel="prev" title="Calibration Products" href="calib_products.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -42,12 +44,16 @@
 </div>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
-<ul>
+<ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
 <li class="toctree-l1"><a class="reference internal" href="calib_products.html">Calibration Products</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Configuration Parameters</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#configuration-file">Configuration file</a></li>
+</ul>
+</li>
 <li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
@@ -89,25 +95,66 @@
 </div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>If a parameter in the <code class="docutils literal notranslate"><span class="pre">scales.cfg</span></code> file is not described here, then you can assume that it should not be modified.</p>
+<p>If a parameter in the <code class="docutils literal notranslate"><span class="pre">scales.cfg</span></code> or <code class="docutils literal notranslate"><span class="pre">scales_calib.cfg</span></code> file is not described here, then you can assume that it should not be modified.</p>
 </div>
 <section id="configuration-file">
 <h2>Configuration file<a class="headerlink" href="#configuration-file" title="Link to this heading"></a></h2>
 <p>We have default parameters for IFS and Imaging mode of observation. For example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">bias_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="c1">#minimum bias exposures</span>
-<span class="nv">flatlamp_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="c1">#minimum detector flat exposures</span>
-<span class="nv">flatlens_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="c1">#minimum lenslet flat exposures</span>
-<span class="nv">dark_min_nframes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="c1">#minimum dark exposures</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">clobber</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>False<span class="w"> </span><span class="c1">#Redo the slope image generation even if the products exist</span>
+<span class="nv">skip_mcal_generation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>True<span class="w"> </span><span class="c1">##Skip the generation of combined master cal files &amp; go straight to spectral extraction analysis</span>
+<span class="nv">rectmat_xshift</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">4</span>.0<span class="w"> </span><span class="c1">#Generate a second set of rectification matrices while #applying an x and/or y shift to compensate for disperser motion?</span>
+<span class="nv">rectmat_yshift</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">0</span>
+
+
+<span class="c1">#Calibration file names (must be inside ``SCALES-DRP/scalesdrp/calib`` directory)</span>
+
+<span class="nv">sig_map_ifs_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;readnoise_ifs_fast0.6_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#readnoise map for IFS Fast0.6</span>
+<span class="nv">flat_ifs_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;ifs_fast0.6_pseudoflat_bpcorr.fits&#39;</span><span class="w"> </span><span class="c1"># default pseudoflat for IFS Fast0.6</span>
+<span class="nv">bpm_ifs_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpm_ifs_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask for IFS Fast0.6</span>
+<span class="nv">bpmat_ifs_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpmat_ifs.npz&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask (rectification matrix) for IFS Fast0.6</span>
+<span class="nv">lin_coeff_ifs_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;lin_coeffs_ifs_fast0.6_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#linearity coefficients for IFS Fast0.6</span>
+
+<span class="nv">sig_map_ifs_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;readnoise_ifs_fast1.0_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#readnoise map for IFS Fast1.0</span>
+<span class="nv">flat_ifs_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;ifs_fast0.6_pseudoflat_bpcorr.fits&#39;</span><span class="w"> </span><span class="c1"># default pseudoflat for IFS Fast1.0</span>
+<span class="nv">bpm_ifs_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpm_ifs_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask for IFS Fast1.0</span>
+<span class="nv">bpmat_ifs_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpmat_ifs.npz&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask (rectification matrix) for IFS Fast1.0</span>
+<span class="nv">lin_coeff_ifs_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;lin_coeffs_ifs_fast1.0_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#linearity coefficients for IFS Fast1.0</span>
+
+<span class="nv">sig_map_ifs_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;readnoise_ifs_slow_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#readnoise map for IFS Slow5.2</span>
+<span class="nv">flat_ifs_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;ifs_fast0.6_pseudoflat_bpcorr.fits&#39;</span><span class="w"> </span><span class="c1"># default pseudoflat for IFS Slow5.2</span>
+<span class="nv">bpm_ifs_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpm_ifs_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask for IFS Slow5.2</span>
+<span class="nv">bpmat_ifs_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpmat_ifs.npz&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask (rectification matrix) for IFS Slow5.2</span>
+<span class="nv">lin_coeff_ifs_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;lin_coeffs_ifs_slow_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#linearity coefficients for IFS Slow5.2</span>
+
+<span class="nv">sig_map_img_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;readnoise_img_fast0.6_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#readnoise map for IMG Fast0.6</span>
+<span class="nv">flat_img_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;img_fast0.6_mflatlamp.fits&#39;</span><span class="w"> </span><span class="c1"># default pseudoflat for IMG Fast0.6</span>
+<span class="nv">bpm_img_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpm_img_cd4.fits&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask for IMG Fast0.6</span>
+<span class="nv">bpmat_img_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpmat_img.npz&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask (rectification matrix) for IMG Fast0.6</span>
+<span class="nv">lin_coeff_img_fast0p6</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;lin_coeffs_img_fast0.6_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#linearity coefficients for IMG Fast0.6</span>
+
+<span class="nv">sig_map_img_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;readnoise_img_fast1.0_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#readnoise map for IMG Fast1.0</span>
+<span class="nv">flat_img_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;img_fast1.0_mflatlamp.fits&#39;</span><span class="w"> </span><span class="c1"># default pseudoflat for IMG Fast1.0</span>
+<span class="nv">bpm_img_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpm_img_cd4.fits&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask for IMG Fast1.0</span>
+<span class="nv">bpmat_img_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpmat_img.npz&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask (rectification matrix) for IMG Fast1.0</span>
+<span class="nv">lin_coeff_img_fast1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;lin_coeffs_img_fast1.0_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#linearity coefficients for IMG Fast1.0</span>
+
+<span class="nv">sig_map_img_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;readnoise_img_slow_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#readnoise map for IMG Slow5.2</span>
+<span class="nv">flat_img_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;img_slow_mflatlamp.fits&#39;</span><span class="w"> </span><span class="c1"># default pseudoflat for IMG Slow5.2</span>
+<span class="nv">bpm_img_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpm_img_cd4.fits&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask for IMG Slow5.2</span>
+<span class="nv">bpmat_img_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;bpmat_img.npz&#39;</span><span class="w"> </span><span class="c1">#bad pixel mask (rectification matrix) for IMG Slwo5.2</span>
+<span class="nv">lin_coeff_img_slow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;lin_coeffs_img_slow_cd5.fits&#39;</span><span class="w"> </span><span class="c1">#linearity coefficients for IMG Slow5.2</span>
 </pre></div>
 </div>
-<p>These parameters control the minimum number of bias, detector/lenslet flats and darks that the DRP expects before producing a master calibration files. The values shown here are synchronized with the calibration scripts that are used at WMKO for afternoon calibrations. If not mentioned, then the DRP will go with the default parameter configuration.</p>
 </section>
 </section>
 
 
            </div>
           </div>
-          <footer>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="calib_products.html" class="btn btn-neutral float-left" title="Calibration Products" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="Data_Products.html" class="btn btn-neutral float-right" title="Data Products" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
 
   <hr/>
 
