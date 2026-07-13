@@ -1345,6 +1345,9 @@ class ProcessMonochrom(BasePrimitive):
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_medres_lensarr_xy(avgs_new,show_plots=False)
                     posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=8)
+
+
+                self.logger.info("fitting spot PSFs for interpolated rectmats")
                 fitarr,modims,resims = self.fit_gauss_spots(ims_cal,posarr,show_plots=False)
 
                 if scmode.split('-')[0] == 'LowRes':
@@ -1356,13 +1359,20 @@ class ProcessMonochrom(BasePrimitive):
                 if scmode == 'MedRes-K':
                     lams_interp = np.linspace(self.lmin_i,self.lmax_i,1900)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
+
+                self.logger.info("making chi2 rectmat")
                 C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.01)
+                self.logger.info("making interpolated chi2 rectmat")
                 C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.01)
+                self.logger.info("making interpolated optimal rectmat")
                 OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=0.01,method='optimal')
+                self.logger.info("making interpolated optimal lsf and lflat")
                 OPT_lsf_interpd,OPT_lflat_interpd = self.make_lsf_lflat(
                                                 OPT_rmat_interpd,ims_cal,lams_interp,
                                                 self.ny,self.nx)
+                self.logger.info("making optimal rectmat")
                 OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=0.01,method='optimal')
+                self.logger.info("making optimal lsf and lflat")
                 OPT_lsf,OPT_lflat = self.make_lsf_lflat(OPT_rmat,ims_cal,lams,
                                                 self.ny,self.nx)
 
@@ -1374,7 +1384,9 @@ class ProcessMonochrom(BasePrimitive):
                     interp_shift_arr[:,:,:,1]+=self.context.rectmat_xshift
                     interp_shift_arr[:,:,:,2]+=self.context.rectmat_yshift
 
+                    self.logger.info("making interpolated shifted optimal rectmat")
                     OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01,method='optimal')
+                    self.logger.info("making interpolated shifted chi2 rectmat")
                     C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01)
                     sparse.save_npz(self.redux_dir+'/'+
                                     scmode+'_C2_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
@@ -1385,6 +1397,8 @@ class ProcessMonochrom(BasePrimitive):
                                     '_dy'+str(self.context.rectmat_yshift)+
                                     '.npz',OPT_rmat_interpd_shift)
 
+
+                self.logger.info("writing out rectmats")
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_OPT_rectmat.npz',OPT_rmat)
                 pyfits.writeto(self.redux_dir+'/'+
