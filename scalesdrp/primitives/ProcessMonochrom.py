@@ -768,6 +768,7 @@ class ProcessMonochrom(BasePrimitive):
         fitarr[:,:,:,:] = np.nan
         modims = []
         for ll in range(len(calims)):
+            self.logger.info("image "+str(ll)+" of "+str(len(calims)))
             modim = np.zeros(calims[ll].shape)
             for lensx in range(posarr.shape[2]):
                         for lensy in range(posarr.shape[1]):
