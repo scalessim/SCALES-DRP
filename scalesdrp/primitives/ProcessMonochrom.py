@@ -872,7 +872,7 @@ class ProcessMonochrom(BasePrimitive):
         return flatinds
 
 
-    def crop_interpd_sparse_vals(self,gauss_pars,cut=0.05,method='optimal'):
+    def crop_interpd_sparse_vals(self,gauss_pars,cut=0.05,method='optimal',cropsize=8):
         """
         Function to take gaussian spots and turn them into weights for a sparse
         extraction matrix.
@@ -893,10 +893,14 @@ class ProcessMonochrom(BasePrimitive):
                              y_stddev=gauss_pars[4],
                              theta=gauss_pars[5])
 
-            ys = int(y_mean-5*y_stddev)
-            ye = int(y_mean+5*y_stddev)
-            xs = int(x_mean-5*x_stddev)
-            xe = int(x_mean+5*x_stddev)
+            #ys = int(y_mean-3*y_stddev)
+            #ye = int(y_mean+3*y_stddev)
+            #xs = int(x_mean-3*x_stddev)
+            #xe = int(x_mean+3*x_stddev)
+            ys = int(y_mean-cropsize/2)
+            ye = int(y_mean+cropsize/2)
+            xs = int(x_mean-cropsize/2)
+            xe = int(x_mean+cropsize/2)
 
             if ys<0: ys=0
             if ye>2047:ye=2047
@@ -1345,7 +1349,7 @@ class ProcessMonochrom(BasePrimitive):
 
                 if scmode.split('-')[0] == 'LowRes':
                     lams_interp = lams
-                    interp_arr = self.interp_gauss_spots(lams,lams,fitarr)
+                    interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
                 if scmode.split('-')[0] == 'MedRes' and scmode!='MedRes-K':
                     lams_interp = np.linspace(self.lmin,self.lmax,1900)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
