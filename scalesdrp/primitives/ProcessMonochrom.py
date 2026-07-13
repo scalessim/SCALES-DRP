@@ -942,7 +942,7 @@ class ProcessMonochrom(BasePrimitive):
         cropped/=np.sum(cropped)
 
         vals = np.array([cropped[yind,xind] for xind in range(0,xe-xs) for yind in range(0,ye-ys)])
-        if method=='average':
+        if method=='optimal':
             vals = vals
 
         if method=='sum':
@@ -1262,8 +1262,10 @@ class ProcessMonochrom(BasePrimitive):
             self.lmin = 1.95
             self.lmax = 2.45
             self.mfilt = 'imgK'
-            self.lmin_i = 2.0217
-            self.lmax_i = 2.386071
+            self.lmin_i = 2.02
+            self.lmax_i = 2.38
+            self.nx = 18
+            self.ny = 17
         if scmode == 'LowRes-L':
             self.lmin = 2.9
             self.lmax = 4.15
@@ -1284,6 +1286,20 @@ class ProcessMonochrom(BasePrimitive):
             self.lmax = 3.5
 
         return
+
+    def make_lsf_lflat(self,rmat,ims_cal,lams,ny,nx):
+        lsfcube = []
+        lensflatcube = []
+        for ii in range(len(ims_cal)):
+            scube = np.array(rmat*ims_cal[ii].reshape([2048*2048,1])).reshape([len(lams),ny,nx])
+            scube_lsf = scube/np.max(scube,axis=0)
+            lflat = np.max(scube,axis=0)
+            lsfcube.append(scube_lsf)
+            lensflatcube.append(lflat/np.median(lflat))
+        lensflat = np.median(lflat,axis=0)
+        return np.array(lsfcube),np.array(lensflat)
+
+
 
 
     def _perform(self):
@@ -1321,14 +1337,14 @@ class ProcessMonochrom(BasePrimitive):
                     self.logger.info("removing duplicates and silos")
                     spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,lmin=self.lmin,lmax=self.lmax,medres=True)
                     avgs = self.find_avg_spotpos(spot_tracks_u,self.lmin,self.lmax,medres=True,show_plots=False)
-                    avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=True,show_plots=True)
+                    avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=True,show_plots=False)
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_medres_lensarr_xy(avgs_new,show_plots=False)
                     posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=8)
-
                 fitarr,modims,resims = self.fit_gauss_spots(ims_cal,posarr,show_plots=False)
 
                 if scmode.split('-')[0] == 'LowRes':
+                    lams_interp = lams
                     interp_arr = self.interp_gauss_spots(lams,lams,fitarr)
                 if scmode.split('-')[0] == 'MedRes' and scmode!='MedRes-K':
                     lams_interp = np.linspace(self.lmin,self.lmax,1900)
@@ -1336,10 +1352,17 @@ class ProcessMonochrom(BasePrimitive):
                 if scmode == 'MedRes-K':
                     lams_interp = np.linspace(self.lmin_i,self.lmax_i,1900)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
-                C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.05)
-                C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.05)
-                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=0.05,method='optimal')
-                OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=0.05,method='optimal')
+                C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.01)
+                C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.01)
+                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=0.01,method='optimal')
+                OPT_lsf_interpd,OPT_lflat_interpd = self.make_lsf_lflat(
+                                                OPT_rmat_interpd,ims_cal,lams_interp,
+                                                self.ny,self.nx)
+                OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=0.01,method='optimal')
+                OPT_lsf,OPT_lflat = self.make_lsf_lflat(OPT_rmat,ims_cal,lams,
+                                                self.ny,self.nx)
+
+
                 if self.context.rectmat_xshift!=0 or self.context.rectmat_yshift!=0:
                     interp_shift_arr = np.zeros(interp_arr.shape)
                     interp_shift_arr[:,:,:,:] = np.nan
@@ -1360,12 +1383,26 @@ class ProcessMonochrom(BasePrimitive):
 
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_OPT_rectmat.npz',OPT_rmat)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_OPT_lsf.fits',OPT_lsf,overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_OPT_lflat.fits',OPT_lflat,overwrite=True)
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_OPT_intp_rectmat.npz',OPT_rmat_interpd)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_OPT_intp_lsf.fits',OPT_lsf_interpd,
+                                overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_OPT_intp_lflat.fits',OPT_lflat_interpd,
+                                overwrite=True)
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_C2_rectmat.npz',C2_rmat)
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd)
+                pyfits.writeto(self.redux_dir+'/'+scmode+'_lams.fits',
+                    lams,overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+scmode+'_intp_lams',
+                    lams_interp,overwrite=True)
 
 
             log_string = ProcessMonochrom.__module__

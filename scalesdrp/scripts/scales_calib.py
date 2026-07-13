@@ -236,7 +236,7 @@ def main():
 
     if scales_config.skip_mcal_generation == False:
         framework.append_event('start_calib_process',args)
-    #framework.append_event('calib_process_done',args)
+    framework.append_event('calib_process_done',args)
     framework.start()
 
 

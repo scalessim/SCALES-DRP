@@ -62,88 +62,100 @@ class RampFit(BasePrimitive):
             obsmode = self.action.args.ccddata.header['CAMERA']
             det_config = self.action.args.ccddata.header['MCLOCK']
             package = __name__.split('.')[0]
-            filepath = 'calib/'
-            calib_path = str(get_resource_path(package, filepath)) + '/'
             det_config = str(det_config).strip()
 
+            calibfilepath = self.context.calib_file_path
+            calib_path = str(get_resource_path(package, calibfilepath))+'/'
             if obsmode =='Im':
+                if det_config =='5.0 MHz':  #fast1.0
+                    SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast1)
+                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast1)
+                    lin_coeff = calib_path+self.context.lin_coeff_img_fast1
+                    master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast1)
 
-                if det_config =='5.0 MHz': #fast1.0
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
-                    lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
-                    rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
                 elif det_config =='9.0 MHz': #fast0.6
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast0.6_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
-                    lin_coeff = calib_path+"lin_coeffs_img_fast0.6_cd5.fits"
-                    rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                    SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
+                    SIG_map_scaled[np.where(np.isnan(SIG_map_scaled)==True)] = np.nanmedian(SIG_map_scaled)
+                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
+                    lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
+                    master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast0p6)
+
                 elif det_config =='20.0 MHz': #slow
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_slow_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
-                    lin_coeff = calib_path+"lin_coeffs_img_slow_cd5.fits"
-                    rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
-                else: #default if MCLCOCK is not specified
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_img_fast1.0_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_img_cd4.fits')
-                    lin_coeff = calib_path+"lin_coeffs_img_fast1.0_cd5.fits"
-                    rmat1 = sparse.load_npz(calib_path+'bpmat_img.npz')
+                    SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_slow)
+                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_slow)
+                    lin_coeff = calib_path+self.context.lin_coeff_img_slow
+                    master_bpm = fits.getdata(calib_path+self.context.bpm_img_slow)
+
+                else: #default if MCLCOCK is not one of those specified above
+                    SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
+                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
+                    lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
+                    master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast0p6)
 
             elif obsmode =='IFS':
-                if det_config =='5.0 MHz': #fast0.6
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
-                    rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                    lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
+                if det_config =='5.0 MHz':  #fast1.0
+                    SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
+                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast1)
+                    lin_coeff = calib_path+self.context.lin_coeff_ifs_fast1
+                    master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast1)
+
                 elif det_config =='9.0 MHz': #fast1.0
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
-                    rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                    lin_coeff = calib_path+"lin_coeffs_ifs_fast1.0_cd5.fits"
+                    SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
+                    if True in np.isnan(SIG_map_scaled):
+                        print('nans in sig map')
+                        stop
+                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
+                    lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
+                    master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast0p6)
+
                 elif det_config =='20.0 MHz': #slow
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_slow_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
-                    rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                    lin_coeff = calib_path+"lin_coeffs_ifs_slow_cd5.fits"
-                else:
-                    SIG_map_scaled = fits.getdata(calib_path+'readnoise_ifs_fast1.0_cd5.fits')
-                    master_bpm = fits.getdata(calib_path+'bpm_ifs_cd5.fits')
-                    rmat1 = sparse.load_npz(calib_path+'bpmat_ifs.npz')
-                    lin_coeff = calib_path+"lin_coeffs_ifs_fast0.6_cd5.fits"
+                    SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_slow)
+                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_slow)
+                    lin_coeff = calib_path+self.context.lin_coeff_ifs_slow
+                    master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_slow)
+
+                else: #default
+                    SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
+                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
+                    lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
+                    master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast0p6)
 
             input_data = self.action.args.ccddata.data
 
             filename = self.action.args.ccddata.header.get("OFNAME")
+
+
+
             existing_l1_name = scbasic.find_existing_proc_file(
                 input_filename=filename,
                 suffix="_L1",
                 redux_dir=self.config.instrument.output_directory)
 
-            #print(self.config.instrument.output_directory)
 
             if existing_l1_name is not None:
                 l1_path = existing_l1_name
-                #print(l1_path)
             else:
                 l1_path = scbasic.get_l1_path_from_raw(
                     input_filename = filename,
                     output_dir = self.config.instrument.output_directory)
 
-            if os.path.exists(l1_path):
-                self.logger.info(f"Found existing L1 file: {l1_path}")
-                try:
-                    l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
-                    self.action.args.ccddata.data = l1_slope
-                    self.action.args.ccddata.header = l1_header
-                    self.action.args.ccddata.uncertainty = StdDevUncertainty(l1_uncert)
+            if self.context.clobber==False:
+                if os.path.exists(l1_path):
+                    self.logger.info(f"Found existing L1 file: {l1_path}")
+                    try:
+                        l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
+                        self.action.args.ccddata.data = l1_slope
+                        self.action.args.ccddata.header = l1_header
 
-                    self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
-                    return self.action.args
+                        self.action.args.ccddata.uncertainty = StdDevUncertainty(l1_uncert)
 
-                except Exception as e:
-                    self.logger.warning(
-                                f"Existing L1 file could not be used: {l1_path}. "
-                                f"Reason: {e}. Reprocessing from raw file.")
+                        self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
+                        return self.action.args
+
+                    except Exception as e:
+                        self.logger.warning(
+                                    f"Existing L1 file could not be used: {l1_path}. "
+                                    f"Reason: {e}. Reprocessing from raw file.")
 
             #self.logger.info("+++++++++++ odd even column swapping +++++++++++")
             sci_im_full_original1 = scbasic.swap_odd_even_columns(input_data,do_swap=False)
@@ -242,6 +254,10 @@ class RampFit(BasePrimitive):
                     imtype='FLATLAMP')
                 self.action.args.ccddata.header['HISTORY'] = 'Detector Flat correction applied.'
                 self.logger.info("+++++++++++ detector flat correction completed  +++++++++++")
+
+            if self.context.subtract_row_median==True:
+                for ii in range(len(final_ramp)):
+                    final_ramp[ii]-=np.nanmedian(final_ramp[ii])
 
             self.action.args.ccddata.data = final_ramp
             self.action.args.ccddata.uncertainty = StdDevUncertainty(final_uncert.astype(np.float32))

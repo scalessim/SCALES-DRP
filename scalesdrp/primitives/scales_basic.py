@@ -334,8 +334,6 @@ def optimal_extract_with_error(
     sigma_vector = sigma_image.array.flatten().astype(np.float64)
     variance_from_map = sigma_vector**2
     photon_noise_variance = data_vector_d.clip(min=0) / gain
-    total_variance = read_noise_variance_vector + photon_noise_variance
-    #total_variance[total_variance <= 0] = 1e-9
     total_variance = read_noise_variance_vector + photon_noise_variance + variance_from_map
     inverse_variance = 1.0 / total_variance
     weighted_data = data_vector_d * inverse_variance

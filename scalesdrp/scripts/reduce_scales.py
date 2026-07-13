@@ -277,8 +277,24 @@ def main():
     framework.context.sig_map_img_slow = scales_config.sig_map_img_slow
     framework.context.lin_coeff_img_slow = scales_config.lin_coeff_img_slow
 
-    framework.context.rectmat_xshift = scales_config.rectmat_xshift
-    framework.context.rectmat_yshift = scales_config.rectmat_yshift
+    framework.context.OPT_rmat_LowRes_K = scales_config.OPT_rmat_LowRes_K
+    framework.context.C2_rmat_LowRes_K = scales_config.C2_rmat_LowRes_K
+    framework.context.OPT_rmat_LowRes_L = scales_config.OPT_rmat_LowRes_L
+    framework.context.C2_rmat_LowRes_L = scales_config.C2_rmat_LowRes_L
+    framework.context.OPT_rmat_LowRes_M = scales_config.OPT_rmat_LowRes_M
+    framework.context.C2_rmat_LowRes_M = scales_config.C2_rmat_LowRes_M
+    framework.context.OPT_rmat_LowRes_KLM = scales_config.OPT_rmat_LowRes_KLM
+    framework.context.C2_rmat_LowRes_KLM = scales_config.C2_rmat_LowRes_KLM
+    framework.context.OPT_rmat_LowRes_KL = scales_config.OPT_rmat_LowRes_KLM
+    framework.context.C2_rmat_LowRes_KL = scales_config.C2_rmat_LowRes_KLM
+    framework.context.OPT_rmat_LowRes_Ls = scales_config.OPT_rmat_LowRes_KLM
+    framework.context.C2_rmat_LowRes_Ls = scales_config.C2_rmat_LowRes_KLM
+    framework.context.OPT_rmat_MedRes_K = scales_config.OPT_rmat_MedRes_K
+    framework.context.C2_rmat_MedRes_K = scales_config.C2_rmat_MedRes_K
+    framework.context.OPT_rmat_MedRes_L = scales_config.OPT_rmat_MedRes_L
+    framework.context.C2_rmat_MedRes_L = scales_config.C2_rmat_MedRes_L
+    framework.context.OPT_rmat_MedRes_M = scales_config.OPT_rmat_MedRes_M
+    framework.context.C2_rmat_MedRes_M = scales_config.C2_rmat_MedRes_M
 
     framework.context.subtract_row_median = scales_config.subtract_row_median
 
