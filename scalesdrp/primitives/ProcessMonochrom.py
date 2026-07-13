@@ -1260,9 +1260,13 @@ class ProcessMonochrom(BasePrimitive):
         if scmode == "LowRes-KLM":
             self.lmin = 2.0
             self.lmax = 5.2
+            self.nx = 112
+            self.ny = 112
         if scmode == 'LowRes-K':
             self.lmin = 1.95
             self.lmax = 2.45
+            self.nx = 112
+            self.ny = 112
         if scmode == 'MedRes-K':
             self.lmin = 1.95
             self.lmax = 2.45
@@ -1274,21 +1278,33 @@ class ProcessMonochrom(BasePrimitive):
         if scmode == 'LowRes-L':
             self.lmin = 2.9
             self.lmax = 4.15
+            self.nx = 112
+            self.ny = 112
         if scmode == 'MedRes-L':
             self.lmin = 2.9
             self.lmax = 4.15
+            self.nx = 18
+            self.ny = 17
         if scmode == 'LowRes-M':
             self.lmin = 4.5
             self.lmax = 5.2
+            self.nx = 112
+            self.ny = 112
         if scmode == 'MedRes-M':
             self.lmin = 4.5
             self.lmax = 5.2
+            self.nx = 18
+            self.ny = 17
         if scmode == 'LowRes-KL':
             self.lmin = 2.0
             self.lmax = 4.0
+            self.nx = 112
+            self.ny = 112
         if scmode == 'LowRes-Ls':
             self.lmin = 3.1
             self.lmax = 3.5
+            self.nx = 112
+            self.ny = 112
 
         return
 
