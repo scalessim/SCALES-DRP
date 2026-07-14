@@ -255,9 +255,13 @@ class RampFit(BasePrimitive):
                 self.action.args.ccddata.header['HISTORY'] = 'Detector Flat correction applied.'
                 self.logger.info("+++++++++++ detector flat correction completed  +++++++++++")
 
-            if self.context.subtract_row_median==True:
+            if self.config.instrument.subtract_row_median==True:
                 for ii in range(len(final_ramp)):
                     final_ramp[ii]-=np.nanmedian(final_ramp[ii])
+
+            if self.config.instrument.subtract_col_median==True:
+                for ii in range(len(final_ramp[0])):
+                    final_ramp[:,ii]-=np.nanmedian(final_ramp[:,ii])
 
             if self.config.instrument.subtract_img_readout_channels==True:
                 bounds = 4+510*np.array(range(5))
