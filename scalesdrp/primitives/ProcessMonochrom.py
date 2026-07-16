@@ -763,10 +763,13 @@ class ProcessMonochrom(BasePrimitive):
         return posarr
 
 
-    def fit_gauss_spots(self,calims,posarr,show_plots=False):
+    def fit_gauss_spots(self,calims,posarr,cropsize=10,show_plots=False):
         fitarr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],6])
         fitarr[:,:,:,:] = np.nan
         modims = []
+        spotim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
+        modim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
+        resim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
         for ll in range(len(calims)):
             self.logger.info("image "+str(ll)+" of "+str(len(calims)))
             modim = np.zeros(calims[ll].shape)
@@ -783,6 +786,7 @@ class ProcessMonochrom(BasePrimitive):
                                 cropped = np.zeros(calims[ll,ys:ye,xs:xe].shape)
                                 cropped[:] = calims[ll,ys:ye,xs:xe]
 
+                                spotim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = cropped
                                 initial_guess = Gaussian2D(amplitude=intens, x_mean=(xe-xs)*0.5, y_mean=(ye-ys)*0.5,
                                           x_stddev=1., y_stddev=1.)
 
@@ -791,6 +795,8 @@ class ProcessMonochrom(BasePrimitive):
                                 fitted_model = fitter(initial_guess, x, y, cropped)
 
                                 modim[ys:ye,xs:xe]+=fitted_model(x,y)
+                                modim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = fitted_model(x,y)
+                                resim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = cropped - fitted_model(x,y)
                                 fitarr[ll,lensy,lensx] = [fitted_model.amplitude.value,
                                                           fitted_model.x_mean.value+xs,
                                                           fitted_model.y_mean.value+ys,
@@ -827,7 +833,7 @@ class ProcessMonochrom(BasePrimitive):
             modims.append(modim)
 
         resims = calims-modims
-        return fitarr,modims,resims
+        return fitarr,modims,resims,spotim_arr,modim_arr,resim_arr
 
 
     def interp_gauss_spots(self,lams_in,lams_des,fitarr,show_plots=False,method='poly'):
@@ -1338,6 +1344,7 @@ class ProcessMonochrom(BasePrimitive):
                 ims_cal = self.monochrom_bksub(ims)
                 print(ims_cal.shape)
                 if scmode.split('-')[0] == 'LowRes':
+                    csize = 10
                     self.logger.info("finding spots")
                     spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=90.0,sigma=1.2,medres=False)
                     self.logger.info("tracking spots sequentially")
@@ -1349,10 +1356,11 @@ class ProcessMonochrom(BasePrimitive):
                     avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=False)
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
-                    posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=8)
+                    posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize)
 
 
                 if scmode.split('-')[0] == 'MedRes':
+                    csize=16
                     spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=70.0,sigma=1.2,medres=True,mfilt=self.mfilt)
                     spot_tracks = self.track_sequentially(spots, max_match_distance=13)
                     self.logger.info("removing duplicates and silos")
@@ -1361,12 +1369,32 @@ class ProcessMonochrom(BasePrimitive):
                     avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=True,show_plots=False)
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_medres_lensarr_xy(avgs_new,show_plots=False)
-                    posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=8)
+                    posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=csize)
 
 
                 self.logger.info("fitting spot PSFs for interpolated rectmats")
-                fitarr,modims,resims = self.fit_gauss_spots(ims_cal,posarr,show_plots=False)
+                fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots(ims_cal,posarr,show_plots=False,cropsize=csize)
 
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_gauss_spotpars.fits',np.array(fitarr),overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_gauss_mod_detims.fits',np.array(modims),overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_gauss_res_detims.fits',np.array(resims),overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_cropped_spotpsf_arr.fits',np.array(spotim_arr),
+                                overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_cropped_spotgauss_arr.fits',np.array(modim_arr),
+                                overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_cropped_spotgaussres_arr.fits',np.array(resim_arr),
+                                overwrite=True)
+
+
+
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_calim_stack.fits',ims_cal,overwrite=True)
                 if scmode.split('-')[0] == 'LowRes':
                     lams_interp = lams
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)

@@ -161,7 +161,7 @@ class RampFit(BasePrimitive):
             sci_im_full_original1 = scbasic.swap_odd_even_columns(input_data,do_swap=False)
 
             self.logger.info("refpix and 1/f correction started")
-            sci_im_full_original = reference.reffix_hxrg(sci_im_full_original1, nchans=4)
+            sci_im_full_original = reference.reffix_hxrg(sci_im_full_original1, nchans=4, resid_colsub=False)
             self.action.args.ccddata.header['HISTORY'] = 'Refpix and 1/f correction applied'
             self.logger.info("refpix and 1/f correction completed")
 
