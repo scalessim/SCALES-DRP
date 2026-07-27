@@ -117,8 +117,8 @@ def main():
         scales_config_fullpath = str(get_resource_path(pkg, scales_config_file))
         scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
     else:
-        # scales_config_fullpath = os.path.abspath(args.scales_config_file)
-        scales_config = ConfigClass(args.SCALES_config_file, default_section='SCALES')
+        scales_config_fullpath = os.path.abspath(args.SCALES_config_file)
+        scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
 
 
 
@@ -150,7 +150,7 @@ def main():
     if args.write_config:
         dest = os.path.join(os.getcwd(), 'scales_calib.cfg')
         if os.path.exists(dest):
-            print("Config file scales.cfg already exists in current dir")
+            print("Config file scales_calib.cfg already exists in current dir")
         else:
             scales_config_file = 'configs/scales_calib.cfg'
             scales_config_fullpath = str(get_resource_path(pkg, scales_config_file))
