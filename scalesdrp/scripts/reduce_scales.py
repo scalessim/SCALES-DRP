@@ -156,8 +156,8 @@ def main():
         scales_config_fullpath = str(get_resource_path(pkg, scales_config_file))
         scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
     else:
-        scales_config_fullpath = os.path.abspath(args.scales_config_file)
-        scales_config = ConfigClass(args.SCALES_config_file, default_section='SCALES')
+        scales_config_fullpath = os.path.abspath(args.SCALES_config_file)
+        scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
 
     # END HANDLING OF CONFIGURATION FILES ##########
 
