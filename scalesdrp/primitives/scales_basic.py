@@ -1550,12 +1550,12 @@ def create_scales_wcs(
 
     wave_config_um = {
         "LowRes-K": {"start": 1.95,  "end": 2.45},
-        "LowRes-L":   {"start": 2.9, "end": 4.15},
+        "LowRes-L":   {"start": 2.91157407, "end": 4.13842593},
         "LowRes-M":   {"start": 4.5,  "end": 5.2},
         "LowRes-SED":   {"start": 2.0,  "end": 5.0},
         "LowRes-KL": {"start": 2.0,  "end": 3.7},
         "LowRes-PAH": {"start": 3.1,  "end": 3.5},
-        "MedRes-K":   {"start": 2.0,  "end": 2.4},
+        "MedRes-K":   {"start": 2.02,  "end": 2.38},
         "MedRes-L":   {"start": 2.9,  "end": 4.15},
         "MedRes-M":   {"start": 4.5,  "end": 5.2},
     }

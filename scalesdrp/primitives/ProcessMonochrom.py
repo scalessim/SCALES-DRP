@@ -1,6 +1,8 @@
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 from scalesdrp.core.scales_pkg_resources import get_resource_path
 from scalesdrp.primitives.scales_basic import fits_headers_to_dataframe
+from astropy.stats import sigma_clipped_stats
+from scipy.ndimage import binary_dilation
 #from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
 
 import pandas as pd
@@ -18,7 +20,7 @@ from scipy.ndimage import median_filter, gaussian_filter, shift
 from skimage.feature import peak_local_max
 from scipy.ndimage import gaussian_filter
 from scipy.spatial import KDTree
-from astropy.modeling.functional_models import Gaussian2D
+from astropy.modeling.functional_models import Gaussian2D, Const2D
 from astropy.modeling import fitting
 
 
@@ -81,6 +83,53 @@ class ProcessMonochrom(BasePrimitive):
             bkgs = np.array([medim*meds[x]/np.nanmedian(medim) for x in range(len(meds))])
         ims_sub = ims - bkgs
         return ims_sub
+
+
+    def masked_row_destripe(self,data, sigma_thresh=2.0, dilate_iter=3, n_passes=2):
+        """
+        Remove row-wise (horizontal band) noise from `data` without being biased
+        by compact sources.
+
+        Parameters
+        ----------
+        data : 2D ndarray
+            Input image.
+        sigma_thresh : float
+            Pixels more than this many robust-sigma above the robust median are
+            flagged as "source" pixels and excluded from the row statistic.
+            Lower = more aggressive masking (better for heavily source-filled
+            rows, but risks eating faint background structure).
+        dilate_iter : int
+            Number of binary dilation iterations applied to the source mask, to
+            cover the faint wings of each spot (not just its bright core).
+        n_passes : int
+            Number of times to repeat the mask-and-subtract cycle. A second pass
+            usually cleans up rows where the first-pass mask was incomplete.
+
+        Returns
+        -------
+        corrected : 2D ndarray
+            Destriped image (same shape as `data`).
+        row_baseline : 1D ndarray
+            The per-row offset that was subtracted (length = data.shape[0]).
+        mask : 2D bool ndarray
+            Final source mask used on the last pass.
+        """
+        working = data.copy()
+        row_baseline = np.zeros(data.shape[0])
+        mask = None
+
+        for _ in range(n_passes):
+            mean, med, std = sigma_clipped_stats(working, sigma=3.0, maxiters=5)
+            mask = working > (med + sigma_thresh * std)
+            mask = binary_dilation(mask, iterations=dilate_iter)
+            masked = np.ma.array(working, mask=mask)
+            pass_baseline = np.ma.median(masked, axis=1).filled(0.0)
+            row_baseline += pass_baseline
+            working = data - row_baseline[:, None]
+
+        corrected = data - row_baseline[:, None]
+        return corrected, row_baseline, mask
 
 
 
@@ -719,7 +768,7 @@ class ProcessMonochrom(BasePrimitive):
         return final_posns
 
 
-    def make_posarr(self,ims_cal,final_posns,spot_tracks_u,medres=False,show_plots=False,cropsize=10):
+    def make_posarr(self,ims_cal,final_posns,spot_tracks_u,medres=False,show_plots=False,cropsize=10,cut=0.01):
         maxy = final_posns.shape[0]
         maxx = final_posns.shape[1]
         if medres==False:
@@ -735,6 +784,9 @@ class ProcessMonochrom(BasePrimitive):
 
         posarr = np.zeros([len(ims_cal),sizey,sizex,7])
         posarr[:,:,:,:] = np.nan
+        spotim_arr = np.zeros([len(ims_cal),sizey,sizex,cropsize,cropsize])
+        spotim_arr[:] = np.nan
+
         for i in range(maxy):
             for j in range(maxx):
                 xpos,ypos,lind = final_posns[i,j]
@@ -748,6 +800,11 @@ class ProcessMonochrom(BasePrimitive):
                         ye = np.min([int(y+cropsize/2),len(ims_cal[k])])
                         posarr[k,i+diffy,j+diffx] = [x,xs,xe,y,ys,ye,intens]
 
+                        cropped = np.zeros(ims_cal[k,ys:ye,xs:xe].shape)
+                        cropped[:] = ims_cal[k,ys:ye,xs:xe]
+                        cropped[np.where(cropped<cut*np.max(cropped))] = 0.0
+                        spotim_arr[k,i+diffy,j+diffx,:ye-ys,:xe-xs] = cropped
+
         if show_plots==True:
             f = plt.figure(clear=True)
             if medres==False:
@@ -760,10 +817,643 @@ class ProcessMonochrom(BasePrimitive):
                     for j in range(18):
                         plt.scatter(posarr[:,i,j,0],posarr[:,i,j,3],c=range(len(posarr)))
                 plt.show()
-        return posarr
+        return posarr, spotim_arr
 
 
-    def fit_gauss_spots(self,calims,posarr,cropsize=10,show_plots=False):
+
+    def adaptive_centroid(
+        self,
+        image,
+        x0,
+        y0,
+        box_size=15,
+        min_box_size=5,
+        shrink_factor=0.8,
+        snr_threshold=3.0,
+        bkg_annulus_frac=0.5,
+        max_iter=20,
+        tol=1e-3,
+        subtract_background=True,
+    ):
+        """
+        Compute a sub-pixel centroid via iterative, SNR-thresholded first moments
+        with a shrinking box.
+
+        Parameters
+        ----------
+        image : 2D ndarray
+            Full image (or a large-enough cutout) containing the source.
+        x0, y0 : float
+            Initial guess position (pixel coordinates, x = column, y = row).
+        box_size : int
+            Initial half-width... actually full width of the square box (pixels).
+            Should comfortably contain the PSF/spot on the first iteration.
+        min_box_size : int
+            Smallest allowed box width; iteration stops shrinking below this.
+        shrink_factor : float
+            Multiplicative factor applied to box_size each iteration (0 < f < 1).
+        snr_threshold : float
+            Pixels with (value - local_bkg) / noise < snr_threshold are excluded
+            from the moment calculation.
+        bkg_annulus_frac : float
+            Fraction of the box half-width used to define an annular region
+            (outer ring of the box) for local background/noise estimation.
+            E.g. 0.5 means the outer 50% of the box (by radius) is used.
+        max_iter : int
+            Maximum number of shrink/recenter iterations.
+        tol : float
+            Convergence tolerance on centroid shift (pixels) between iterations.
+        subtract_background : bool
+            If True, subtract the estimated local background before computing
+            the flux-weighted moment (recommended -- otherwise a flat background
+            biases the centroid toward the box center).
+
+        Returns
+        -------
+        xc, yc : float
+            Sub-pixel centroid position.
+        info : dict
+            Diagnostics: 'n_iter', 'converged', 'final_box_size',
+            'n_pixels_used', 'background', 'noise'.
+        """
+        image = np.asarray(image, dtype=float)
+        ny, nx = image.shape
+
+        xc, yc = float(x0), float(y0)
+        box = float(box_size)
+        converged = False
+        n_pixels_used = 0
+        bkg, noise = 0.0, 0.0
+
+        for i in range(max_iter):
+            half = box / 2.0
+
+            # Integer cutout bounds, clipped to image edges
+            x_lo = max(int(np.floor(xc - half)), 0)
+            x_hi = min(int(np.ceil(xc + half)), nx)
+            y_lo = max(int(np.floor(yc - half)), 0)
+            y_hi = min(int(np.ceil(yc + half)), ny)
+
+            if x_hi - x_lo < 2 or y_hi - y_lo < 2:
+                # Box collapsed too far (e.g. near an edge); bail out safely
+                break
+
+            cutout = image[y_lo:y_hi, x_lo:x_hi]
+            yy, xx = np.mgrid[y_lo:y_hi, x_lo:x_hi]
+
+            # --- local background/noise from the outer annulus of the box ---
+            r = np.sqrt((xx - xc) ** 2 + (yy - yc) ** 2)
+            annulus_r_in = half * (1 - bkg_annulus_frac)
+            annulus_mask = r >= annulus_r_in
+
+            if subtract_background and np.any(annulus_mask):
+                bkg = np.median(cutout[annulus_mask])
+                noise = np.std(cutout[annulus_mask])
+            else:
+                bkg = 0.0
+                noise = np.std(cutout) if np.std(cutout) > 0 else 1.0
+            noise = max(noise, 1e-12)  # avoid divide-by-zero
+
+            data = cutout - bkg if subtract_background else cutout
+
+            # --- SNR mask: only keep pixels significantly above the noise ---
+            snr = data / noise
+            mask = snr >= snr_threshold
+
+            if not np.any(mask):
+                # Threshold too aggressive for this iteration; relax once by
+                # falling back to all positive-flux pixels rather than failing.
+                mask = data > 0
+                if not np.any(mask):
+                    break
+
+            weights = np.clip(data, 0, None) * mask
+            total_flux = weights.sum()
+            if total_flux <= 0:
+                break
+
+            x_new = (weights * xx).sum() / total_flux
+            y_new = (weights * yy).sum() / total_flux
+            n_pixels_used = int(mask.sum())
+
+            shift = np.hypot(x_new - xc, y_new - yc)
+            xc, yc = x_new, y_new
+
+            # Shrink the box toward the source, but don't go below min_box_size
+            box = max(box * shrink_factor, min_box_size)
+
+            if shift < tol and box <= min_box_size:
+                converged = True
+                break
+
+        info = {
+            "n_iter": i + 1,
+            "converged": converged,
+            "final_box_size": box,
+            "n_pixels_used": n_pixels_used,
+            "background": bkg,
+            "noise": noise,
+        }
+        return xc, yc, info
+
+
+    def get_centroids(self, spots):
+        centroids = np.zeros([spots.shape[0],spots.shape[1],spots.shape[2],2])
+        centroids[:] = np.nan
+        for ll in range(len(spots)):
+            for yind in range(len(spots[0])):
+                for xind in range(len(spots[1])):
+                    if True not in np.isnan(spots[ll,yind,xind]):
+                        if len(np.unique(spots[ll,yind,xind]))!=1:
+                            xc, yc, info = self.adaptive_centroid(spots[ll,yind,xind], x0=8, y0=8, box_size=16, min_box_size = 3)
+                            #print(f"lam: {ll:.3f}, yind: {yind:.3f}, xind: {xind:.3f}")
+                            #print(f"Recovered centroid: ({xc:.3f}, {yc:.3f})")
+                            #print(f"Info: {info}")
+                            centroids[ll,yind,xind] = [xc,yc]
+        return centroids
+
+
+
+
+    def halfmax_fwhm_x(self, combined, oversamp, nrows_avg=3):
+        """Direct half-max-crossing FWHM in the x direction, in original detector pixels."""
+        def interp_crossing(i0, i1, y0, y1, target):
+            return i0 + (target - y0) * (i1 - i0) / (y1 - y0)
+        peak_flat = np.nanargmax(combined)
+        py, px = np.unravel_index(peak_flat, combined.shape)
+
+        row_lo, row_hi = py - nrows_avg // 2, py + nrows_avg // 2 + 1
+        profile = np.nanmean(combined[row_lo:row_hi, :], axis=0)
+        x = np.arange(len(profile))
+        good = ~np.isnan(profile)
+        x, profile = x[good], profile[good]
+
+        peak_i = np.argmax(profile)
+        base = np.nanmin(profile)
+        half = base + (profile[peak_i] - base) / 2.0
+
+        # walk outward from the peak until the profil/e drops below half max
+        ri = peak_i
+        while ri < len(profile) - 1 and profile[ri] > half:
+            ri += 1
+        li = peak_i
+        while li > 0 and profile[li] > half:
+            li -= 1
+        if profile[ri] > half or profile[li] > half:
+            return np.nan  # never crossed half max within the array
+
+        xr = interp_crossing(ri - 1, ri, profile[ri - 1], profile[ri], half)
+        xl = interp_crossing(li, li + 1, profile[li], profile[li + 1], half)
+
+        fwhm_grid = xr - xl
+        return fwhm_grid / oversamp  # convert grid pixels -> original detector pixels
+
+    def build_oversampled_2(self, ll, spots, centroids, oversamp, ny, nx, npix=16):
+        out_size = (npix + 1) * oversamp + 1
+        xcc = out_size // 2
+        ycc = out_size // 2
+        arr = np.full((ny * nx, out_size, out_size), np.nan)
+        for yind in range(ny):
+            for xind in range(nx):
+                centroid = centroids[ll, yind, xind]
+                if np.any(np.isnan(centroid)):
+                    continue
+                xcen, ycen = centroid
+
+                xpix = np.array(range(len(spots[ll,yind,xind,0])),dtype=int)#[diffx_s:-diffx_e]
+                ypix = np.array(range(len(spots[ll,yind,xind])),dtype=int)#[diffy_s:-diffy_e]
+                xpix_o = xpix*oversamp
+                ypix_o = ypix*oversamp
+                cent_o = centroid*oversamp
+                cs = centroid * oversamp - np.array([xcc,ycc])
+                indsx = np.array(np.round(xpix_o - cs[0]),dtype=int)
+                indsy = np.array(np.round(ypix_o - cs[1]),dtype=int)
+
+                for i in range(len(indsy)):
+                    for j in range(len(indsx)):
+                        if indsy[i] > 0:
+                            if indsx[j] > 0:
+                                if indsy[i] < out_size:
+                                    if indsx[j] < out_size:
+                                        arr[yind * nx + xind, indsy[i], indsx[j]] = spots[ll,yind,xind,ypix[i],xpix[j]]
+        return np.nanmean(arr, axis=0)
+
+
+    def downsample_model_and_residuals_2(self, ll, spots, centroids, combined, oversamp, ny, nx, posarr, npix=16,
+                                         normalize=True, normtype='sum'):
+        """
+        For every valid spot in frame `ll`, sample the oversampled PSF model at that
+        spot's exact subpixel-aligned grid locations (i.e. invert the placement used
+        to build `combined`), giving a npix x npix model cutout directly comparable
+        to the raw spot. Returns per-spot raw cutouts, model cutouts, and residuals.
+
+        normalize=True: least-squares-scale the model to each spot's flux before
+        differencing (accounts for spot-to-spot amplitude variation, e.g. throughput).
+        """
+        out_size = (npix + 1) * oversamp + 1
+        xcc = out_size // 2
+        ycc = out_size // 2
+        arr = np.full((ny * nx, out_size, out_size), np.nan)
+
+        npix_s = len(spots[ll,0,0])
+        raws = np.full((ny, nx, npix_s, npix_s), np.nan)
+        models = np.full((ny, nx, npix_s, npix_s), np.nan)
+        residuals = np.full((ny, nx, npix_s, npix_s), np.nan)
+        scales = np.full((ny, nx), np.nan)
+        modim = np.full((2048,2048),0.0)
+
+        for yind in range(ny):
+            for xind in range(nx):
+                centroid = centroids[ll, yind, xind]
+                if np.any(np.isnan(centroid)):
+                    print(yind,xind,' cent is nan')
+                    continue
+                xcen, ycen = centroid
+
+                xpix = np.array(range(len(spots[ll,yind,xind,0])),dtype=int)
+                ypix = np.array(range(len(spots[ll,yind,xind])),dtype=int)
+                xpix_o = xpix*oversamp
+                ypix_o = ypix*oversamp
+                cent_o = centroid*oversamp
+                cs = centroid * oversamp - np.array([xcc,ycc])
+                indsx = np.array(np.round(xpix_o - cs[0]),dtype=int)
+                indsy = np.array(np.round(ypix_o - cs[1]),dtype=int)
+
+                for i in range(len(indsy)):
+                    for j in range(len(indsx)):
+                        if indsy[i] > 0:
+                            if indsx[j] > 0:
+                                if indsy[i] < out_size:
+                                    if indsx[j] < out_size:
+                                        raws[yind,xind,ypix[i],xpix[j]] = spots[ll,yind,xind,ypix[i],xpix[j]]
+                                        models[yind,xind,ypix[i],xpix[j]] = combined[indsy[i], indsx[j]]
+                if normalize:
+                    #scale = np.nansum(models[yind,xind]*raws[yind,xind]) / np.nansum(models[yind,xind]*models[yind,xind])
+                    if normtype=='sum':scale = np.nansum(raws[yind,xind]) / np.nansum(models[yind,xind])
+                    if normtype=='max':scale = np.nanmax(raws[yind,xind]) / np.nanmax(models[yind,xind])
+                else:
+                    scale = 1.0
+
+                residuals[yind,xind] = raws[yind,xind] - models[yind,xind]*scale
+                scales[yind,xind] = scale
+
+                xc,xs,xe,yc,ys,ye,intens = posarr[ll,yind,xind]
+                xc = int(xc)
+                yc = int(yc)
+                xs = int(xs)
+                xe = int(xe)
+                ys = int(ys)
+                ye = int(ye)
+
+                modtoadd = models[yind,xind,:ye-ys,:xe-xs]
+                modtoadd[np.where(np.isnan(models[yind,xind,:ye-ys,:xe-xs])==True)] = 0.0
+                modim[ys:ye,xs:xe] += modtoadd*scales[yind,xind]
+        return raws, models, residuals, scales, modim
+
+
+    def residual_rms_pct_2(self, raws, residuals):
+        """
+        RMS residual expressed as a percentage of each spot's peak flux.
+        Returns:
+          per_spot_rms_pct : RMS residual / peak * 100, one value per spot (NaN for skipped spots)
+          overall_rms_pct  : RMS over ALL residual pixels from ALL spots, each first
+                              normalized by its own spot's peak (i.e. a single pooled
+                              "typical %" number, not dominated by the brightest spots)
+        """
+        good = ~np.isnan(residuals).any(axis=(2, 3))
+        peaks = np.nanmax(raws, axis=(2, 3))  # per-spot peak flux
+
+        per_spot_rms_pct = np.full((raws.shape[0],raws.shape[1]), np.nan)
+        per_spot_rms_pct[good] = (
+            np.sqrt(np.mean(residuals[good]**2, axis=(1, 2))) / peaks[good] * 100
+        )
+
+        normed_residuals = residuals[good] / peaks[good, None, None]
+        overall_rms_pct = np.sqrt(np.mean(normed_residuals**2)) * 100
+
+        return per_spot_rms_pct, overall_rms_pct
+
+
+    def AnK_spot_model_2(self, spots, centroids, ny, nx, oversamp, ims_cal, posarr):
+        models_all = []
+        models_sym_all = []
+        resids_all = []
+        resids_sym_all = []
+
+        modims_all = []
+        modims_sym_all = []
+
+        for ll in range(len(spots)):
+            combined = self.build_oversampled_2(ll, spots, centroids, oversamp, ny, nx, npix=16)
+            fwhm_x = self.halfmax_fwhm_x(combined, oversamp)
+            print("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
+
+            raws, models, residuals, scales, modim = self.downsample_model_and_residuals_2(ll, spots, centroids, combined, oversamp,
+                                                                                      ny, nx, posarr,npix=16,normtype='sum')
+            good = ~np.isnan(residuals).any(axis=(2,3))
+            rms = np.sqrt(np.nanmean(residuals[good]**2))
+            print("n spots:", good.sum(), "  overall RMS residual:", rms)
+            per_spot_rms_pct, overall_rms_pct = self.residual_rms_pct_2(raws, residuals)
+            print("overall RMS residual (%% of peak, pooled) = %.2f%%" % overall_rms_pct)
+
+            gauss = Gaussian2D(amplitude=1, x_mean=len(combined)/2.0-0.5, y_mean=len(combined)/2.0-0.5,
+                               x_stddev=fwhm_x/2.355*oversamp, y_stddev=fwhm_x/2.355*oversamp,
+                               theta=None, cov_matrix=None)
+            xx,yy=np.meshgrid(range(len(combined)),range(len(combined[0])))
+            filt = gauss(xx,yy)
+            combined2 = combined*filt
+            fwhm_x = self.halfmax_fwhm_x(combined2, oversamp)
+            print("FWHM_x (direct half-max crossing, filtered oversampled image) =", fwhm_x)
+            raws, models_sym, residuals_sym, scales_sym, modim_sym = self.downsample_model_and_residuals_2(ll, spots, centroids, combined2, oversamp,
+                                                                                              ny, nx, posarr,npix=16,normtype='max')
+            good = ~np.isnan(residuals_sym).any(axis=(2,3))
+            rms = np.sqrt(np.nanmean(residuals_sym[good]**2))
+            print("n spots:", good.sum(), "  overall RMS residual (filtered):", rms)
+            per_spot_rms_pct_sym, overall_rms_pct_sym = self.residual_rms_pct_2(raws, residuals_sym)
+            print("overall RMS residual (%% of peak, pooled, filtered) = %.2f%%" % overall_rms_pct_sym)
+
+
+            yind=10
+            xind=8
+            xc,xs,xe,yc,ys,ye,intens = posarr[ll,yind,xind]
+            xc = int(xc)
+            yc = int(yc)
+            xs = int(xs)
+            xe = int(xe)
+            ys = int(ys)
+            ye = int(ye)
+
+            """
+            f = plt.figure(figsize=(12,4))
+            f.suptitle('y = '+str(yc)+' x = '+str(xc))
+            f.add_subplot(131)
+            plt.imshow(raws[yind,xind])
+            plt.colorbar()
+            f.add_subplot(132)
+            plt.imshow(models[yind,xind]*scales[yind,xind])
+            plt.colorbar()
+            f.add_subplot(133)
+            plt.imshow(residuals[yind,xind])
+            plt.colorbar()
+            plt.show()
+            """
+
+            models_all.append(models)
+            models_sym_all.append(models_sym)
+            resids_all.append(residuals)
+            resids_sym_all.append(residuals_sym)
+            modims_all.append(modim)
+            modims_sym_all.append(modim_sym)
+
+        models_all = np.array(models_all)
+        resids_all = np.array(resids_all)
+        models_sym_all = np.array(models_sym_all)
+        resids_sym_all = np.array(resids_sym_all)
+
+        modims_all = np.array(modims_all)
+        modims_sym_all = np.array(modims_sym_all)
+        resims_all = ims_cal - np.array(modims_all)
+        resims_sym_all = ims_cal - np.array(modims_sym_all)
+
+        return models_all, resids_all, modims_all, resims_all, models_sym_all, resids_sym_all, modims_sym_all, resims_sym_all
+
+
+    def AnK_spot_model(self, spots, posarr, centroids, nx, ny, oversamp, npix=13):
+        modims = []
+        resims = []
+        model_arr = np.full([len(spots),ny,nx,npix,npix],np.nan)
+        resid_arr = np.full([len(spots),ny,nx,npix,npix],np.nan)
+        ####need to create proper array of model and residual thumbnails organized like the spot array!!!!
+        for ll in range(len(spots)):
+            combined = self.build_oversampled(ll, centroids, spots, nx, ny, oversamp, npix=npix)
+            #plt.imshow(combined)
+            #plt.colorbar()
+            #plt.show()
+            fwhm_x = self.halfmax_fwhm_x(combined, oversamp)
+            print("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
+            raws, models, residuals, scales, models_stampsize, residuals_stampsize = self.downsample_model_and_residuals(combined, spots, centroids, oversamp, ll, npix=npix)
+            modim = np.zeros([2048,2048])
+            resim = np.zeros([2048,2048])
+            for lensy in range(len(spots[0])):
+                for lensx in range(len(spots[0,0])):
+                    if True not in np.isnan(posarr[ll,lensy,lensx]):
+                        xc,xs,xe,yc,ys,ye,intens = posarr[ll,lensy,lensx]
+                        xc = int(xc)
+                        yc = int(yc)
+                        xs = int(xs)
+                        xe = int(xe)
+                        ys = int(ys)
+                        ye = int(ye)
+                        print(ll,lensy,lensx,ys,ye,xs,xe,models_stampsize.shape)
+                        modim[ys:ye,xs:xe]+=models_stampsize[lensy*self.nx + lensx][:ye-ys,:xe-xs] ##this matches how the spot psf thumbnails are constructed
+                        resim[ys:ye,xs:xe]+=residuals_stampsize[lensy*self.nx + lensx][:ye-ys,:xe-xs] ##this matches how the spot psf thumbnails are constructed
+                        model_arr[ll,lensy,lensx] = models[lensy*self.nx + lensx]
+                        print(models.shape,np.unique(models[lensy*self.nx + lensx]))
+                        resid_arr[ll,lensy,lensx] = residuals[lensy*self.nx + lensx]
+            modims.append(modim)
+            resims.append(resim)
+            good = ~np.isnan(residuals).any(axis=(1,2))
+            rms = np.sqrt(np.nanmean(residuals[good]**2))
+            print("n spots:", good.sum(), "  overall RMS residual:", rms)
+            per_spot_rms_pct, overall_rms_pct = self.residual_rms_pct(raws, residuals)
+            print("overall RMS residual (%% of peak, pooled) = %.2f%%" % overall_rms_pct)
+        return model_arr, resid_arr, np.array(modims), np.array(resims)
+
+
+
+    def fit_gauss_spots_2(self, calims, posarr, show_plots=False, fix_theta=False, cropsize=10):
+        """
+        Modified version of the original fit_gauss_spots.
+
+        Changes from the original:
+          1. Background is now a free parameter in the fit itself
+             (Gaussian2D + Const2D), rather than commented out / pre-subtracted.
+          2. Box edges (xs, xe, ys, ye) are rounded to the nearest integer
+             instead of truncated with int(), removing a systematic sub-pixel
+             bias toward the origin.
+          3. The initial guess for the centroid uses the predicted position
+             (xc, yc) from posarr, expressed relative to the box, instead of
+             assuming the spot sits at the exact geometric center of the box.
+          4. Fit convergence is checked via fitter.fit_info and flagged if
+             the fit did not succeed.
+          5. Optional fix_theta=True fixes the rotation angle at 0, useful if
+             spots are close to circular and theta is poorly constrained.
+          6. 1-sigma parameter uncertainties are now extracted from the fit's
+             covariance matrix and stored alongside each fitted value.
+
+        Returns
+        -------
+        fitarr : ndarray, shape (n_l, n_y, n_x, 14)
+            [amplitude, x_mean(abs), y_mean(abs), x_stddev, y_stddev, theta, background,
+             amplitude_err, x_mean_err, y_mean_err, x_stddev_err, y_stddev_err,
+             theta_err, background_err]
+            Uncertainties are the formal 1-sigma errors from the LM covariance
+            matrix (sqrt of the diagonal). They'll be NaN if the fit didn't
+            converge or the covariance matrix was singular, and 0.0 for theta
+            when fix_theta=True (it's fixed, not fitted). Note these are formal
+            least-squares errors only -- they assume Gaussian noise and don't
+            capture systematics (e.g. the profile-shape mismatch we've been
+            discussing), so treat them as a lower bound on the true uncertainty.
+        modims : list of ndarray
+            Model images (Gaussian component only, background NOT added back in,
+            so these remain directly comparable to the original modims).
+        resims : ndarray
+            calims - modims
+        """
+        fitarr = np.full((posarr.shape[0], posarr.shape[1], posarr.shape[2], 14), np.nan)
+        spotim_arr = np.full([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize],np.nan)
+        modim_arr = np.full([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize],np.nan)
+        resim_arr = np.full([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize],np.nan)
+        modims = []
+
+        for ll in range(len(calims)):
+            print(ll)
+            modim = np.zeros(calims[ll].shape)
+            for lensx in range(posarr.shape[2]):
+                for lensy in range(posarr.shape[1]):
+                    xc, xs, xe, yc, ys, ye, intens = posarr[ll, lensy, lensx]
+                    if True in np.isnan([xs, xe, ys, ye]):
+                        continue
+
+                    # round instead of truncate -> removes systematic sub-pixel
+                    # bias in where the box actually sits
+                    #xs_i = int(np.round(xs))
+                    #xe_i = int(np.round(xe))
+                    #ys_i = int(np.round(ys))
+                    #ye_i = int(np.round(ye))
+
+                    xs_i = int(xs)
+                    xe_i = int(xe)
+                    ys_i = int(ys)
+                    ye_i = int(ye)
+
+                    cropped = calims[ll, ys_i:ye_i, xs_i:xe_i].copy()
+                    if cropped.size == 0:
+                        continue
+                    spotim_arr[ll,lensy,lensx,:ye_i-ys_i,:xe_i-xs_i] = cropped
+
+                    y, x = np.mgrid[:(ye_i - ys_i), :(xe_i - xs_i)]
+
+                    # initial guess: use the predicted center (xc, yc) relative
+                    # to this box, instead of assuming box-center
+                    x0_guess = xc - xs_i
+                    y0_guess = yc - ys_i
+                    bkg_guess = np.median(cropped)
+
+                    gauss_init = Gaussian2D(
+                        amplitude=intens, x_mean=x0_guess, y_mean=y0_guess,
+                        x_stddev=1., y_stddev=1.
+                    )
+                    if fix_theta:
+                        gauss_init.theta.fixed = True
+
+                    const_init = Const2D(amplitude=bkg_guess)
+                    initial_guess = gauss_init + const_init
+
+                    fitter = fitting.LevMarLSQFitter()
+                    fitted_model = fitter(initial_guess, x, y, cropped, maxiter=1000)
+
+                    fit_ok = True
+                    if fitter.fit_info.get('ierr', 1) not in (1, 2, 3, 4):
+                        fit_ok = False
+
+                    gauss_part = fitted_model[0]
+                    bkg_part = fitted_model[1]
+
+                    # --- parameter uncertainties from the fit covariance matrix ---
+                    # param_cov only covers the *free* (non-fixed) parameters, in
+                    # the order they appear in fitted_model.param_names, so build
+                    # the name->error mapping from that subset rather than assuming
+                    # a fixed column layout.
+                    free_names = [name for name in fitted_model.param_names
+                                  if not fitted_model.fixed[name]]
+                    cov = fitter.fit_info.get('param_cov')
+                    if cov is not None and cov.shape[0] == len(free_names):
+                        errs = np.sqrt(np.diag(cov))
+                        err_dict = dict(zip(free_names, errs))
+                    else:
+                        err_dict = {name: np.nan for name in free_names}
+
+                    amp_err = err_dict.get('amplitude_0', np.nan)
+                    xmean_err = err_dict.get('x_mean_0', np.nan)
+                    ymean_err = err_dict.get('y_mean_0', np.nan)
+                    xstd_err = err_dict.get('x_stddev_0', np.nan)
+                    ystd_err = err_dict.get('y_stddev_0', np.nan)
+                    # theta_0 won't be in err_dict at all when fix_theta=True
+                    # (it's fixed, so there's no uncertainty to report -> 0.0)
+                    theta_err = err_dict.get('theta_0', 0.0 if fix_theta else np.nan)
+                    bkg_err = err_dict.get('amplitude_1', np.nan)
+
+                    # store only the Gaussian component in modim, so modims stays
+                    # directly comparable to the original (Gaussian-only) model
+                    modim[ys_i:ye_i, xs_i:xe_i] += gauss_part(x, y)
+
+                    fitarr[ll, lensy, lensx] = [
+                        gauss_part.amplitude.value,
+                        gauss_part.x_mean.value + xs_i,
+                        gauss_part.y_mean.value + ys_i,
+                        gauss_part.x_stddev.value,
+                        gauss_part.y_stddev.value,
+                        gauss_part.theta.value,
+                        bkg_part.amplitude.value,
+                        amp_err,
+                        xmean_err,
+                        ymean_err,
+                        xstd_err,
+                        ystd_err,
+                        theta_err,
+                        bkg_err,
+                    ]
+
+                    modim_arr[ll,lensy,lensx,:ye_i-ys_i,:xe_i-xs_i] = gauss_part(x,y)
+                    resim_arr[ll,lensy,lensx,:ye_i-ys_i,:xe_i-xs_i] = cropped - fitted_model(x,y)
+
+
+                    if not fit_ok:
+                        print(f"  [warn] fit did not converge cleanly at "
+                              f"lensx={lensx}, lensy={lensy}, ll={ll} "
+                              f"(ierr={fitter.fit_info.get('ierr')})")
+
+                    if show_plots:
+                        print("--- Fit Results (value +/- 1-sigma) ---")
+                        print(f"Amplitude: {gauss_part.amplitude.value:.2f} +/- {amp_err:.2f}")
+                        print(f"X Center:  {gauss_part.x_mean.value:.2f} +/- {xmean_err:.2f}")
+                        print(f"Y Center:  {gauss_part.y_mean.value:.2f} +/- {ymean_err:.2f}")
+                        print(f"X Sigma:   {gauss_part.x_stddev.value:.2f} +/- {xstd_err:.2f}")
+                        print(f"Y Sigma:   {gauss_part.y_stddev.value:.2f} +/- {ystd_err:.2f}")
+                        print(f"Theta:     {gauss_part.theta.value:.2f} +/- {theta_err:.2f} rad")
+                        print(f"Background:{bkg_part.amplitude.value:.4f} +/- {bkg_err:.4f}")
+
+                        full_model = fitted_model(x, y)
+                        plt.figure(figsize=(12, 4), clear=True)
+                        plt.subplot(1, 3, 1)
+                        plt.title("Original Data")
+                        plt.imshow(cropped, origin='lower', cmap='viridis')
+                        plt.colorbar()
+
+                        plt.subplot(1, 3, 2)
+                        plt.title("Fitted Model (Gaussian + bkg)")
+                        plt.imshow(full_model, origin='lower', cmap='viridis')
+                        plt.colorbar()
+
+                        plt.subplot(1, 3, 3)
+                        plt.title("Residuals (Data - Model)")
+                        plt.imshow(cropped - full_model, origin='lower', cmap='bwr')
+                        plt.colorbar()
+                        plt.tight_layout()
+                        plt.show()
+
+            modims.append(modim)
+
+        resims = calims - np.array(modims)
+        return fitarr,modims,resims,spotim_arr,modim_arr,resim_arr
+
+
+
+
+
+
+    def fit_gauss_spots(self,calims,posarr,cropsize=10,show_plots=False,cut=0.1):
         fitarr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],6])
         fitarr[:,:,:,:] = np.nan
         modims = []
@@ -785,7 +1475,7 @@ class ProcessMonochrom(BasePrimitive):
                                 ye = int(ye)
                                 cropped = np.zeros(calims[ll,ys:ye,xs:xe].shape)
                                 cropped[:] = calims[ll,ys:ye,xs:xe]
-
+                                cropped[np.where(cropped<cut*np.max(cropped))] = 0.0
                                 spotim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = cropped
                                 initial_guess = Gaussian2D(amplitude=intens, x_mean=(xe-xs)*0.5, y_mean=(ye-ys)*0.5,
                                           x_stddev=1., y_stddev=1.)
@@ -803,6 +1493,11 @@ class ProcessMonochrom(BasePrimitive):
                                                           fitted_model.x_stddev.value,
                                                           fitted_model.y_stddev.value,
                                                           fitted_model.theta.value]
+
+                                #print(ll,lensy,lensx)
+                                #print(fitted_model.x_mean.value,fitted_model.y_mean.value)
+                                if True in np.isnan(fitarr[ll,lensy,lensx]):
+                                    print('nans in '+str(ll)+' '+str(lensy)+' '+str(lensx))
                                 if show_plots==True:
                                     print("--- Fit Results ---")
                                     print(f"Amplitude: {fitted_model.amplitude.value:.2f}")
@@ -841,11 +1536,14 @@ class ProcessMonochrom(BasePrimitive):
         interp_arr[:,:,:,:] = np.nan
         for lensy in range(fitarr.shape[1]):
             for lensx in range(fitarr.shape[2]):
-                gausspars = fitarr[:,lensy,lensx]#A,xm,ym,xstd,ystd,theta
-                if False in np.isnan(gausspars):
+                gausspars = fitarr[:,lensy,lensx,:6]#A,xm,ym,xstd,ystd,theta
+                #if False in np.isnan(gausspars):
+                if len(np.where(np.isnan(gausspars[:,0])==False)[0]) > 0.9*len(lams_in):
+                #if True not in np.isnan(gausspars):
                     for i in range(len(gausspars[0])):
                         #fint = LinearNDInterpolator(lams_in,gausspars[:,i])
                         tofit = gausspars[:,i]
+                        print(lensy,lensx,tofit)
                         lamsfit = lams_in[np.where(np.isnan(tofit)==False)]
                         tofit = tofit[np.where(np.isnan(tofit)==False)]
                         if method=='poly':
@@ -854,6 +1552,8 @@ class ProcessMonochrom(BasePrimitive):
                         if method=='interp':
                             fint = interp1d(lamsfit,tofit)
                         gausspars_new = fint(lams_des)
+                        print(gausspars_new)
+                        print('==========================================')
                         if show_plots==True:
                             f = plt.figure(clear=True)
                             plt.scatter(lams_des,gausspars_new)
@@ -893,21 +1593,28 @@ class ProcessMonochrom(BasePrimitive):
             y_stddev=gauss_pars[4]
             theta=gauss_pars[5]
 
-            fitted_model = Gaussian2D(amplitude=gauss_pars[0],
-                             x_mean=gauss_pars[1],
-                             y_mean=gauss_pars[2],
-                             x_stddev=gauss_pars[3],
-                             y_stddev=gauss_pars[4],
-                             theta=gauss_pars[5])
+            if self.scmode[:6]=='MedRes':
+                if self.config.instrument.medres_force_ysigma==True:
+                    y_stddev=gauss_pars[3]
+
+            fitted_model = Gaussian2D(amplitude=amplitude,
+                             x_mean=x_mean,
+                             y_mean=y_mean,
+                             x_stddev=x_stddev,
+                             y_stddev=y_stddev,
+                             theta=theta)
+
+
+            cropsize2 = np.min([np.max([5*y_stddev,5*x_stddev]),3*cropsize])
 
             #ys = int(y_mean-3*y_stddev)
             #ye = int(y_mean+3*y_stddev)
             #xs = int(x_mean-3*x_stddev)
             #xe = int(x_mean+3*x_stddev)
-            ys = int(y_mean-cropsize/2)
-            ye = int(y_mean+cropsize/2)
-            xs = int(x_mean-cropsize/2)
-            xe = int(x_mean+cropsize/2)
+            ys = int(np.round(y_mean-cropsize2/2))
+            ye = int(np.round(y_mean+cropsize2/2))
+            xs = int(np.round(x_mean-cropsize2/2))
+            xe = int(np.round(x_mean+cropsize2/2))
 
             if ys<0: ys=0
             if ye>2047:ye=2047
@@ -930,7 +1637,7 @@ class ProcessMonochrom(BasePrimitive):
             y, x = np.mgrid[ys:ye,xs:xe]
             modspot = fitted_model(x,y)
 
-            modspot[np.where(modspot < cut*np.max(modspot))]=0
+            #modspot[np.where(modspot < cut*np.max(modspot))]=0
             modspot/=np.sum(modspot)
 
             vals = np.array([modspot[yind,xind] for xind in range(0,xe-xs) for yind in range(0,ye-ys)])
@@ -941,6 +1648,70 @@ class ProcessMonochrom(BasePrimitive):
                 vals[np.where(vals!=0)] = 1.0
             flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
         return flatinds,vals
+
+    def gen_imgs_gaussfit(self,interp_arr,cut=0.05,cropsize=8):
+        """
+        Function to take gaussian spots and turn them into weights for a sparse
+        extraction matrix.
+        """
+
+        ims = []
+        for ll in range(len(interp_arr)):
+            print('doing wavelength slice '+str(ll))
+            imslice = np.zeros([2048,2048])
+            for yy in range(len(interp_arr[0])):
+                for xx in range(len(interp_arr[0,0])):
+                    gauss_pars = interp_arr[ll,yy,xx]
+                    if True not in np.isnan(gauss_pars):
+                        amplitude=gauss_pars[0]
+                        x_mean=gauss_pars[1]
+                        y_mean=gauss_pars[2]
+                        x_stddev=gauss_pars[3]
+                        y_stddev=gauss_pars[4]
+                        theta=gauss_pars[5]
+
+                        fitted_model = Gaussian2D(amplitude=gauss_pars[0],
+                                         x_mean=gauss_pars[1],
+                                         y_mean=gauss_pars[2],
+                                         x_stddev=gauss_pars[3],
+                                         y_stddev=gauss_pars[4],
+                                         theta=gauss_pars[5])
+
+                        #ys = int(y_mean-3*y_stddev)
+                        #ye = int(y_mean+3*y_stddev)
+                        #xs = int(x_mean-3*x_stddev)
+                        #xe = int(x_mean+3*x_stddev)
+                        ys = int(y_mean-cropsize/2)
+                        ye = int(y_mean+cropsize/2)
+                        xs = int(x_mean-cropsize/2)
+                        xe = int(x_mean+cropsize/2)
+
+                        if ys<0: ys=0
+                        if ye>2047:ye=2047
+                        if xs<0: xs=0
+                        if xe>2047: xe=2047
+
+                        if xe < 0:
+                            continue
+                        if ye < 0:
+                            continue
+                        if xs > 2047:
+                            continue
+                        if ys > 2047:
+                            continue
+                        if ye-ys <= 0:
+                            continue
+                        if xe-xs <= 0:
+                            continue
+
+                        y, x = np.mgrid[ys:ye,xs:xe]
+                        modspot = fitted_model(x,y)
+                        modspot[np.where(modspot < cut*np.max(modspot))]=0
+
+                        imslice[ys:ye,xs:xe]+=modspot
+            ims.append(imslice)
+
+        return np.array(ims)
 
     def crop_sparse_vals(self,image,xs,xe,ys,ye,cut=0.05,method='optimal'):
         """
@@ -974,8 +1745,8 @@ class ProcessMonochrom(BasePrimitive):
         for ll in range(len(interp_arr)):
             for lensx in range(interp_arr.shape[2]):
                 for lensy in range(interp_arr.shape[1]):
-                    if True not in np.isnan(interp_arr[ll,lensy,lensx]):
-                        flatinds,vals = self.crop_interpd_sparse_vals(interp_arr[ll,lensy,lensx],cut=cut,method=method)
+                    if True not in np.isnan(interp_arr[ll,lensy,lensx,:6]):
+                        flatinds,vals = self.crop_interpd_sparse_vals(interp_arr[ll,lensy,lensx,:6],cut=cut,method=method)
                         for i in range(len(vals)):
                             if vals[i] > 0:
                                 matvals.append(vals[i])
@@ -1079,8 +1850,8 @@ class ProcessMonochrom(BasePrimitive):
         for ll in range(len(interp_arr)):
             for lensx in range(interp_arr.shape[2]):
                 for lensy in range(interp_arr.shape[1]):
-                    if True not in np.isnan(interp_arr[ll,lensy,lensx]):
-                        flatinds,vals = self.crop_interpd_sparse_vals(interp_arr[ll,lensy,lensx],cut=cut,method='optimal')
+                    if True not in np.isnan(interp_arr[ll,lensy,lensx,:6]):
+                        flatinds,vals = self.crop_interpd_sparse_vals(interp_arr[ll,lensy,lensx,:6],cut=cut,method='optimal')
                         for i in range(len(vals)):
                             if vals[i] > 0:
                                 matvals.append(vals[i])
@@ -1318,14 +2089,30 @@ class ProcessMonochrom(BasePrimitive):
         lsfcube = []
         lensflatcube = []
         for ii in range(len(ims_cal)):
-            scube = np.array(rmat*ims_cal[ii].reshape([2048*2048,1])).reshape([len(lams),ny,nx])
-            scube_lsf = scube/np.max(scube,axis=0)
-            lflat = np.max(scube,axis=0)
+            scube = np.array(rmat*ims_cal[ii].flatten()).reshape([len(lams),ny,nx])
+            scube_lsf = scube
+            #lflat = np.max(scube,axis=0)
+            lflat = scube[ii]
             lsfcube.append(scube_lsf)
-            lensflatcube.append(lflat/np.median(lflat))
-        lensflat = np.median(lflat,axis=0)
+            lensflatcube.append(lflat)
+        lensflat = np.median(lensflatcube,axis=0)
         return np.array(lsfcube),np.array(lensflat)
 
+    def make_lsf_lflat_interpd(self,rmat,interp_arr,lams,ny,nx,cut=0.1,cropsize=8):
+        lsfcube = []
+        lensflatcube = []
+        imgs = np.array(self.gen_imgs_gaussfit(interp_arr,cut=cut,cropsize=cropsize))
+        for ii in range(len(imgs)):
+            print('scube '+str(ii)+' of '+str(len(imgs)))
+            print(rmat.shape)
+            print(imgs[ii].shape)
+            scube = np.array(rmat*imgs[ii].flatten()).reshape([len(lams),ny,nx])
+            #scube_lsf = scube/np.max(scube,axis=0)
+            lflat = scube[ii]
+            lsfcube.append(scube)
+            lensflatcube.append(lflat)
+        lensflat = np.median(lensflatcube,axis=0)
+        return np.array(lsfcube),np.array(lensflat)
 
 
 
@@ -1338,13 +2125,20 @@ class ProcessMonochrom(BasePrimitive):
         for scmode in ['LowRes-KLM','LowRes-K','LowRes-L',
                        'LowRes-M','LowRes-KL','LowRes-Ls',
                        'MedRes-K','MedRes-L','MedRes-M']:
+            self.scmode=scmode
+            self.logger.info("Parsing files for "+str(self.scmode))
             ims, lams = self.parse_files(df,scmode)
             if len(ims) > 0:
                 self.set_lamlimits(scmode)
-                ims_cal = self.monochrom_bksub(ims)
+                ims_cal_tmp = self.monochrom_bksub(ims)
+                if self.config.instrument.apply_destripe==True:
+                    ims_cal = np.array([self.masked_row_destripe(im)[0] for im in ims_cal_tmp])
+                else:
+                    ims_cal = ims_cal_tmp
+                self.logger.info("done loading images for "+str(self.scmode))
                 print(ims_cal.shape)
                 if scmode.split('-')[0] == 'LowRes':
-                    csize = 10
+                    csize = 8
                     self.logger.info("finding spots")
                     spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=90.0,sigma=1.2,medres=False)
                     self.logger.info("tracking spots sequentially")
@@ -1356,7 +2150,13 @@ class ProcessMonochrom(BasePrimitive):
                     avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=False)
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
-                    posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize)
+                    fluxcut = self.config.instrument.rectmat_fluxcut
+                    posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
+                    pyfits.writeto(self.redux_dir+'/'+
+                                    scmode+'_posarr.fits',np.array(posarr),overwrite=True)
+                    pyfits.writeto(self.redux_dir+'/'+
+                                    scmode+'_cropped_spotpsf_arr.fits',np.array(spots),
+                                    overwrite=True)
 
 
                 if scmode.split('-')[0] == 'MedRes':
@@ -1369,21 +2169,49 @@ class ProcessMonochrom(BasePrimitive):
                     avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=True,show_plots=False)
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_medres_lensarr_xy(avgs_new,show_plots=False)
-                    posarr = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=csize)
+                    fluxcut = self.config.instrument.rectmat_fluxcut
+                    posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=csize,cut=fluxcut)
+                    pyfits.writeto(self.redux_dir+'/'+
+                                    scmode+'_posarr.fits',np.array(posarr),overwrite=True)
+                    pyfits.writeto(self.redux_dir+'/'+
+                                    scmode+'_cropped_spotpsf_arr.fits',np.array(spots),
+                                    overwrite=True)
 
 
+
+
+
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_calim_stack.fits',ims_cal,overwrite=True)
+                centroids = self.get_centroids(spots)
+                #ank_mods, ank_resids, ank_modims, ank_resims = self.AnK_spot_model(spots, posarr, centroids, self.nx, self.ny, 3, npix=13)
+
+                oversamp=2
+                ank_mods, ank_resids, ank_modims, ank_resims, ank_mods_sym, ank_resids_sym, ank_modims_sym, ank_resims_sym = self.AnK_spot_model_2(spots, centroids, self.ny, self.nx, oversamp, ims_cal, posarr)
+
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_ank_modarr.fits',np.array(ank_mods),
+                                overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_ank_resarr.fits',np.array(ank_resids),
+                                overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_ank_modims.fits',np.array(ank_modims),
+                                overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_ank_resims.fits',np.array(ank_resims),
+                                overwrite=True)
+
+
+                stop
                 self.logger.info("fitting spot PSFs for interpolated rectmats")
-                fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots(ims_cal,posarr,show_plots=False,cropsize=csize)
-
+                fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots(ims_cal,posarr,show_plots=False,cropsize=csize,cut=fluxcut)
                 pyfits.writeto(self.redux_dir+'/'+
                                 scmode+'_gauss_spotpars.fits',np.array(fitarr),overwrite=True)
                 pyfits.writeto(self.redux_dir+'/'+
                                 scmode+'_gauss_mod_detims.fits',np.array(modims),overwrite=True)
                 pyfits.writeto(self.redux_dir+'/'+
                                 scmode+'_gauss_res_detims.fits',np.array(resims),overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
-                                scmode+'_cropped_spotpsf_arr.fits',np.array(spotim_arr),
-                                overwrite=True)
                 pyfits.writeto(self.redux_dir+'/'+
                                 scmode+'_cropped_spotgauss_arr.fits',np.array(modim_arr),
                                 overwrite=True)
@@ -1392,31 +2220,33 @@ class ProcessMonochrom(BasePrimitive):
                                 overwrite=True)
 
 
-
-                pyfits.writeto(self.redux_dir+'/'+
-                                scmode+'_calim_stack.fits',ims_cal,overwrite=True)
                 if scmode.split('-')[0] == 'LowRes':
-                    lams_interp = lams
+                    #lams_interp = lams
+                    lams_interp = np.linspace(np.min(lams),np.max(lams),27)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
                 if scmode.split('-')[0] == 'MedRes' and scmode!='MedRes-K':
-                    lams_interp = np.linspace(self.lmin,self.lmax,1900)
+                    lams_interp = np.linspace(self.lmin,self.lmax,600)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
                 if scmode == 'MedRes-K':
-                    lams_interp = np.linspace(self.lmin_i,self.lmax_i,1900)
+                    lams_interp = np.linspace(self.lmin_i,self.lmax_i,600)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
 
+                print(len(np.where(np.isnan(interp_arr)==False)[0]))
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_gauss_spotpars_interpd.fits',np.array(interp_arr),
+                                overwrite=True)
                 self.logger.info("making chi2 rectmat")
-                C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=0.01)
+                C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=fluxcut)
                 self.logger.info("making interpolated chi2 rectmat")
-                C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=0.01)
+                C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=fluxcut)
                 self.logger.info("making interpolated optimal rectmat")
-                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=0.01,method='optimal')
+                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=fluxcut,method='optimal')
                 self.logger.info("making interpolated optimal lsf and lflat")
-                OPT_lsf_interpd,OPT_lflat_interpd = self.make_lsf_lflat(
-                                                OPT_rmat_interpd,ims_cal,lams_interp,
-                                                self.ny,self.nx)
+                OPT_lsf_interpd,OPT_lflat_interpd = self.make_lsf_lflat_interpd(
+                                                OPT_rmat_interpd,interp_arr,lams_interp,
+                                                self.ny,self.nx,cut=fluxcut,cropsize=csize)
                 self.logger.info("making optimal rectmat")
-                OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=0.01,method='optimal')
+                OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=fluxcut,method='optimal')
                 self.logger.info("making optimal lsf and lflat")
                 OPT_lsf,OPT_lflat = self.make_lsf_lflat(OPT_rmat,ims_cal,lams,
                                                 self.ny,self.nx)
@@ -1430,9 +2260,9 @@ class ProcessMonochrom(BasePrimitive):
                     interp_shift_arr[:,:,:,2]+=self.context.rectmat_yshift
 
                     self.logger.info("making interpolated shifted optimal rectmat")
-                    OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01,method='optimal')
+                    OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=fluxcut,method='optimal')
                     self.logger.info("making interpolated shifted chi2 rectmat")
-                    C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=0.01)
+                    C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=fluxcut)
                     sparse.save_npz(self.redux_dir+'/'+
                                     scmode+'_C2_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
                                     '_dy'+str(self.context.rectmat_yshift)+
@@ -1464,7 +2294,7 @@ class ProcessMonochrom(BasePrimitive):
                                 scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd)
                 pyfits.writeto(self.redux_dir+'/'+scmode+'_lams.fits',
                     lams,overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+scmode+'_intp_lams',
+                pyfits.writeto(self.redux_dir+'/'+scmode+'_intp_lams.fits',
                     lams_interp,overwrite=True)
 
 
