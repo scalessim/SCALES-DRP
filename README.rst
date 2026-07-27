@@ -159,5 +159,4 @@ and advanced usage, can be found on the SCALES Read the Docs page.
 Acknowledgement
 .....................
 
-If you use SCALES-DRP for your research, please cite 
-[Unni et al. 2025.](https://doi.org/10.1117/12.3064542)
+If you use SCALES-DRP for your research, please cite ## [Unni et al. 2025.](https://doi.org/10.1117/12.3064542)
