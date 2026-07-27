@@ -143,7 +143,7 @@ To process a specific list of files
 
     start_scales_reduce -l list.txt
 
-The science-grad module creates the following directories:
+The science-grade module creates the following directories:
 
 - ``redux/`` — calibration reduction outputs
 - ``log/`` — detailed log files
