@@ -1172,7 +1172,7 @@ class ProcessMonochrom(BasePrimitive):
             per_spot_rms_pct_sym, overall_rms_pct_sym = self.residual_rms_pct_2(raws, residuals_sym)
             print("overall RMS residual (%% of peak, pooled, filtered) = %.2f%%" % overall_rms_pct_sym)
 
-
+            """
             yind=10
             xind=8
             xc,xs,xe,yc,ys,ye,intens = posarr[ll,yind,xind]
@@ -1183,7 +1183,6 @@ class ProcessMonochrom(BasePrimitive):
             ys = int(ys)
             ye = int(ye)
 
-            """
             f = plt.figure(figsize=(12,4))
             f.suptitle('y = '+str(yc)+' x = '+str(xc))
             f.add_subplot(131)
@@ -2135,6 +2134,8 @@ class ProcessMonochrom(BasePrimitive):
                     ims_cal = np.array([self.masked_row_destripe(im)[0] for im in ims_cal_tmp])
                 else:
                     ims_cal = ims_cal_tmp
+                pyfits.writeto(self.redux_dir+'/'+
+                scmode+'_calim_stack.fits',ims_cal,overwrite=True)
                 self.logger.info("done loading images for "+str(self.scmode))
                 print(ims_cal.shape)
                 if scmode.split('-')[0] == 'LowRes':
@@ -2178,11 +2179,6 @@ class ProcessMonochrom(BasePrimitive):
                                     overwrite=True)
 
 
-
-
-
-                pyfits.writeto(self.redux_dir+'/'+
-                                scmode+'_calim_stack.fits',ims_cal,overwrite=True)
                 centroids = self.get_centroids(spots)
                 #ank_mods, ank_resids, ank_modims, ank_resims = self.AnK_spot_model(spots, posarr, centroids, self.nx, self.ny, 3, npix=13)
 
@@ -2201,9 +2197,7 @@ class ProcessMonochrom(BasePrimitive):
                 pyfits.writeto(self.redux_dir+'/'+
                                 scmode+'_ank_resims.fits',np.array(ank_resims),
                                 overwrite=True)
-
-
-                stop
+                #stop
                 self.logger.info("fitting spot PSFs for interpolated rectmats")
                 fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots(ims_cal,posarr,show_plots=False,cropsize=csize,cut=fluxcut)
                 pyfits.writeto(self.redux_dir+'/'+

@@ -75,6 +75,7 @@ class StartCalib(BasePrimitive):
     def _perform(self):
         self.logger.info("+++++++++++ SCALES calibration starting +++++++++++")
         dt = self.context.data_set.data_table
+
         all_groups = scbasic.group_files_by_header(dt)
         if not all_groups:
             self.logger.warning("No file groups found. Nothing to process.")
