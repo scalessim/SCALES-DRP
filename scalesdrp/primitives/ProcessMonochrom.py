@@ -55,8 +55,8 @@ class ProcessMonochrom(BasePrimitive):
             flat = pyfits.getdata(calib_path+self.context.flat_ifs_fast0p6)
         elif det_config =='5.0 MHz': #fast1.0
             flat = pyfits.getdata(calib_path+self.context.flat_ifs_fast1)
-        elif det_config =='5.0 MHz': #fast1.0
-            flat = pyfits.getdata(calib_path+self.context.flat_ifs_fast1)
+        elif det_config =='20.0 MHz': #slow
+            flat = pyfits.getdata(calib_path+self.context.flat_ifs_slow)
 
         lams = df2['MONOWAVE']
         names = df2['filename'][np.argsort(lams)]
@@ -66,7 +66,8 @@ class ProcessMonochrom(BasePrimitive):
         for name in names:
             image = pyfits.getdata(self.redux_dir+'/'+name,memmap=False)
             if True in np.isnan(image): print('nan in image')
-            ims.append(image/flat)
+            ims.append(image)
+            #ims.append(image/flat)
             #ims.append(pyfits.getdata(self.redux_dir+'/'+name))
             #ims.append(pyfits.getdata(self.redux_dir+'/'+name)/flat)
         ims = np.array(ims)
@@ -2180,6 +2181,13 @@ class ProcessMonochrom(BasePrimitive):
 
 
                 centroids = self.get_centroids(spots)
+                pyfits.writeto(self.redux_dir+'/'+
+                                scmode+'_centroids.fits',np.array(centroids),
+                                overwrite=True)
+                pyfits.writeto(self.redux_dir+'/'+scmode+'_lams.fits',
+                                    lams,overwrite=True)
+                #stop
+                
                 #ank_mods, ank_resids, ank_modims, ank_resims = self.AnK_spot_model(spots, posarr, centroids, self.nx, self.ny, 3, npix=13)
 
                 oversamp=2
@@ -2286,10 +2294,9 @@ class ProcessMonochrom(BasePrimitive):
                                 scmode+'_C2_rectmat.npz',C2_rmat)
                 sparse.save_npz(self.redux_dir+'/'+
                                 scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd)
-                pyfits.writeto(self.redux_dir+'/'+scmode+'_lams.fits',
-                    lams,overwrite=True)
                 pyfits.writeto(self.redux_dir+'/'+scmode+'_intp_lams.fits',
                     lams_interp,overwrite=True)
+                
 
 
             log_string = ProcessMonochrom.__module__
