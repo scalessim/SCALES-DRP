@@ -2,10 +2,10 @@ from keckdrpframework.primitives.base_primitive import BasePrimitive
 import scalesdrp.primitives.fitramp as fitramp
 import scalesdrp.primitives.robust as robust
 import scalesdrp.primitives.reference as reference #1/f and reference pixel correction
-import scalesdrp.primitives.linearity as linearity #linearity correction
+import scalesdrp.primitives.linearity_correct as linearity_correct #linearity correction
 import scalesdrp.primitives.bpm_correction as bpm #bpm correction
+import scalesdrp.primitives.saturation_correct as saturation_correct
 from scalesdrp.primitives.scales_file_primitives import fits_writer_calib
-from scalesdrp.primitives.linearity import DQ_FLAGS
 from scalesdrp.core.scales_proctab import Proctab
 from scalesdrp.core.scales_pkg_resources import get_resource_path
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
@@ -187,6 +187,8 @@ class StartCalib(BasePrimitive):
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast1)
                             lin_coeff = calib_path+self.context.lin_coeff_img_fast1
                             master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast1)
+                            with fits.open(calib_path+self.context.sat_map_img_fast1) as hdul:
+                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
                         elif det_config =='9.0 MHz': #fast0.6
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
@@ -194,18 +196,24 @@ class StartCalib(BasePrimitive):
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
                             lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
                             master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast0p6)
+                            with fits.open(calib_path+self.context.sat_map_img_fast0p6) as hdul:
+                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
                         elif det_config =='20.0 MHz': #slow
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_slow)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_slow)
                             lin_coeff = calib_path+self.context.lin_coeff_img_slow
                             master_bpm = fits.getdata(calib_path+self.context.bpm_img_slow)
+                            with fits.open(calib_path+self.context.sat_map_img_slow) as hdul:
+                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
                         else: #default if MCLCOCK is not one of those specified above
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
                             lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
                             master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast0p6)
+                            with fits.open(calib_path+self.context.sat_map_img_fast0p6) as hdul:
+                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
                     elif obsmode =='IFS':
                         if det_config =='5.0 MHz':  #fast1.0
@@ -213,6 +221,8 @@ class StartCalib(BasePrimitive):
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast1)
                             lin_coeff = calib_path+self.context.lin_coeff_ifs_fast1
                             master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast1)
+                            with fits.open(calib_path+self.context.sat_map_ifs_fast1) as hdul:
+                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
                         elif det_config =='9.0 MHz': #fast1.0
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
@@ -222,18 +232,24 @@ class StartCalib(BasePrimitive):
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
                             lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
                             master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast0p6)
+                            with fits.open(calib_path+self.context.sat_map_ifs_fast0p6) as hdul:
+                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
                         elif det_config =='20.0 MHz': #slow
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_slow)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_slow)
                             lin_coeff = calib_path+self.context.lin_coeff_ifs_slow
                             master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_slow)
+                            with fits.open(calib_path+self.context.sat_map_ifs_slow) as hdul:
+                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
                         else: #default
                             SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
                             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
                             lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
                             master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast0p6)
+                            with fits.open(calib_path+self.context.sat_map_ifs_fast0p6) as hdul:
+                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
                     #self.logger.info("+++++++++++ odd even swapping +++++++++++")
                     sci_im_full_original2 = scbasic.swap_odd_even_columns(sci_im_full_original1,do_swap=False)
@@ -259,25 +275,38 @@ class StartCalib(BasePrimitive):
 
                         print('before linearity corr: ',np.unique(np.isnan(sci_im_full_original3)))
 
-                        corrected_cube, lin_dq, lin_mask = linearity.apply_linearity_coeffs_to_cube_safe_fast(
-                            input_cube=sci_im_full_original3,
-                            coeff_file=lin_coeff,
-                            bpm_2d=master_bpm,
-                            invalid_read_behavior="raw",
-                            chunk_size=4096,
-                            return_aux=True)
+                        corrected_cube, pedestal, sat_mask, applied_mask = (
+                            linearity_correct.apply_brandt_linearity_reference(
+                                input_cube=sci_im_full_original3,
+                                coefficient_file=lin_coeff,
+                                n_pedestal_reads=2,
+                                pedestal_start_read=0,
+                                saturation_fraction=0.95,
+                                saturated_read_behavior="raw",
+                                apply_only_successful=False,
+                                return_aux=True,
+                                )
+                            )
 
                         print('after linearity corr: ',np.unique(np.isnan(corrected_cube)))
 
+                        self.logger.info("+++++++++++ Flagging nearest neighbors using saturation map +++++++++++")
+                        quality_map, good_read_mask = saturation_correct.make_ramp_quality_mask(
+                            corrected_cube,
+                            sat_map,
+                            bpm=master_bpm,
+                            neighbor_radius=1,
+                            )
+                        
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                         final_slope,reset,uncert = scbasic.ramp_fit(
                             corrected_cube,
                             #sci_im_full_original3,
                             readtime,
                             SIG_map_scaled,
-                            group_dq = lin_dq) #keep group_dq=lin_dq when linearity is on otherwise None
+                            group_dq = None) #keep group_dq=good_read_mask when linearity is on otherwise None
 
-                        dq_2d = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
+                        #dq_2d = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
 
                     self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
 
@@ -308,7 +337,7 @@ class StartCalib(BasePrimitive):
                         suffix='_L1',
                         overwrite=True,
                         uncert = bpm_slope_uncert,
-                        dq=dq_2d)
+                        dq=None)
 
                     scbasic.proctab_update(
                         header=data_header,

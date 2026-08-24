@@ -166,7 +166,7 @@ class SpectralExtract(BasePrimitive):
                                     f"Existing L2 file could not be used: {l1_path}. "
                                     f"Reason: {e}. Reprocessing from raw file.")
 
-            A_guess_cube,A_guess_cube_err = scbasic.optimal_extract_with_error(
+            A_guess_cube,A_guess_cube_err = scbasic.optimal_extract_horne(
                 R_matrix,
                 data_image,
                 sigma_image)

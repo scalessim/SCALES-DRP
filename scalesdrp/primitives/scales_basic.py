@@ -421,6 +421,205 @@ def optimal_extract_with_error(
 
     return flux_vector, error_vector
 
+
+def optimal_extract_horne(
+    R_matrix,
+    data_image,
+    sigma_image,
+):
+    """
+    Perform Horne-style optimal extraction.
+
+    For each cube voxel k, the extracted flux is
+
+        F_k = sum_i [P_ki * d_i / sigma_i^2]
+              --------------------------------
+              sum_i [P_ki^2 / sigma_i^2]
+
+    where
+        d_i       : detector pixel value
+        sigma_i   : 1-sigma uncertainty of detector pixel i
+        P_ki      : normalized detector profile for cube voxel k
+
+    The formal uncertainty is
+
+        sigma_F,k = 1 / sqrt(
+                        sum_i [P_ki^2 / sigma_i^2]
+                    )
+
+    Assumptions
+    -----------
+    - R_matrix has shape
+          (N_cube_voxels, N_detector_pixels)
+
+    - Each row of R_matrix represents the detector profile P_ki
+      associated with one cube voxel.
+
+    - The profiles are non-negative and appropriately normalized.
+
+    - sigma_image contains the detector-pixel 1-sigma uncertainties
+      from the ramp fitting.
+
+    - Detector-pixel errors are independent.
+
+    Parameters
+    ----------
+    R_matrix : scipy.sparse matrix
+        Rectification/profile matrix with shape
+        (N_cube_voxels, N_detector_pixels).
+
+    data_image : ndarray
+        Two-dimensional detector slope image.
+
+    sigma_image : ndarray or uncertainty object
+        Two-dimensional detector 1-sigma uncertainty image.
+
+    Returns
+    -------
+    flux_vector : ndarray
+        Horne optimally extracted flux for each cube voxel.
+
+    error_vector : ndarray
+        Formal 1-sigma uncertainty for each extracted cube voxel.
+    """
+
+    print("Horne optimal extraction started")
+    start_time = time.time()
+
+    # ------------------------------------------------------------
+    # Flatten detector data
+    # ------------------------------------------------------------
+    data_vector = np.asarray(
+        data_image,
+        dtype=np.float64,
+    ).ravel()
+
+    if hasattr(sigma_image, "array"):
+        sigma_vector = np.asarray(
+            sigma_image.array,
+            dtype=np.float64,
+        ).ravel()
+    else:
+        sigma_vector = np.asarray(
+            sigma_image,
+            dtype=np.float64,
+        ).ravel()
+
+    # ------------------------------------------------------------
+    # Check dimensions
+    # ------------------------------------------------------------
+    if R_matrix.shape[1] != data_vector.size:
+        raise ValueError(
+            f"R_matrix has {R_matrix.shape[1]} detector pixels, "
+            f"but data_image contains {data_vector.size} pixels."
+        )
+
+    if sigma_vector.size != data_vector.size:
+        raise ValueError(
+            "sigma_image and data_image must contain the same "
+            "number of detector pixels."
+        )
+
+    # ------------------------------------------------------------
+    # Construct valid-pixel mask
+    # ------------------------------------------------------------
+    valid = (
+        np.isfinite(data_vector)
+        & np.isfinite(sigma_vector)
+        & (sigma_vector > 0)
+    )
+
+    # Inverse variance:
+    #
+    #     w_i = 1 / sigma_i^2
+    #
+    inv_variance = np.zeros_like(sigma_vector)
+
+    inv_variance[valid] = (
+        1.0 / sigma_vector[valid]**2
+    )
+
+    # Invalid detector data are set to zero. Since their
+    # inverse variance is also zero, they do not contribute.
+    data_safe = np.where(
+        valid,
+        data_vector,
+        0.0,
+    )
+
+    # ------------------------------------------------------------
+    # Horne numerator
+    #
+    #     numerator_k =
+    #         sum_i P_ki d_i / sigma_i^2
+    #
+    # ------------------------------------------------------------
+    weighted_data = data_safe * inv_variance
+
+    numerator = np.asarray(
+        R_matrix @ weighted_data
+    ).ravel()
+
+    # ------------------------------------------------------------
+    # Horne denominator
+    #
+    #     denominator_k =
+    #         sum_i P_ki^2 / sigma_i^2
+    #
+    # ------------------------------------------------------------
+    R_squared = R_matrix.multiply(R_matrix)
+
+    denominator = np.asarray(
+        R_squared @ inv_variance
+    ).ravel()
+
+    # ------------------------------------------------------------
+    # Extracted flux
+    #
+    #     F_k = numerator_k / denominator_k
+    #
+    # ------------------------------------------------------------
+    flux_vector = np.full(
+        denominator.shape,
+        np.nan,
+        dtype=np.float64,
+    )
+
+    good = (
+        np.isfinite(denominator)
+        & (denominator > 0)
+    )
+
+    flux_vector[good] = (
+        numerator[good] / denominator[good]
+    )
+
+    # ------------------------------------------------------------
+    # Formal Horne uncertainty
+    #
+    #     sigma_F,k =
+    #         1 / sqrt(denominator_k)
+    #
+    # ------------------------------------------------------------
+    error_vector = np.full(
+        denominator.shape,
+        np.nan,
+        dtype=np.float64,
+    )
+
+    error_vector[good] = (
+        1.0 / np.sqrt(denominator[good])
+    )
+
+    elapsed = time.time() - start_time
+
+    print(
+        f"Horne optimal extraction finished in "
+        f"{elapsed:.4f} seconds."
+    )
+
+    return flux_vector, error_vector
+
 def optimal_extract_fast(
     R_transpose: sp.spmatrix,
     data_image: np.ndarray) -> np.ndarray:
@@ -824,8 +1023,7 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
         base_valid &= _sigma_clip_reads(input_read)
 
     if group_dq is not None:
-        saturated = (group_dq & DQ_FLAGS["SATURATED"]) != 0
-        base_valid &= ~saturated
+        base_valid &= group_dq
     # differences and physics mask
     diffs = input_read[1:] - input_read[:-1]
     ## both reads valid & Δread must be positive
