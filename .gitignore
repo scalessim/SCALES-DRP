@@ -5,6 +5,6 @@
 **/settings.json
 **/*.npz
 **/*recmat*
-**/*linearity*
+**/*.fits
 **/logs
 **/*.pyc
