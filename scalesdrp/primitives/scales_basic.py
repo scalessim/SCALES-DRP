@@ -1,4 +1,3 @@
-from scalesdrp.primitives.linearity import DQ_FLAGS
 from scalesdrp.core.scales_proctab import Proctab
 from scalesdrp.core.scales_pkg_resources import get_resource_path
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
@@ -1018,16 +1017,43 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
                 keep[:, y0:y1, x0:x1] = mask.reshape(n, ty, tx)
         return keep
 
-    base_valid = np.isfinite(input_read)
+    base_valid_nomask = np.isfinite(input_read)
     if use_sigma_clip:
         base_valid &= _sigma_clip_reads(input_read)
 
-    if group_dq is not None:
-        base_valid &= group_dq
-    # differences and physics mask
     diffs = input_read[1:] - input_read[:-1]
+
+    n_fallback = 0
+    if group_dq is not None:
+        group_dq = np.asarray(group_dq, dtype=bool)
+        if group_dq.shape != input_read.shape:
+            raise ValueError(
+                f"group_dq shape {group_dq.shape} "
+                f"!= input_read shape {input_read.shape}")
+
+        masked_valid = base_valid_nomask & group_dq
+        masked_pair = (masked_valid[1:]& masked_valid[:-1]& (diffs > 0))
+
+        can_apply_mask = np.any(masked_pair, axis=0)
+
+        dq_changes_pixel = np.any(base_valid_nomask & ~group_dq,axis=0)
+
+        fallback_pixels = (dq_changes_pixel& ~can_apply_mask)
+
+        n_fallback = np.count_nonzero(fallback_pixels)
+
+        base_valid = np.where(can_apply_mask[None, :, :],masked_valid,base_valid_nomask)
+    else:
+        base_valid = base_valid_nomask
+    
     ## both reads valid & Δread must be positive
     pair_mask = (base_valid[1:] & base_valid[:-1]) & (diffs > 0)
+
+    if n_fallback > 0:
+        print(
+            f"Dynamic saturation mask ignored for "
+            f"{n_fallback:,} pixels because it would "
+            f"remove all valid read differences.")
 
     # ---------- Reset prior: first valid read; else no prior (σ=∞) ----------
     #If the first resultant is valid, use it as the prior mean on the pedestal.

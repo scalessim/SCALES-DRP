@@ -220,7 +220,7 @@ class RampFit(BasePrimitive):
                     #sci_im_full_original,
                     total_exptime,
                     SIG_map_scaled,
-                    group_dq = None) #change group_dq=good_read_mask or None
+                    group_dq = good_read_mask) #change group_dq=good_read_mask or None
 
                 #self.action.args.ccddata.dq = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
 

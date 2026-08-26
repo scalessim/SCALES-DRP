@@ -245,7 +245,7 @@ def make_ramp_quality_mask(
     good_read_mask = read_index < first_rejected[None, :, :]
 
     # Entire ramp is rejected for externally bad pixels.
-    good_read_mask[:, bpm_map] = False
+    #good_read_mask[:, bpm_map] = False
 
     if print_summary:
         affected = first_rejected < n_reads
