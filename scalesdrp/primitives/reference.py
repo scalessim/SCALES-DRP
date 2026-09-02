@@ -15,252 +15,272 @@ from scipy.signal import savgol_filter
 
 
 
-def reffix_hxrg(cube, nchans=4, in_place=False, resid_colsub=False, fixcol=True, **kwargs):
-    # Make sure we work in float32
+def reffix_hxrg(
+    cube,
+    nchans=4,
+    in_place=False,
+
+    # Amplifier/top-bottom reference correction
+    altcol=False,
+    channelwise=True,
+    supermean=False,
+    top_ref=True,
+    bot_ref=True,
+    ntop=4,
+    nbot=4,
+    amp_mean_func=robust.mean,
+
+    # Optional row-dependent ACN correction
+    do_acn=True,
+    acn_avg_type='pix', #frame, pix
+    acn_perint=False,
+    acn_edge_wrap=False,
+    acn_left_ref=True,
+    acn_right_ref=True,
+    acn_nleft=4,
+    acn_nright=4,
+    acn_mean_func=np.median,
+    acn_smooth=True,
+    acn_savgol=False,
+    acn_winsize=31,
+    acn_order=3,
+
+    # Optional residual per-column correction
+    resid_colsub=False,
+
+    # 1/f correction
+    fixcol=False,
+    ref_avg_type='row_wise', #frame, pix, row_wise
+    ref_perint=False,
+    ref_edge_wrap=False,
+    ref_left=True,
+    ref_right=True,
+    ref_nleft=4,
+    ref_nright=4,
+    ref_mean_func=np.median,
+    ref_smooth=True,
+    ref_savgol=False,
+    ref_winsize=31,
+    ref_order=3,
+
+    #pickup noise removal
+    pickup=True,
+    sigma_thresh=4.0,
+    dilate_iter=2,
+    highpass_size=101,
+    per_amp=False,
+
+    **kwargs
+):
+    """Apply HxRG reference-pixel corrections.
+
+    Order: amplifier correction -> optional ACN -> optional residual-column
+    correction -> optional side-reference 1/f correction.
+
+    ``altcol=True`` gives separate even/odd scalar offsets per amplifier/read.
+    ``altcol=False, channelwise=True`` gives one scalar per amplifier/read.
+    ``altcol=False, channelwise=False`` gives one value per column/read.
+    """
     arr = np.asarray(cube)
     if not np.issubdtype(arr.dtype, np.floating):
-        # must copy when changing dtype
         arr = arr.astype(np.float32, copy=True)
     elif not in_place:
         arr = arr.copy()
 
-    # 1) Channel bias (use altcol=False if you're doing ACN next)
-    arr = reffix_amps(arr, nchans=nchans, in_place=False, **kwargs)
+    arr = reffix_amps(
+        arr, nchans=nchans, in_place=False,
+        altcol=altcol, channelwise=channelwise,
+        supermean=supermean, top_ref=top_ref, bot_ref=bot_ref,
+        ntop=ntop, nbot=nbot, mean_func=amp_mean_func,
+    )
 
-    # 2) ACN (even/odd row-dependent using side refs)
-    arr = acn_filter(arr, in_place=False, **kwargs)
+    if do_acn:
+        arr = acn_filter(
+            arr, in_place=False,
+            avg_type=acn_avg_type, perint=acn_perint,
+            edge_wrap=acn_edge_wrap,
+            left_ref=acn_left_ref, right_ref=acn_right_ref,
+            nleft=acn_nleft, nright=acn_nright,
+            mean_func=acn_mean_func, smooth=acn_smooth,
+            savgol=acn_savgol, winsize=acn_winsize, order=acn_order,
+        )
 
-    #3) Additional subtraction of residual bias in individual columns
     if resid_colsub:
-        arr = sub_resid_col(arr)
+        arr = sub_resid_col(
+            arr, nchans=nchans, in_place=False,
+            top_ref=top_ref, bot_ref=bot_ref, ntop=ntop, nbot=nbot,
+        )
 
-    # 4) 1/f row stripes (side refs, common-mode)
     if fixcol:
-        arr = ref_filter(arr, nchans=nchans, in_place=False, **kwargs)
+        #arr = ref_filter_orig(
+        #    arr, nchans=nchans, in_place=False,
+        #    avg_type=ref_avg_type, perint=ref_perint,
+        #    edge_wrap=ref_edge_wrap,
+        #    left_ref=ref_left, right_ref=ref_right,
+        #    nleft=ref_nleft, nright=ref_nright,
+        #    mean_func=ref_mean_func, smooth=ref_smooth,
+        #    savgol=ref_savgol, winsize=ref_winsize, order=ref_order,
+        #)
+        arr = ref_filter(
+            arr,
+            nchans=nchans,
+            in_place=False,
+            avg_type=ref_avg_type,
+            perint=ref_perint,
+            edge_wrap=ref_edge_wrap,
+            left_ref=ref_left,
+            right_ref=ref_right,
+            nleft=ref_nleft,
+            nright=ref_nright,
+            mean_func=ref_mean_func,
+            smooth=ref_smooth,
+            savgol=ref_savgol,
+            winsize=ref_winsize,
+            order=ref_order,
+            method="direct",
+            per_amp=True,
+        )
+    if pickup:
+        arr = correct_evolving_row_pickup(
+            arr,
+            nleft=4,
+            nright=4,
+            ntop=4,
+            nbot=4,
+            sigma_thresh=sigma_thresh,
+            dilate_iter=dilate_iter,
+            min_good_fraction=0.25,
+            highpass_size=highpass_size,
+            remove_full_row_pattern=True,
+            nchans=nchans,
+            per_amp=per_amp,
+            n_passes=1,
+            return_model=False,
+        )
 
     return arr
 
-############ ACN & CHANNEL BIAS OLD #########################
-def reffix_amps_old(cube, nchans=4, in_place=True, altcol=True, supermean=False,
-	top_ref=True, bot_ref=True, ntop=4, nbot=4, **kwargs):
+################################## acn ################################
+def reffix_amps(
+    cube,
+    nchans=4,
+    in_place=True,
+    altcol=False,
+    channelwise=True,
+    supermean=False,
+    top_ref=True,
+    bot_ref=True,
+    ntop=4,
+    nbot=4,
+    mean_func=robust.mean,
+    **kwargs
+):
+    """Correct amplifier offsets using top/bottom reference rows.
 
-    """Correct amplifier offsets
-    Matches all amplifier outputs of the detector to a common level.
-    This routine subtracts the average of the top and bottom reference rows
-    for each amplifier and frame individually.
-    Parameters
-    ----------
-    cube : ndarray
-        Input datacube. Can be two or three dimensions (nz,ny,nx).
-    nchans : int
-        Number of output amplifier channels in the detector. Default=4.
-    altcol : bool
-        Calculate separate reference values for even/odd columns.
-    supermean : bool
-        Add back the overall mean of the reference pixels.
-    in_place : bool
-        Perform calculations in place. Input array is overwritten.
-    top_ref : bool
-        Include top reference rows when correcting channel offsets.
-    bot_ref : bool
-        Include bottom reference rows when correcting channel offsets.
-    ntop : int
-        Specify the number of top reference rows.
-    nbot : int
-        Specify the number of bottom reference rows.
-    Keyword Args
-    ------------
-    mean_func : func
-        Function used to calculate averages.
+    Modes
+    -----
+    altcol=True
+        Separate even/odd scalar offsets per amplifier/read.
+    altcol=False, channelwise=True
+        One scalar offset per amplifier/read.
+    altcol=False, channelwise=False
+        One reference-derived offset per detector column/read.
     """
-    if not np.issubdtype(cube.dtype, np.floating):
-        cube = cube.astype(np.float32, copy=not in_place)
-        in_place = True
+    arr = np.asarray(cube)
+    if not np.issubdtype(arr.dtype, np.floating):
+        arr = arr.astype(np.float32, copy=True)
+    elif not in_place:
+        arr = arr.copy()
 
-    if not in_place:
-    	cube = np.copy(cube)
-    ndim = len(cube.shape)
-    if ndim==2:
-    	ny,nx = cube.shape
-    	nz = 1
-    	cube = cube.reshape((nz,ny,nx))
-    elif ndim==3:
-    	nz, ny, nx = cube.shape
-    else:
-    	raise ValueError('Input data can only have 2 or 3 dimensions.Found {} dimensions.'.format(ndim))
+    single_frame = arr.ndim == 2
+    if single_frame:
+        arr = arr[np.newaxis, ...]
+    elif arr.ndim != 3:
+        raise ValueError(f"Input data can only have 2 or 3 dimensions. Found {arr.ndim}.")
 
-    chsize = int(nx / nchans)
-    # Number of reference rows to use
-    # Set nt or nb equal to 0 if we don't want to use either
+    nz, ny, nx = arr.shape
+    if nx % nchans != 0:
+        raise ValueError(f"Detector width {nx} is not divisible by nchans={nchans}.")
+    chsize = nx // nchans
+
     nt = ntop if top_ref else 0
     nb = nbot if bot_ref else 0
-    if (nt+nb)==0:
-    	print("No reference pixels available for use. Returning...")
-    	return
-    # Slice out reference pixels
-    refs_bot = cube[:,:nb,:]
-    refs_top = cube[:,-nt:,:]
-    if nt==0:
-    	refs_all = refs_bot
-    elif nb==0:
-    	refs_all = refs_top
-    else:
-    	refs_all = np.hstack((refs_bot, refs_top))
-    assert refs_all.shape[1] == (nb+nt)
+    if nt < 0 or nb < 0:
+        raise ValueError("ntop and nbot must be non-negative.")
+    if nt + nb == 0:
+        return arr[0] if single_frame else arr
 
-    # Supermean
-    # the average of the average is the DC level of the output channel
-    smean = robust.mean(refs_all) if supermean else 0.0
-    # Calculate avg reference values for each frame and channel
-    #refs_all(reads,8,2048)
-    refs_amps_avg = calc_avg_amps_old(refs_all, cube.shape, nchans=nchans, altcol=altcol, **kwargs)
-    #(4,2, 1, 1) ==> altcol=False (channel, reads,1,1)
-    #(2,2,4) ==> altcol=True [odd/even][channel,reads)
+    blocks=[]
+    if nb > 0:
+        blocks.append(arr[:, :nb, :])
+    if nt > 0:
+        blocks.append(arr[:, -nt:, :])
+    refs_all=np.concatenate(blocks, axis=1)
+
+    smean = mean_func(refs_all) if supermean else 0.0
+    refs_amps_avg = calc_avg_amps(
+        refs_all, arr.shape, nchans=nchans,
+        altcol=altcol, channelwise=channelwise,
+        mean_func=mean_func,
+    )
+
     for ch in range(nchans):
-    	# Channel indices
-    	ich1 = ch*chsize
-    	ich2 = ich1 + chsize
-    	#print(ich1)
-    	# In-place subtraction of channel medians
-    	if altcol:
-    		for i in range(nz):
-    			cube[i,:,ich1:ich2-1:2] -= refs_amps_avg[0][ch,i]
-    			cube[i,:,ich1+1:ich2:2] -= refs_amps_avg[1][ch,i]
-    	else:
-    		for i in range(nz):
-    			cube[i,:,ich1:ich2] -= refs_amps_avg[ch,i]
-    # Add back supermean
-    if supermean:
-    	cube += smean
-    cube = cube.squeeze()
-    return cube
-
-def calc_avg_amps_old(refs_all, data_shape, nchans=4, altcol=True, mean_func=robust.mean, **kwargs):
-    #refs_all(reads,8,2048)
-    nz, ny, nx = data_shape
-    chsize = int(nx / nchans)
-    if altcol:
-        refs_amps_avg1 = []
-        refs_amps_avg2 = []
-        for ch in range(nchans):
-            ich1 = ch*chsize
-            ich2 = ich1 + chsize
-            #extracts every other column in the range [ich1, ich2) &  flattens everything except nz
-            refs_ch1 = refs_all[:,:,ich1:ich2-1:2].reshape((nz,-1)) #even
-            refs_ch2 = refs_all[:,:,ich1+1:ich2:2].reshape((nz,-1)) #odd
-            chavg1 = mean_func(refs_ch1,axis=1) ##one scalar per amp per frame.
-            chavg2 = mean_func(refs_ch2,axis=1)
-            refs_amps_avg1.append(chavg1)
-            refs_amps_avg2.append(chavg2)
-        # return one odd and one even value for each channel and each read
-        return (np.array(refs_amps_avg1), np.array(refs_amps_avg2))
-    else:
-        refs_amps_avg = []
-        for ch in range(nchans):
-            ich1 = ch*chsize
-            ich2 = ich1 + chsize
-            refs_ch = refs_all[:,:,ich1:ich2].reshape((nz,-1))
-            chavg = mean_func(refs_ch,axis=1).reshape([-1,1,1])
-            refs_amps_avg.append(chavg)
-        #return one value for each channel and each read
-        return np.array(refs_amps_avg)
-
-################################## NEW acn ################################
-def reffix_amps(cube, nchans=4, in_place=True, altcol=True, supermean=False,
-    top_ref=True, bot_ref=True, ntop=4, nbot=4, **kwargs):
-
-    """Correct amplifier offsets
-    Matches all amplifier outputs of the detector to a common level.
-    This routine subtracts the average of the top and bottom reference rows
-    for each amplifier and frame individually.
-    Parameters
-    ----------
-    cube : ndarray
-        Input datacube. Can be two or three dimensions (nz,ny,nx).
-    nchans : int
-        Number of output amplifier channels in the detector. Default=4.
-    altcol : bool
-        Calculate separate reference values for even/odd columns.
-    supermean : bool
-        Add back the overall mean of the reference pixels.
-    in_place : bool
-        Perform calculations in place. Input array is overwritten.
-    top_ref : bool
-        Include top reference rows when correcting channel offsets.
-    bot_ref : bool
-        Include bottom reference rows when correcting channel offsets.
-    ntop : int
-        Specify the number of top reference rows.
-    nbot : int
-        Specify the number of bottom reference rows.
-    Keyword Args
-    ------------
-    mean_func : func
-        Function used to calculate averages.
-    """
-    if not np.issubdtype(cube.dtype, np.floating):
-        cube = cube.astype(np.float32, copy=not in_place)
-        in_place = True
-
-    if not in_place:
-        cube = np.copy(cube)
-    ndim = len(cube.shape)
-    if ndim==2:
-        ny,nx = cube.shape
-        nz = 1
-        cube = cube.reshape((nz,ny,nx))
-    elif ndim==3:
-        nz, ny, nx = cube.shape
-    else:
-        raise ValueError('Input data can only have 2 or 3 dimensions.Found {} dimensions.'.format(ndim))
-
-    chsize = int(nx / nchans)
-    # Number of reference rows to use
-    # Set nt or nb equal to 0 if we don't want to use either
-    nt = ntop if top_ref else 0
-    nb = nbot if bot_ref else 0
-    if (nt+nb)==0:
-        print("No reference pixels available for use. Returning...")
-        return
-    # Slice out reference pixels
-    refs_bot = cube[:,:nb,:]
-    refs_top = cube[:,-nt:,:]
-    if nt==0:
-        refs_all = refs_bot
-    elif nb==0:
-        refs_all = refs_top
-    else:
-        refs_all = np.hstack((refs_bot, refs_top))
-    assert refs_all.shape[1] == (nb+nt)
-
-    # Supermean
-    # the average of the average is the DC level of the output channel
-    smean = robust.mean(refs_all) if supermean else 0.0
-    # Calculate avg reference values for each frame and channel
-    #refs_all(reads,8,2048)
-    refs_amps_avg = calc_avg_amps(refs_all, cube.shape, nchans=nchans, altcol=altcol, **kwargs)
-    #print(refs_amps_avg)
-    for ch in range(nchans):
-        # Channel indices
-        ich1 = ch*chsize
-        ich2 = ich1 + chsize
-        #print(ich1)
-        # In-place subtraction of channel medians
+        x0=ch*chsize
+        x1=x0+chsize
         if altcol:
-            for i in range(nz):
-                cube[i,:,ich1:ich2-1:2] -= refs_amps_avg[0][ch,i]
-                cube[i,:,ich1+1:ich2:2] -= refs_amps_avg[1][ch,i]
+            arr[:, :, x0:x1:2] -= refs_amps_avg[0][ch][:, None, None]
+            arr[:, :, x0+1:x1:2] -= refs_amps_avg[1][ch][:, None, None]
+        elif channelwise:
+            arr[:, :, x0:x1] -= refs_amps_avg[ch][:, None, None]
         else:
-            for i in range(nz):
-                offs = refs_amps_avg[ch, i][np.newaxis, :]   # (1, chsize)
-                cube[i, :, ich1:ich2] -= offs
-    # Add back supermean
-    if supermean:
-        cube += smean
-    cube = cube.squeeze()
-    return cube
+            arr[:, :, x0:x1] -= refs_amps_avg[ch][:, None, :]
 
-################################## NEW acn ################################
+    if supermean:
+        arr += smean
+    return arr[0] if single_frame else arr
+
+
+def calc_avg_amps(
+    refs_all,
+    data_shape,
+    nchans=4,
+    altcol=False,
+    channelwise=True,
+    mean_func=robust.mean,
+    **kwargs
+):
+    """Calculate reference offsets used by ``reffix_amps``."""
+    nz_ref, nref, nx = refs_all.shape
+    nz, ny, nx_full = data_shape
+    if nx != nx_full or nz_ref != nz:
+        raise ValueError("refs_all and data_shape are inconsistent.")
+    if nx % nchans != 0:
+        raise ValueError(f"Detector width {nx} is not divisible by nchans={nchans}.")
+
+    chsize=nx//nchans
+
+    if altcol:
+        even=np.empty((nchans,nz), dtype=np.float32)
+        odd=np.empty((nchans,nz), dtype=np.float32)
+        for ch in range(nchans):
+            x0=ch*chsize; x1=x0+chsize
+            even[ch]=mean_func(refs_all[:,:,x0:x1:2].reshape(nz,-1), axis=1)
+            odd[ch]=mean_func(refs_all[:,:,x0+1:x1:2].reshape(nz,-1), axis=1)
+        return even, odd
+
+    if channelwise:
+        offsets=np.empty((nchans,nz), dtype=np.float32)
+        for ch in range(nchans):
+            x0=ch*chsize; x1=x0+chsize
+            offsets[ch]=mean_func(refs_all[:,:,x0:x1].reshape(nz,-1), axis=1)
+        return offsets
+
+    offsets=np.empty((nchans,nz,chsize), dtype=np.float32)
+    for ch in range(nchans):
+        x0=ch*chsize; x1=x0+chsize
+        offsets[ch]=mean_func(refs_all[:,:,x0:x1], axis=1).astype(np.float32)
+    return offsets
+
 def sub_resid_col(cube, nchans=4, in_place=True,
     top_ref=True, bot_ref=True, ntop=4, nbot=4, **kwargs):
 
@@ -328,75 +348,6 @@ def sub_resid_col(cube, nchans=4, in_place=True,
     return cube
 
 
-def calc_avg_amps(refs_all, data_shape, nchans=4, altcol=True,
-                  mean_func=robust.mean, **kwargs):
-    """
-    Compute average reference values per amplifier.
-
-    Parameters
-    ----------
-    refs_all : ndarray
-        Reference pixels for bottom + top rows, shape (nz, nref, nx).
-    data_shape : tuple
-        Full data shape (nz, ny, nx) of the science cube.
-    nchans : int
-        Number of amplifier channels along the x-axis.
-    altcol : bool
-        If True, compute separate averages for even/odd columns (JWST-style).
-        If False, compute a separate value for *each column* in each amp.
-    mean_func : callable
-        Function used to calculate averages (e.g., robust.mean, np.nanmedian).
-    """
-    # Use refs_all to infer nz, nx (nref doesn't matter)
-    nz_ref, nref, nx = refs_all.shape
-    nz, ny, nx_full = data_shape
-    assert nx == nx_full, "refs_all and data_shape nx mismatch"
-    assert nz_ref == nz,  "refs_all and data_shape nz mismatch"
-
-    chsize = nx // nchans
-
-    if altcol:
-        # one even and one odd value per amp+frame
-        refs_amps_avg1 = []
-        refs_amps_avg2 = []
-        for ch in range(nchans):
-            ich1 = ch * chsize
-            ich2 = ich1 + chsize
-
-            # Even and odd columns within this channel
-            refs_ch1 = refs_all[:, :, ich1:ich2-1:2].reshape((nz, -1))  # even
-            refs_ch2 = refs_all[:, :, ich1+1:ich2:2].reshape((nz, -1))  # odd
-            #shape (nz, nref, chsize/2) ==> (nz, Npixels)
-            chavg1 = mean_func(refs_ch1, axis=1)  # (nz,)
-            chavg2 = mean_func(refs_ch2, axis=1)  # (nz,)
-
-            refs_amps_avg1.append(chavg1)
-            refs_amps_avg2.append(chavg2)
-
-        # Shape: (2, nchans, nz)
-        return (np.array(refs_amps_avg1), np.array(refs_amps_avg2))
-
-    else:
-        # --- column-wise averages per amp+frame ---
-        # We want: refs_amps_avg[ch, i, k] = mean over ref rows for that column
-        refs_amps_avg = np.empty((nchans, nz, chsize), dtype=np.float32)
-
-        for ch in range(nchans):
-            ich1 = ch * chsize
-            ich2 = ich1 + chsize
-
-            # Extract refs for this amp: (nz, nref, chsize)
-            refs_ch = refs_all[:, :, ich1:ich2]
-
-            # Average over reference rows axis=1 → (nz, chsize)
-            # i.e., per frame, per column
-            chavg = mean_func(refs_ch, axis=1)  # (nz, chsize)
-
-            refs_amps_avg[ch] = chavg.astype(np.float32)
-
-        # Shape: (nchans, nz, chsize)
-        return refs_amps_avg
-
 ############# additional acn ###################################
 
 def acn_filter(cube,
@@ -409,6 +360,7 @@ def acn_filter(cube,
                nleft=4,
                nright=4,
                mean_func=np.median,
+               smooth=True,
                **kwargs):
     """
     Row-dependent differences between even and odd columns
@@ -612,22 +564,26 @@ def acn_filter(cube,
     ref_even = _normalize_and_avg(refs_left_even, refs_right_even, avg_type, mean_func) #(2,2048)
     ref_odd  = _normalize_and_avg(refs_left_odd,  refs_right_odd,  avg_type, mean_func) #(2,2048)
 
-    # --- Smooth them (FFT or SavGol), same as ref_filter / calc_col_smooth ---
+    # --- Optional smoothing of row-wise ACN reference series ---
 
-    ref_even_sm = calc_col_smooth(ref_even, out.shape,
-                                  perint=perint,
-                                  edge_wrap=edge_wrap,
-                                  delt=kwargs.get('delt', 5.24e-4),
-                                  savgol=kwargs.get('savgol', False),
-                                  winsize=kwargs.get('winsize', 31),
-                                  order=kwargs.get('order', 3))
-    ref_odd_sm  = calc_col_smooth(ref_odd,  out.shape,
-                                  perint=perint,
-                                  edge_wrap=edge_wrap,
-                                  delt=kwargs.get('delt', 5.24e-4),
-                                  savgol=kwargs.get('savgol', False),
-                                  winsize=kwargs.get('winsize', 31),
-                                  order=kwargs.get('order', 3))
+    if smooth:
+        ref_even_sm = calc_col_smooth(
+            ref_even, out.shape, perint=perint, edge_wrap=edge_wrap,
+            delt=kwargs.get('delt', 5.24e-4),
+            savgol=kwargs.get('savgol', False),
+            winsize=kwargs.get('winsize', 31),
+            order=kwargs.get('order', 3),
+        )
+        ref_odd_sm = calc_col_smooth(
+            ref_odd, out.shape, perint=perint, edge_wrap=edge_wrap,
+            delt=kwargs.get('delt', 5.24e-4),
+            savgol=kwargs.get('savgol', False),
+            winsize=kwargs.get('winsize', 31),
+            order=kwargs.get('order', 3),
+        )
+    else:
+        ref_even_sm = ref_even
+        ref_odd_sm = ref_odd
 
     # --- Subtract from even/odd columns across the entire image ---
     #Each row y gets: one subtraction for even columns (ref_even_sm[:, y]),
@@ -647,384 +603,802 @@ def acn_filter(cube,
 
 import numpy as np
 
-def acn_filter_nobaserm(
+
+def ref_filter_orig(
     cube,
+    nchans=4,
     in_place=True,
+    avg_type='row_wise',
     perint=False,
     edge_wrap=False,
     left_ref=True,
     right_ref=True,
     nleft=4,
     nright=4,
-    mean_func=np.median,   # still used for averaging over columns
+    mean_func=np.median,
+    smooth=False,
+    savgol=False,
+    winsize=31,
+    order=3,
+    **kwargs
+):
+    """Correct horizontal 1/f stripes using side reference columns."""
+    arr=np.asarray(cube)
+    if not np.issubdtype(arr.dtype, np.floating):
+        arr=arr.astype(np.float32, copy=True)
+    elif not in_place:
+        arr=arr.copy()
+
+    single_frame=arr.ndim==2
+    if single_frame:
+        arr=arr[np.newaxis,...]
+    elif arr.ndim!=3:
+        raise ValueError(f"Input data can only have 2 or 3 dimensions. Found {arr.ndim}.")
+
+    nz,ny,nx=arr.shape
+    nl=nleft if left_ref else 0
+    nr=nright if right_ref else 0
+    if nl < 0 or nr < 0:
+        raise ValueError("nleft and nright must be non-negative.")
+    if nl+nr==0:
+        return arr[0] if single_frame else arr
+
+    refs_left=arr[:,:,:nl] if nl>0 else None
+    refs_right=arr[:,:,-nr:] if nr>0 else None
+    refvals=calc_avg_cols(
+        refs_left, refs_right,
+        avg_type=avg_type,
+        mean_func=mean_func,
+    )
+
+    if smooth:
+        delt=10e-6*(nx/nchans+12.0)
+        model=calc_col_smooth(
+            refvals, arr.shape,
+            perint=perint, edge_wrap=edge_wrap,
+            delt=delt, savgol=savgol,
+            winsize=winsize, order=order,
+        )
+    else:
+        model=refvals
+
+    arr -= model.reshape(nz,ny,1)
+    return arr[0] if single_frame else arr
+
+
+
+def calc_avg_cols(
+    refs_left=None,
+    refs_right=None,
+    avg_type='pix',
+    mean_func=np.median,
     **kwargs
 ):
     """
-    ACN correction using side reference columns, *without* any baseline/mean removal.
+    Calculate row-wise reference signal.
 
-    This version uses the raw left/right reference pixel values (after top/bottom
-    correction), averaged over reference columns, then smoothed vs. row, and
-    subtracted from even/odd columns.
+    avg_type
+    --------
+    'pix'
+        Remove each reference pixel's median over the ramp.
 
-    Parameters
-    ----------
-    cube : ndarray
-        Input data:
-          - (H, W)  single frame, or
-          - (N, H, W) stack of frames.
-    in_place : bool
-        If False, the input array will be copied.
-    perint : bool
-        Passed to `calc_col_smooth`: smooth per integration instead of per frame.
-    edge_wrap : bool
-        Passed to `calc_col_smooth`: mirror edges before smoothing to reduce ringing.
-    left_ref, right_ref : bool
-        Whether to use left and/or right side reference columns.
-    nleft, nright : int
-        Number of left/right reference columns to use.
-    mean_func : callable
-        Function to combine multiple reference columns (e.g., np.median).
-        NOTE: this function is *not* used for baseline subtraction here,
-        only for averaging across columns.
+    'frame'
+        Remove one scalar reference level per frame.
 
-    Returns
-    -------
-    out : ndarray
-        ACN-corrected array (same shape as input, float32).
-    """
-    arr = np.asarray(cube)
+    'int'
+        Remove one scalar level for the whole integration.
 
-    # --- Normalize dimensionality to (N, H, W) ---
-    if arr.ndim == 2:
-        single_frame = True
-        arr = arr[np.newaxis, ...]  # (1, H, W)
-    elif arr.ndim == 3:
-        single_frame = False
-    else:
-        raise ValueError(f"acn_filter_nobase: input must be 2D or 3D, got shape {arr.shape}")
-
-    if not in_place:
-        arr = np.copy(arr)
-
-    N, H, W = arr.shape
-
-    # --- Decide how many side refs we actually use ---
-    nl = nleft  if left_ref  else 0
-    nr = nright if right_ref else 0
-
-    if nl < 0 or nr < 0:
-        raise ValueError("nleft and nright must be non-negative.")
-    if (nl + nr) == 0:
-        print("acn_filter_nobase: No side reference columns enabled. Returning input.")
-        return cube
-
-    out = arr.astype(np.float32, copy=True)
-
-    # --- Slice side reference columns from the full image ---
-    refs_left  = out[:, :, :nl]   if nl > 0 else None  # (N, H, nl)
-    refs_right = out[:, :, -nr:]  if nr > 0 else None  # (N, H, nr)
-
-    def _avg_refs(refs_left, refs_right):
-        """
-        Given left/right refs for a particular parity (even or odd),
-        simply average over reference columns to get (N, H) row-wise values.
-        NO baseline / mean removal is done here.
-        """
-        nl_flag = 0 if refs_left  is None else 1
-        nr_flag = 0 if refs_right is None else 1
-
-        if nl_flag == 0 and nr_flag == 0:
-            # No refs for this parity at all; return zeros
-            return np.zeros((N, H), dtype=np.float32)
-
-        # Average across ref columns (axis=2)
-        if nl_flag == 0:
-            refs_side_avg = mean_func(refs_right, axis=2)        # (N, H)
-        elif nr_flag == 0:
-            refs_side_avg = mean_func(refs_left,  axis=2)        # (N, H)
-        else:
-            left_avg  = mean_func(refs_left,  axis=2)            # (N, H)
-            right_avg = mean_func(refs_right, axis=2)            # (N, H)
-            refs_side_avg = 0.5 * (left_avg + right_avg)
-
-        return refs_side_avg.astype(np.float32)
-
-    # --- Split side refs into even/odd columns (global parity) ---
-
-    cols = np.arange(W)
-
-    # Left side global indices: 0 .. nl-1
-    if nl > 0:
-        left_cols = cols[:nl]
-        left_even_mask = (left_cols % 2) == 0
-        left_odd_mask  = ~left_even_mask
-        refs_left_even = refs_left[:, :, left_even_mask] if left_even_mask.any() else None
-        refs_left_odd  = refs_left[:, :, left_odd_mask]  if left_odd_mask.any()  else None
-    else:
-        refs_left_even = refs_left_odd = None
-
-    # Right side global indices: W-nr .. W-1
-    if nr > 0:
-        right_cols = cols[-nr:]
-        right_even_mask = (right_cols % 2) == 0
-        right_odd_mask  = ~right_even_mask
-        refs_right_even = refs_right[:, :, right_even_mask] if right_even_mask.any() else None
-        refs_right_odd  = refs_right[:, :, right_odd_mask]  if right_odd_mask.any()  else None
-    else:
-        refs_right_even = refs_right_odd = None
-
-    # --- Build row-wise ACN refs for even and odd, using RAW refs (no baseline removal) ---
-
-    # Shapes: (N, H)
-    ref_even = _avg_refs(refs_left_even, refs_right_even)
-    ref_odd  = _avg_refs(refs_left_odd,  refs_right_odd)
-
-    # --- Smooth them (FFT or SavGol), same as ref_filter / calc_col_smooth ---
-
-    ref_even_sm = calc_col_smooth(
-        ref_even,
-        out.shape,
-        perint=perint,
-        edge_wrap=edge_wrap,
-        delt=kwargs.get('delt', 5.24e-4),
-        savgol=kwargs.get('savgol', False),
-        winsize=kwargs.get('winsize', 31),
-        order=kwargs.get('order', 3),
-    )
-
-    ref_odd_sm = calc_col_smooth(
-        ref_odd,
-        out.shape,
-        perint=perint,
-        edge_wrap=edge_wrap,
-        delt=kwargs.get('delt', 5.24e-4),
-        savgol=kwargs.get('savgol', False),
-        winsize=kwargs.get('winsize', 31),
-        order=kwargs.get('order', 3),
-    )
-
-    # --- Subtract from even/odd columns across the entire image ---
-
-    even_cols = cols[cols % 2 == 0]
-    odd_cols  = cols[cols % 2 == 1]
-
-    if even_cols.size > 0:
-        out[:, :, even_cols] -= ref_even_sm.reshape(N, H, 1)
-    if odd_cols.size > 0:
-        out[:, :, odd_cols]  -= ref_odd_sm.reshape(N, H, 1)
-
-    if single_frame:
-        return out[0]
-    return out
-
-############################# 1/f ################################################
-
-def ref_filter(cube, nchans=4, in_place=True, avg_type='pix', perint=False,
-	edge_wrap=False, left_ref=True, right_ref=True, nleft=4, nright=4, **kwargs):
-    """Optimal Smoothing
-    Performs an optimal filtering of the vertical reference pixel to
-    reduce 1/f noise (horizontal stripes).
-    FFT method adapted from M. Robberto IDL code:
-    http://www.stsci.edu/~robberto/Main/Software/IDL4pipeline/
-    Parameters
-    ----------
-    cube : ndarray
-        Input datacube. Can be two or three dimensions (nz,ny,nx).
-    nchans : int
-        Number of output amplifier channels in the detector. Default=4.
-    in_place : bool
-        Perform calculations in place. Input array is overwritten.
-    perint : bool
-        Smooth side reference pixel per integration,
-        otherwise do frame-by-frame.
-    avg_type : str
-        Type of ref col averaging to perform. Allowed values are
-        'pix', 'frame', or 'int'.
-    left_ref : bool
-        Include left reference cols when correcting 1/f noise.
-    right_ref : bool
-        Include right reference cols when correcting 1/f noise.
-    nleft : int
-        Specify the number of left reference columns.
-    nright : int
-        Specify the number of right reference columns.
-    Keyword Arguments
-    =================
-    savgol : bool
-        Using Savitsky-Golay filter method rather than FFT.
-    winsize : int
-        Size of the window filter.
-    order : int
-        Order of the polynomial used to fit the samples.
-    mean_func : func
-        Function to use to calculate averages of reference columns.
-    """
-    if not in_place:
-    	cube = np.copy(cube)
-    ndim = len(cube.shape)
-    if ndim==2:
-    	ny,nx = cube.shape
-    	nz = 1
-    	cube = cube.reshape((nz,ny,nx))
-    elif ndim==3:
-    	nz, ny, nx = cube.shape
-    else:
-    	raise ValueError('Input data can only have 2 or 3 dimensions. Found {} dimensions.'.format(ndim))
-
-    # Number of reference rows to use
-    # Set nt or nb equal to 0 if we don't want to use either
-    nl = nleft  if left_ref  else 0
-    nr = nright if right_ref else 0
-    assert nl>=0, 'Number of left reference pixels must not be negative.'
-    assert nr>=0, 'Number of right reference pixels must not be negative.'
-    if (nl+nr)==0:
-    	print("No reference pixels available for use. Returning...")
-    	return
-    # Slice out reference pixel columns
-    refs_left  = cube[:,:,:nl]  if nl>0 else None
-    refs_right = cube[:,:,-nr:] if nr>0 else None
-    refvals = calc_avg_cols(refs_left, refs_right, avg_type, **kwargs)
-    #refvals = calc_avg_cols_no_baseline(refs_left, refs_right)
-    # approximate x axis for smoothening
-    delt = 10E-6 * (nx/nchans + 12.)
-    refvals_smoothed = calc_col_smooth(refvals, cube.shape, perint=perint,
-    	edge_wrap=edge_wrap, delt=delt, **kwargs)
-    # Final correction
-    #for i,im in enumerate(cube): im -= refvals_smoothed[i].reshape([ny,1])
-    cube -= refvals_smoothed.reshape([nz,ny,1])
-    cube = cube.squeeze()
-    return cube
-
-def calc_avg_cols_no_baseline(refs_left=None, refs_right=None):
-    """
-    Same output as calc_avg_cols(), but does NOT remove
-    reference pixel means / DC offsets.
-
-    Useful for comparison — this version allows reference pixel
-    fixed-pattern biases to leak directly into the correction vector.
-
-    Parameters
-    ----------
-    refs_left : ndarray or None
-        Left reference strip, shape (N, H, nleft)
-    refs_right : ndarray or None
-        Right reference strip, shape (N, H, nright)
-
-    Returns
-    -------
-    refs_side_avg : ndarray  (N, H)
-        Row-averaged reference drift without mean removal.
+    'row_wise'
+        For every read and detector row, take the median of all
+        available side reference pixels, then remove only the
+        median of that row-profile for that read.
     """
 
-    nl = 0 if refs_left  is None else 1
+    nl = 0 if refs_left is None else 1
     nr = 0 if refs_right is None else 1
 
     if nl == 0 and nr == 0:
-        return None  # nothing to return
+        raise ValueError("No side reference pixels supplied.")
 
-    # Copy so we don't modify caller data
-    if nl > 0:
-        refs_left  = np.copy(refs_left)
-    if nr > 0:
+    if nl:
+        refs_left = np.copy(refs_left)
+
+    if nr:
         refs_right = np.copy(refs_right)
 
-    # ---- NO baseline normalization performed here ----
-    # Simply collapse reference pixels to one value per row
-
-    if nl == 0:
-        refs_side_avg = refs_right.mean(axis=2)  # shape (N, H)
-    elif nr == 0:
-        refs_side_avg = refs_left.mean(axis=2)   # shape (N, H)
+    if refs_left is not None:
+        nz, ny, _ = refs_left.shape
     else:
-        refs_side_avg = (refs_left.mean(axis=2) +
-                         refs_right.mean(axis=2)) / 2.0
+        nz, ny, _ = refs_right.shape
+
+    if avg_type is None:
+        avg_type = 'frame'
+
+    # ---------------------------------------------------------
+    # NEW: direct row-wise reference estimate
+    # ---------------------------------------------------------
+    if 'row' in avg_type.lower():
+
+        if nl and nr:
+            # Shape: (nz, ny, nleft+nright)
+            refs_all = np.concatenate(
+                [refs_left, refs_right],
+                axis=2
+            )
+
+        elif nl:
+            refs_all = refs_left
+
+        else:
+            refs_all = refs_right
+
+        # One value for every read and detector row
+        # Shape: (nz, ny)
+        refs_side_avg = np.nanmedian(
+            refs_all,
+            axis=2
+        )
+
+        # Remove only the overall DC level of each read.
+        # Preserve ALL row-dependent structure.
+        refs_side_avg -= np.nanmedian(
+            refs_side_avg,
+            axis=1,
+            keepdims=True
+        )
+
+        return refs_side_avg.astype(np.float32)
+
+    # ---------------------------------------------------------
+    # Existing modes
+    # ---------------------------------------------------------
+
+    # Only force single-frame data to 'int' for the old modes.
+    if nz == 1:
+        avg_type = 'int'
+
+    if 'int' in avg_type:
+
+        if nl:
+            refs_left -= mean_func(refs_left)
+
+        if nr:
+            refs_right -= mean_func(refs_right)
+
+    elif 'frame' in avg_type:
+
+        if nl:
+            refs_left_mean = mean_func(
+                refs_left.reshape((nz, -1)),
+                axis=1
+            )
+
+            for i in range(nz):
+                refs_left[i] -= refs_left_mean[i]
+
+        if nr:
+            refs_right_mean = mean_func(
+                refs_right.reshape((nz, -1)),
+                axis=1
+            )
+
+            for i in range(nz):
+                refs_right[i] -= refs_right_mean[i]
+
+    elif 'pix' in avg_type:
+
+        if nl:
+            refs_left_mean = mean_func(
+                refs_left,
+                axis=0
+            )
+
+        if nr:
+            refs_right_mean = mean_func(
+                refs_right,
+                axis=0
+            )
+
+        for i in range(nz):
+
+            if nl:
+                refs_left[i] -= refs_left_mean
+
+            if nr:
+                refs_right[i] -= refs_right_mean
+
+    else:
+        raise ValueError(
+            f"Unknown avg_type='{avg_type}'. "
+            "Use 'pix', 'frame', 'int', or 'row_wise'."
+        )
+
+    # ---------------------------------------------------------
+    # Collapse side references for old modes
+    # ---------------------------------------------------------
+
+    if nl and nr:
+
+        refs_all = np.concatenate(
+            [refs_left, refs_right],
+            axis=2
+        )
+
+        refs_side_avg = np.nanmedian(
+            refs_all,
+            axis=2
+        )
+
+    elif nl:
+
+        refs_side_avg = np.nanmedian(
+            refs_left,
+            axis=2
+        )
+
+    else:
+
+        refs_side_avg = np.nanmedian(
+            refs_right,
+            axis=2
+        )
 
     return refs_side_avg.astype(np.float32)
 
 
+def ref_filter(
+    cube,
+    nchans=4,
+    in_place=True,
 
-def calc_avg_cols(refs_left=None, refs_right=None, avg_type='pix',
-	mean_func=np.median, **kwargs):
-    """Calculate average of column references
-    Determine the average values for the column references, which
-    is subsequently used to estimate the 1/f noise contribution.
+    # Reference profile construction
+    avg_type="row_wise",
+    left_ref=True,
+    right_ref=True,
+    nleft=4,
+    nright=4,
+    mean_func=np.median,
+
+    # Correction method
+    method="direct",          # "direct" or "transfer"
+
+    # Existing optional smoothing for direct mode
+    smooth=False,
+    perint=False,
+    edge_wrap=False,
+    savgol=False,
+    winsize=31,
+    order=3,
+
+    # Direct-mode scale
+    scale=1.0,
+
+    # Transfer-function mode
+    transfer_func=None,
+    coherence=None,
+    coherence_min=0.2,
+    coherence_weight=False,
+
+    # Apply independently to amplifier channels
+    per_amp=False,
+
+    # Preserve side reference pixels
+    correct_ref_pixels=False,
+
+    return_model=False,
+    **kwargs,
+):
+    """
+    Correct horizontal 1/f / pickup stripes using side reference pixels.
+
     Parameters
     ----------
-    refs_left : ndarray
-        Left reference columns.
-    refs_right : ndarray
-        Right reference columns.
+    cube : ndarray
+        Input image or ramp cube:
+            (ny, nx)
+            (nread, ny, nx)
+
+    nchans : int
+        Number of detector amplifier channels.
+
     avg_type : str
-        Type of ref column averaging to perform to determine ref pixel variation.
-        Allowed values are 'pix', 'frame', or 'int'.
-        'pixel' : For each ref pixel, subtract its avg value from all frames.
-        'frame' : For each frame, get avg ref pixel values and subtract framewise.
-        'int'   : Calculate avg of all ref pixels within the ramp and subtract.
-    mean_func : func
-        Function to use to calculate averages of reference columns
+        Method passed to ``calc_avg_cols``.
+        For SCALES pickup correction, ``"row_wise"`` is recommended.
+
+    left_ref, right_ref : bool
+        Use left/right side reference columns.
+
+    nleft, nright : int
+        Number of side reference columns.
+
+    mean_func : callable
+        Statistic used when constructing reference profiles.
+
+    method : {"direct", "transfer"}
+        direct
+            Subtract the reference row profile directly, optionally
+            after smoothing.
+
+        transfer
+            Fourier-transform the row reference profile, multiply by
+            a calibrated science/reference transfer function H(f),
+            and inverse-transform to obtain the predicted science
+            pickup.
+
+    smooth : bool
+        Apply the existing calc_col_smooth() method.
+        Used only for ``method="direct"``.
+
+    scale : float or ndarray
+        Multiplicative scale for direct mode.
+
+        Can be:
+            scalar
+            (nread,)
+            (nchans,)
+            (nread, nchans)
+
+    transfer_func : ndarray
+        Frequency-dependent science/reference coupling.
+
+        Supported shapes:
+
+            (nfreq,)
+                same transfer function for all reads/channels
+
+            (nchans, nfreq)
+                one transfer function per amplifier
+
+        where
+
+            nfreq = ny // 2 + 1
+
+    coherence : ndarray or None
+        Optional coherence corresponding to ``transfer_func``.
+
+        Supported shapes match transfer_func.
+
+    coherence_min : float
+        Frequencies below this coherence are rejected when
+        ``coherence_weight=False``.
+
+    coherence_weight : bool
+        If True, weight the transfer function continuously by
+        coherence instead of using a hard cutoff.
+
+    per_amp : bool
+        If True, apply an independent transfer function to each
+        amplifier.
+
+        This should normally be True when using:
+            transfer_func.shape == (nchans, nfreq)
+
+    correct_ref_pixels : bool
+        If False, leave side reference columns untouched.
+
+    return_model : bool
+        If True, also return the modeled pickup image/cube.
+
+    Returns
+    -------
+    corrected : ndarray
+
+    model : ndarray, optional
+        Returned when ``return_model=True``.
     """
-    # Which function to use for calculating averages?
-    # mean_func = robust.mean
-    # mean_func = np.median
 
-    # In this context, nl and nr are either 0 (False) or 1 (True)
-    nl = 0 if refs_left is None else 1
-    nr = 0 if refs_right is None else 1
+    # -------------------------------------------------------------
+    # Prepare input
+    # -------------------------------------------------------------
+    arr = np.asarray(cube)
 
-    # Left and right reference pixels
-    # Make a copy so as to not modify the original data
-    if nl>0: refs_left  = np.copy(refs_left)
-    if nr>0: refs_right = np.copy(refs_right)
+    if not np.issubdtype(arr.dtype, np.floating):
+        arr = arr.astype(np.float32, copy=True)
+    elif not in_place:
+        arr = arr.copy()
 
-    # Set the average of left and right reference pixels to zero
-    # By default, pixel averaging is best for large groups
+    single_frame = arr.ndim == 2
 
-    if avg_type is None:
-    	avg_type = 'frame'
-    if refs_left is not None:
-    	nz, ny, nchan = refs_left.shape
+    if single_frame:
+        arr = arr[np.newaxis, ...]
+
+    elif arr.ndim != 3:
+        raise ValueError(
+            "Input data must be 2D or 3D. "
+            f"Found shape {arr.shape}."
+        )
+
+    nz, ny, nx = arr.shape
+
+    if nx % nchans != 0:
+        raise ValueError(
+            f"nx={nx} is not divisible by nchans={nchans}."
+        )
+
+    chsize = nx // nchans
+
+    nl = nleft if left_ref else 0
+    nr = nright if right_ref else 0
+
+    if nl < 0 or nr < 0:
+        raise ValueError(
+            "nleft and nright must be non-negative."
+        )
+
+    if (nl + nr) == 0:
+        result = arr[0] if single_frame else arr
+
+        if return_model:
+            return result, np.zeros_like(result)
+
+        return result
+
+    # -------------------------------------------------------------
+    # Extract side reference pixels
+    # -------------------------------------------------------------
+    refs_left = (
+        arr[:, :, :nl]
+        if nl > 0
+        else None
+    )
+
+    refs_right = (
+        arr[:, :, -nr:]
+        if nr > 0
+        else None
+    )
+
+    # Shape:
+    #     (nz, ny)
+    refvals = calc_avg_cols(
+        refs_left,
+        refs_right,
+        avg_type=avg_type,
+        mean_func=mean_func,
+    )
+
+    refvals = np.asarray(
+        refvals,
+        dtype=np.float64,
+    )
+
+    if refvals.shape != (nz, ny):
+        raise ValueError(
+            "calc_avg_cols returned unexpected shape "
+            f"{refvals.shape}; expected {(nz, ny)}."
+        )
+
+    # -------------------------------------------------------------
+    # Output model
+    # -------------------------------------------------------------
+    model_cube = np.zeros_like(
+        arr,
+        dtype=np.float64,
+    )
+
+    method = method.lower()
+
+    # =============================================================
+    # DIRECT REFERENCE SUBTRACTION
+    # =============================================================
+    if method == "direct":
+
+        if smooth:
+
+            delt = 10e-6 * (
+                nx / nchans + 12.0
+            )
+
+            row_model = calc_col_smooth(
+                refvals,
+                arr.shape,
+                perint=perint,
+                edge_wrap=edge_wrap,
+                delt=delt,
+                savgol=savgol,
+                winsize=winsize,
+                order=order,
+            )
+
+        else:
+
+            row_model = refvals.copy()
+
+        # ---------------------------------------------------------
+        # Scale handling
+        # ---------------------------------------------------------
+        scale_arr = np.asarray(
+            scale,
+            dtype=float,
+        )
+
+        if not per_amp:
+
+            # scalar
+            if scale_arr.ndim == 0:
+
+                scaled = (
+                    row_model
+                    * float(scale_arr)
+                )
+
+            # one scale per read
+            elif scale_arr.shape == (nz,):
+
+                scaled = (
+                    row_model
+                    * scale_arr[:, None]
+                )
+
+            else:
+
+                raise ValueError(
+                    "For per_amp=False, scale must be "
+                    "a scalar or shape (nread,)."
+                )
+
+            # Apply same row model to full science region
+            x0 = 0 if correct_ref_pixels else nl
+            x1 = nx if correct_ref_pixels else nx - nr
+
+            model_cube[
+                :,
+                :,
+                x0:x1
+            ] = scaled[:, :, None]
+
+        else:
+
+            # -----------------------------------------------------
+            # amplifier-specific direct scaling
+            # -----------------------------------------------------
+
+            if scale_arr.ndim == 0:
+
+                scale_arr = np.full(
+                    (nz, nchans),
+                    float(scale_arr),
+                )
+
+            elif scale_arr.shape == (nchans,):
+
+                scale_arr = np.broadcast_to(
+                    scale_arr[None, :],
+                    (nz, nchans),
+                )
+
+            elif scale_arr.shape != (nz, nchans):
+
+                raise ValueError(
+                    "For per_amp=True, scale must be "
+                    "scalar, (nchans,), or "
+                    "(nread, nchans)."
+                )
+
+            for amp in range(nchans):
+
+                a0 = amp * chsize
+                a1 = (amp + 1) * chsize
+
+                x0 = a0
+                x1 = a1
+
+                if not correct_ref_pixels:
+
+                    if amp == 0:
+                        x0 = max(x0, nl)
+
+                    if amp == nchans - 1:
+                        x1 = min(
+                            x1,
+                            nx - nr,
+                        )
+
+                scaled = (
+                    row_model
+                    * scale_arr[:, amp, None]
+                )
+
+                model_cube[
+                    :,
+                    :,
+                    x0:x1
+                ] = scaled[:, :, None]
+
+    # =============================================================
+    # FREQUENCY-DEPENDENT TRANSFER CORRECTION
+    # =============================================================
+    elif method == "transfer":
+
+        if transfer_func is None:
+            raise ValueError(
+                "transfer_func must be supplied "
+                "for method='transfer'."
+            )
+
+        H = np.asarray(
+            transfer_func,
+        )
+
+        nfreq = ny // 2 + 1
+
+        # ---------------------------------------------------------
+        # Validate transfer function
+        # ---------------------------------------------------------
+        if H.ndim == 1:
+
+            if H.shape[0] != nfreq:
+                raise ValueError(
+                    "transfer_func has incorrect frequency length. "
+                    f"Expected {nfreq}, got {H.shape[0]}."
+                )
+
+            H = np.broadcast_to(
+                H[None, :],
+                (nchans, nfreq),
+            )
+
+        elif H.ndim == 2:
+
+            if H.shape != (nchans, nfreq):
+                raise ValueError(
+                    "2D transfer_func must have shape "
+                    f"({nchans}, {nfreq}); got {H.shape}."
+                )
+
+        else:
+
+            raise ValueError(
+                "transfer_func must have shape "
+                "(nfreq,) or (nchans, nfreq)."
+            )
+
+        # ---------------------------------------------------------
+        # Coherence handling
+        # ---------------------------------------------------------
+        if coherence is not None:
+
+            C = np.asarray(
+                coherence,
+                dtype=float,
+            )
+
+            if C.ndim == 1:
+
+                if C.shape[0] != nfreq:
+                    raise ValueError(
+                        "coherence has incorrect frequency length."
+                    )
+
+                C = np.broadcast_to(
+                    C[None, :],
+                    (nchans, nfreq),
+                )
+
+            elif C.shape != (nchans, nfreq):
+
+                raise ValueError(
+                    "coherence must match transfer_func shape."
+                )
+
+        else:
+
+            C = None
+
+        # ---------------------------------------------------------
+        # FFT of reference profile
+        # ---------------------------------------------------------
+        #
+        # ref_fft shape:
+        #     (nz, nfreq)
+        #
+        ref_fft = np.fft.rfft(
+            refvals,
+            axis=1,
+        )
+
+        # ---------------------------------------------------------
+        # Build model amplifier by amplifier
+        # ---------------------------------------------------------
+        for amp in range(nchans):
+
+            H_amp = H[amp].copy()
+
+            if C is not None:
+
+                C_amp = C[amp]
+
+                if coherence_weight:
+
+                    # Smooth weighting:
+                    #
+                    # coherence=1 -> full correction
+                    # coherence=0 -> no correction
+                    #
+                    H_amp = (
+                        H_amp * C_amp
+                    )
+
+                else:
+
+                    H_amp[
+                        C_amp < coherence_min
+                    ] = 0.0
+
+            # Remove DC explicitly
+            H_amp[0] = 0.0
+
+            # -----------------------------------------------------
+            # Predicted science pickup in frequency space
+            # -----------------------------------------------------
+            predicted_fft = (
+                ref_fft
+                * H_amp[None, :]
+            )
+
+            # Back to detector rows
+            pickup = np.fft.irfft(
+                predicted_fft,
+                n=ny,
+                axis=1,
+            )
+
+            # -----------------------------------------------------
+            # Apply to this amplifier
+            # -----------------------------------------------------
+            a0 = amp * chsize
+            a1 = (amp + 1) * chsize
+
+            x0 = a0
+            x1 = a1
+
+            if not correct_ref_pixels:
+
+                if amp == 0:
+                    x0 = max(
+                        x0,
+                        nl,
+                    )
+
+                if amp == nchans - 1:
+                    x1 = min(
+                        x1,
+                        nx - nr,
+                    )
+
+            model_cube[
+                :,
+                :,
+                x0:x1
+            ] = pickup[:, :, None]
+
     else:
-    	nz, ny, nchan = refs_right.shape
-    	# If there is only 1 frame, then we have to do "per frame" averaging.
-    	# Set to "per int", which produces the same result as "per frame" for nz=1.
-    if nz==1:
-    	avg_type = 'int'
-    	# Remove average ref pixel values
-    	# Average over entire integration
-    if 'int' in avg_type:
-    	if nl>0: refs_left  -= mean_func(refs_left) #refs_left now contains only deviations from that global mean.
-    	if nr>0: refs_right -= mean_func(refs_right)
-    # Average over each frame
-    #'frame' mode remove a frame-by-frame DC offset,
-    #leaving row-dependent fluctuations within each frame.
-    #
-    elif 'frame' in avg_type:
-    	if nl>0: refs_left_mean  = mean_func(refs_left.reshape((nz,-1)), axis=1)#flatten each frame’s ref pixels to 1D, one scalar per frame.
-    	if nr>0: refs_right_mean = mean_func(refs_right.reshape((nz,-1)), axis=1)
-    	# Subtract estimate of each ref pixel "intrinsic" value
-    	for i in range(nz):
-    		if nl>0: refs_left[i]  -= refs_left_mean[i]
-    		if nr>0: refs_right[i] -= refs_right_mean[i]
-    # Take the average of each reference pixel
-    #gives an average for each reference pixel position over all frames
-    #Subtracting this from each frame removes each pixel’s own intrinsic bias pattern.
-    elif 'pix' in avg_type:
-    	if nl>0:
-            refs_left_mean  = mean_func(refs_left, axis=0) #(2048, 4)
-    	if nr>0:
-            refs_right_mean = mean_func(refs_right, axis=0)
-    	# Subtract estimate of each ref pixel "intrinsic" value
-    	for i in range(nz):
-    		if nl>0: refs_left[i]  -= refs_left_mean
-    		if nr>0: refs_right[i] -= refs_right_mean
 
-    if nl==0: #ref_left is none
-    	refs_side_avg = refs_right.mean(axis=2)#averages over all left reference columns
-    elif nr==0: #ref_right is none
-    	refs_side_avg = refs_left.mean(axis=2)
-    else:
-    	refs_side_avg = (refs_right.mean(axis=2) + refs_left.mean(axis=2)) / 2
-    return refs_side_avg #(2, 2048)
+        raise ValueError(
+            f"Unknown method='{method}'. "
+            "Use 'direct' or 'transfer'."
+        )
+
+    # -------------------------------------------------------------
+    # Apply correction
+    # -------------------------------------------------------------
+    arr -= model_cube
+
+    # -------------------------------------------------------------
+    # Restore dimensionality
+    # -------------------------------------------------------------
+    if single_frame:
+
+        arr = arr[0]
+        model_cube = model_cube[0]
+
+    if return_model:
+        fits.writeto('moel.fits',model_cube,overwrite=True)
+        return arr
+
+    return arr
+
+
 
 def calc_col_smooth(refvals, data_shape, perint=False, edge_wrap=False,
 	delt=5.24E-4, savgol=False, winsize=31, order=3, **kwargs):
@@ -1093,136 +1467,6 @@ def calc_col_smooth(refvals, data_shape, perint=False, edge_wrap=False,
     			refvals_smoothed.append(ref_smth)
     		refvals_smoothed = np.array(refvals_smoothed)
     return refvals_smoothed
-
-def smooth_fft1(data, delt, first_deriv=False, second_deriv=False):
-    """Optimal smoothing algorithm
-    Smoothing algorithm to perform optimal filtering of the
-    vertical reference pixel to reduce 1/f noise (horizontal stripes),
-    based on the Kosarev & Pantos algorithm. This assumes that the
-    data to be filtered/smoothed has been sampled evenly.
-    If first_deriv is set, then returns two results
-    if second_deriv is set, then returns three results.
-    Adapted from M. Robberto IDL code:
-    http://www.stsci.edu/~robberto/Main/Software/IDL4pipeline/
-    Parameters
-    ----------
-    data : ndarray
-        Signal to be filtered.
-    delt : float
-        Delta time between samples.
-    first_deriv : bool
-        Return the first derivative.
-    second_deriv : bool
-        Return the second derivative (along with first).
-    """
-    Dat = data.flatten()
-    N = Dat.size
-    Pi2 = 2*np.pi
-    OMEGA = Pi2 / (N*delt)
-    X = np.arange(N) * delt
-    ##------------------------------------------------
-    ## Center and Baselinefit of the data
-    ##------------------------------------------------
-    Dat_m = Dat - np.mean(Dat) #data with its global mean removed
-    SLOPE = (Dat_m[-1] - Dat_m[0]) / (N-2) #slope
-    Dat_b = Dat_m - Dat_m[0] - SLOPE * X / delt #detrended, linear baseline removed
-    ##------------------------------------------------
-    ## Compute fft- / power- spectrum
-    ##------------------------------------------------
-    Dat_F = np.fft.rfft(Dat_b) #FFT
-    Dat_P = np.abs(Dat_F)**2 #power spectrum
-    ##------------------------------------------------
-    ## Noise spectrum from 'half' to 'full'
-    ## Mind: half means N/4, full means N/2
-    ## assume that mid–high frequencies (from N/4 to N/2) are dominated by white noise, not signal.
-    ## compute the average power in that band ==> Noise
-    ## This is an estimate of the noise floor of the spectrum.
-    ##------------------------------------------------
-    i1 = int((N-1) / 4)
-    i2 = int((N-1) / 2) + 1
-    Sigma = np.sum(Dat_P[i1:i2])
-    Noise = Sigma / ((N-1)/2 - (N-1)/4)
-    ##------------------------------------------------
-    ## Get Filtercoeff. according to Kosarev/Pantos
-    ## Find the J0, start search at i=1 (i=0 is the mean), where the signal falls into the noise
-    ##------------------------------------------------
-    J0 = 2
-    for i in np.arange(1, int(N/4)+1):
-    	sig0, sig1, sig2, sig3 = Dat_P[i:i+4]
-    	if (sig0<Noise) and ((sig1<Noise) or (sig2<Noise) or (sig3<Noise)):
-    		J0 = i
-    		break
-    ##------------------------------------------------
-    ## Compute straight line extrapolation to log(Dat_P)
-    ##------------------------------------------------
-    ii = np.arange(1,J0+1)
-    logvals = np.log(Dat_P[1:J0+1])
-    XY = np.sum(ii * logvals)
-    XX = np.sum(ii**2)
-    S  = np.sum(logvals)
-    # Find parameters A1, B1
-    XM = (2. + J0) / 2
-    YM = S / J0
-    A1 = (XY - J0*XM*YM) / (XX - J0*XM*XM)
-    B1 = YM - A1 * XM
-    # Compute J1, the frequency for which straight
-    # line extrapolation drops 20dB below noise
-    J1 = int(np.ceil((np.log(0.01*Noise) - B1) / A1 ))
-    if J1<J0:
-    	J1 = J0+1
-    ##------------------------------------------------
-    ## Compute the Kosarev-Pantos filter windows
-    ## Frequency-ranges: 0 -- J0 | J0+1 -- J1 | J1+1 -- N2
-    ##------------------------------------------------
-    nvals = int((N-1)/2 + 1)
-    LOPT = np.zeros_like(Dat_P)
-    LOPT[0:J0+1] = Dat_P[0:J0+1] / (Dat_P[0:J0+1] + Noise)
-    i_arr = np.arange(J1-J0) + J0+1
-    LOPT[J0+1:J1+1] = np.exp(A1*i_arr+B1) / (np.exp(A1*i_arr+B1) + Noise)
-    ##--------------------------------------------------------------------
-    ## De-noise the Spectrum with the filter
-    ## Calculate the first and second derivative (i.e. multiply by iW)
-    ##--------------------------------------------------------------------
-    # first loop gives smoothed data
-    # second loop produces first derivative
-    # third loop produces second derivative
-    if second_deriv:
-    	ndiff = 3
-    elif first_deriv:
-    	ndiff = 2
-    else:
-    	ndiff = 1
-
-    for diff in range(ndiff):
-    	Fltr_Spectrum = np.zeros_like(Dat_P,dtype=complex)
-    	# make the filter complex
-    	i1 = 1; n2 = int((N-1)/2)+1; i2 = i1+n2
-    	FltrCoef = LOPT[i1:].astype(np.complex128)
-    	# differentitation in frequency domain
-    	iW = ((np.arange(n2)+i1)*OMEGA*1j)**diff
-    	# multiply spectrum with filter coefficient
-    	Fltr_Spectrum[i1:] = Dat_F[i1:] * FltrCoef * iW
-    	# Fltr_Spectrum[0] values
-    	# The derivatives of Fltr_Spectrum[0] are 0
-    	# Mean if diff = 0
-    	Fltr_Spectrum[0] = 0 if diff>0 else Dat_F[0]
-    	# Inverse fourier transform back in time domain
-    	Dat_T = np.fft.irfft(Fltr_Spectrum)
-    	#Dat_T[-1] = np.real(Dat_T[0]) + 1j*np.imag(Dat_T[-1])
-    	# This ist the smoothed time series (baseline added)
-    	if diff==0:
-    		Smoothed_Data = np.real(Dat_T) + Dat[0] + SLOPE * X / delt
-    	elif diff==1:
-    		First_Diff = np.real(Dat_T) + SLOPE / delt
-    	elif diff==2:
-    		Secnd_Diff = np.real(Dat_T)
-    if second_deriv:
-    	return Smoothed_Data, First_Diff, Secnd_Diff
-    elif first_deriv:
-    	return Smoothed_Data, First_Diff
-    else:
-    	return Smoothed_Data  #return the original data, but with high-frequency noise stripped out,
-                              #and only the low-frequency “shape” left, plus the original mean/trend.
 
 
 def smooth_fft(data, delt, first_deriv=False, second_deriv=False):
@@ -1390,3 +1634,774 @@ def smooth_fft(data, delt, first_deriv=False, second_deriv=False):
         return outputs[0], outputs[1]
     else:
         return outputs[0]
+
+import numpy as np
+
+from scipy.ndimage import (
+    binary_dilation,
+    median_filter,
+)
+from astropy.stats import sigma_clipped_stats
+
+
+def correct_evolving_row_pickup(
+    cube,
+    *,
+    nleft=4,
+    nright=4,
+    ntop=4,
+    nbot=4,
+
+    # Source / outlier masking
+    sigma_thresh=4.0,
+    dilate_iter=2,
+    min_good_fraction=0.25,
+
+    # Stripe spatial scale
+    highpass_size=101,
+
+    # Correction behavior
+    remove_full_row_pattern=True,
+
+    # Detector geometry
+    nchans=4,
+    per_amp=False,
+
+    # Optional iterations
+    n_passes=1,
+
+    # Outputs
+    return_model=False,
+    return_diagnostics=False,
+):
+    """
+    Correct evolving horizontal pickup noise in an HxRG ramp.
+
+    The pickup is estimated from consecutive-read differences:
+
+        diff[r] = cube[r+1] - cube[r]
+
+    For each difference image, a robust science-pixel row profile is
+    calculated after masking compact sources / outliers.
+
+    The row profile is then high-pass filtered along detector rows so
+    that only stripe-scale structure is removed while broad spatial
+    structure is preserved.
+
+    Parameters
+    ----------
+    cube : ndarray
+        Input ramp cube with shape:
+
+            (nread, ny, nx)
+
+    nleft, nright : int
+        Number of left/right reference columns excluded from the
+        science-pixel row estimator.
+
+    ntop, nbot : int
+        Number of top/bottom reference rows excluded from the
+        science-pixel row estimator.
+
+    sigma_thresh : float
+        Pixels farther than sigma_thresh * robust_std from the
+        difference-image median are masked.
+
+        The mask is symmetric, so both positive and negative outliers
+        are removed.
+
+    dilate_iter : int
+        Number of binary dilation iterations applied to the outlier
+        mask. This helps mask PSF/spectral wings around bright sources.
+
+    min_good_fraction : float
+        Minimum fraction of unmasked pixels required in a row.
+
+        Rows with fewer valid pixels are interpolated from neighboring
+        rows.
+
+    highpass_size : int or None
+        Median-filter width along detector rows used to estimate the
+        slowly varying component.
+
+        The pickup correction is:
+
+            row_profile - median_filter(row_profile)
+
+        Suggested test values:
+
+            51
+            101
+            201
+
+        Set to None to subtract the complete row profile.
+
+    remove_full_row_pattern : bool
+        Controls what component of the difference row profile is
+        removed.
+
+        True
+            Remove the full stripe-scale row structure from every read
+            difference.
+
+            This is the recommended mode for the current SCALES pickup
+            investigation.
+
+        False
+            First subtract the median row profile across all read
+            differences and remove only the read-variable component.
+
+            This is more conservative but may preserve the pickup
+            component that propagates into the final slope.
+
+    nchans : int
+        Number of amplifier channels.
+
+    per_amp : bool
+        False
+            Estimate one row pickup profile using the full science
+            region.
+
+        True
+            Estimate a separate row pickup profile for every amplifier.
+
+    n_passes : int
+        Number of times the correction is repeated.
+
+        Start with:
+
+            n_passes=1
+
+    return_model : bool
+        If True, return the cumulative read-level pickup model.
+
+    return_diagnostics : bool
+        If True, return diagnostic profiles and masks.
+
+    Returns
+    -------
+    corrected : ndarray
+        Corrected ramp cube.
+
+    model : ndarray, optional
+        Cumulative read-level pickup model.
+
+    diagnostics : dict, optional
+        Dictionary containing row profiles and intermediate models.
+    """
+
+    # =============================================================
+    # Input handling
+    # =============================================================
+
+    arr = np.asarray(cube)
+
+    if arr.ndim != 3:
+        raise ValueError(
+            "cube must have shape (nread, ny, nx); "
+            f"got {arr.shape}"
+        )
+
+    if not np.issubdtype(arr.dtype, np.floating):
+        arr = arr.astype(
+            np.float32,
+            copy=True,
+        )
+    else:
+        arr = arr.astype(
+            np.float64,
+            copy=True,
+        )
+
+    nread, ny, nx = arr.shape
+
+    if nread < 2:
+        raise ValueError(
+            "At least two reads are required."
+        )
+
+    if nx % nchans != 0:
+        raise ValueError(
+            f"Detector width {nx} is not divisible "
+            f"by nchans={nchans}."
+        )
+
+    if not (0 <= min_good_fraction <= 1):
+        raise ValueError(
+            "min_good_fraction must be between 0 and 1."
+        )
+
+    chsize = nx // nchans
+
+    sci_y0 = nbot
+    sci_y1 = ny - ntop
+
+    sci_x0 = nleft
+    sci_x1 = nx - nright
+
+    if sci_y1 <= sci_y0:
+        raise ValueError(
+            "ntop/nbot leave no science rows."
+        )
+
+    if sci_x1 <= sci_x0:
+        raise ValueError(
+            "nleft/nright leave no science columns."
+        )
+
+    working = arr.copy()
+
+    total_model = np.zeros_like(
+        working,
+        dtype=np.float64,
+    )
+
+    diagnostics = {}
+
+
+    # =============================================================
+    # Helper: interpolate invalid row values
+    # =============================================================
+
+    def fill_bad_rows(profile):
+        """
+        Replace invalid row estimates by interpolation.
+        """
+
+        p = np.asarray(
+            profile,
+            dtype=float,
+        ).copy()
+
+        row_index = np.arange(
+            p.size
+        )
+
+        good = np.isfinite(p)
+
+        ngood = np.count_nonzero(good)
+
+        if ngood >= 2:
+
+            p[~good] = np.interp(
+                row_index[~good],
+                row_index[good],
+                p[good],
+            )
+
+        elif ngood == 1:
+
+            p[:] = p[good][0]
+
+        else:
+
+            p[:] = 0.0
+
+        return p
+
+
+    # =============================================================
+    # Helper: robust row profile from one difference image
+    # =============================================================
+
+    def estimate_row_profile(
+        diff,
+        x0,
+        x1,
+    ):
+        """
+        Estimate one robust row profile from a detector sub-region.
+        """
+
+        region = diff[
+            sci_y0:sci_y1,
+            x0:x1,
+        ]
+
+        # ---------------------------------------------------------
+        # Robust global statistics for outlier/source masking
+        # ---------------------------------------------------------
+
+        _, med, std = sigma_clipped_stats(
+            region,
+            sigma=3.0,
+            maxiters=5,
+        )
+
+        if (
+            not np.isfinite(std)
+            or std <= 0
+        ):
+            std = np.nanstd(
+                region
+            )
+
+        if (
+            not np.isfinite(std)
+            or std <= 0
+        ):
+            std = 1.0
+
+        # ---------------------------------------------------------
+        # Mask bright and negative outliers
+        # ---------------------------------------------------------
+
+        mask = (
+            np.abs(region - med)
+            > sigma_thresh * std
+        )
+
+        if dilate_iter > 0:
+
+            mask = binary_dilation(
+                mask,
+                iterations=dilate_iter,
+            )
+
+        values = np.where(
+            mask,
+            np.nan,
+            region,
+        )
+
+        # ---------------------------------------------------------
+        # Robust science-row estimator
+        # ---------------------------------------------------------
+
+        row_profile_mid = np.nanmedian(
+            values,
+            axis=1,
+        )
+
+        good_fraction = np.mean(
+            np.isfinite(values),
+            axis=1,
+        )
+
+        row_profile_mid[
+            good_fraction < min_good_fraction
+        ] = np.nan
+
+        row_profile_mid = fill_bad_rows(
+            row_profile_mid
+        )
+
+        # ---------------------------------------------------------
+        # Put into full detector-row coordinates
+        # ---------------------------------------------------------
+
+        row_profile = np.zeros(
+            ny,
+            dtype=float,
+        )
+
+        row_profile[
+            sci_y0:sci_y1
+        ] = row_profile_mid
+
+        # ---------------------------------------------------------
+        # Remove scalar DC level
+        # ---------------------------------------------------------
+
+        dc = np.nanmedian(
+            row_profile[
+                sci_y0:sci_y1
+            ]
+        )
+
+        row_profile[
+            sci_y0:sci_y1
+        ] -= dc
+
+        return (
+            row_profile,
+            mask,
+            good_fraction,
+        )
+
+
+    # =============================================================
+    # Correction passes
+    # =============================================================
+
+    for pass_index in range(n_passes):
+
+        # ---------------------------------------------------------
+        # Consecutive-read differences
+        # ---------------------------------------------------------
+
+        diffs = (
+            working[1:]
+            - working[:-1]
+        )
+
+        ndiff = diffs.shape[0]
+
+        masks_all = []
+
+
+        # =========================================================
+        # Measure row profile for every difference
+        # =========================================================
+
+        if per_amp:
+
+            profiles = np.zeros(
+                (
+                    ndiff,
+                    nchans,
+                    ny,
+                ),
+                dtype=float,
+            )
+
+            good_fraction_all = np.zeros(
+                (
+                    ndiff,
+                    nchans,
+                    sci_y1 - sci_y0,
+                ),
+                dtype=float,
+            )
+
+            for r in range(ndiff):
+
+                masks_read = []
+
+                for amp in range(nchans):
+
+                    amp_x0 = (
+                        amp * chsize
+                    )
+
+                    amp_x1 = (
+                        (amp + 1)
+                        * chsize
+                    )
+
+                    x0 = max(
+                        amp_x0,
+                        sci_x0,
+                    )
+
+                    x1 = min(
+                        amp_x1,
+                        sci_x1,
+                    )
+
+                    if x1 <= x0:
+                        continue
+
+                    (
+                        profile,
+                        mask,
+                        good_fraction,
+                    ) = estimate_row_profile(
+                        diffs[r],
+                        x0,
+                        x1,
+                    )
+
+                    profiles[
+                        r,
+                        amp,
+                    ] = profile
+
+                    good_fraction_all[
+                        r,
+                        amp,
+                    ] = good_fraction
+
+                    masks_read.append(
+                        mask
+                    )
+
+                masks_all.append(
+                    masks_read
+                )
+
+        else:
+
+            profiles = np.zeros(
+                (
+                    ndiff,
+                    ny,
+                ),
+                dtype=float,
+            )
+
+            good_fraction_all = np.zeros(
+                (
+                    ndiff,
+                    sci_y1 - sci_y0,
+                ),
+                dtype=float,
+            )
+
+            for r in range(ndiff):
+
+                (
+                    profile,
+                    mask,
+                    good_fraction,
+                ) = estimate_row_profile(
+                    diffs[r],
+                    sci_x0,
+                    sci_x1,
+                )
+
+                profiles[r] = profile
+
+                good_fraction_all[
+                    r
+                ] = good_fraction
+
+                masks_all.append(
+                    mask
+                )
+
+
+        # =========================================================
+        # Decide which row component to remove
+        # =========================================================
+
+        static_profile = np.nanmedian(
+            profiles,
+            axis=0,
+        )
+
+        if remove_full_row_pattern:
+
+            correction_profiles = (
+                profiles.copy()
+            )
+
+        else:
+
+            correction_profiles = (
+                profiles
+                - static_profile[
+                    None,
+                    ...
+                ]
+            )
+
+
+        # =========================================================
+        # Keep stripe-scale structure only
+        # =========================================================
+
+        if (
+            highpass_size is not None
+            and highpass_size > 1
+        ):
+
+            if per_amp:
+
+                for r in range(ndiff):
+
+                    for amp in range(
+                        nchans
+                    ):
+
+                        p = (
+                            correction_profiles[
+                                r,
+                                amp,
+                            ]
+                        )
+
+                        slow = median_filter(
+                            p,
+                            size=highpass_size,
+                            mode="nearest",
+                        )
+
+                        correction_profiles[
+                            r,
+                            amp,
+                        ] = (
+                            p - slow
+                        )
+
+            else:
+
+                for r in range(ndiff):
+
+                    p = (
+                        correction_profiles[
+                            r
+                        ]
+                    )
+
+                    slow = median_filter(
+                        p,
+                        size=highpass_size,
+                        mode="nearest",
+                    )
+
+                    correction_profiles[
+                        r
+                    ] = (
+                        p - slow
+                    )
+
+
+        # =========================================================
+        # Build difference-space pickup model
+        # =========================================================
+
+        diff_model = np.zeros_like(
+            diffs,
+            dtype=np.float64,
+        )
+
+        if per_amp:
+
+            for r in range(ndiff):
+
+                for amp in range(
+                    nchans
+                ):
+
+                    amp_x0 = (
+                        amp * chsize
+                    )
+
+                    amp_x1 = (
+                        (amp + 1)
+                        * chsize
+                    )
+
+                    x0 = max(
+                        amp_x0,
+                        sci_x0,
+                    )
+
+                    x1 = min(
+                        amp_x1,
+                        sci_x1,
+                    )
+
+                    if x1 <= x0:
+                        continue
+
+                    diff_model[
+                        r,
+                        :,
+                        x0:x1,
+                    ] = (
+                        correction_profiles[
+                            r,
+                            amp,
+                            :,
+                        ][:, None]
+                    )
+
+        else:
+
+            diff_model[
+                :,
+                :,
+                sci_x0:sci_x1,
+            ] = (
+                correction_profiles[
+                    :,
+                    :,
+                    None,
+                ]
+            )
+
+
+        # =========================================================
+        # Integrate difference correction back into read space
+        # =========================================================
+
+        read_model = np.zeros_like(
+            working,
+            dtype=np.float64,
+        )
+
+        # First read is kept unchanged.
+        #
+        # If
+        #
+        # diff_model[0] = correction for read1-read0
+        #
+        # then
+        #
+        # read_model[1] = diff_model[0]
+        # read_model[2] = diff_model[0] + diff_model[1]
+        # ...
+
+        read_model[1:] = np.cumsum(
+            diff_model,
+            axis=0,
+        )
+
+
+        # =========================================================
+        # Apply correction
+        # =========================================================
+
+        working -= read_model
+
+        total_model += read_model
+
+
+        # =========================================================
+        # Store diagnostics
+        # =========================================================
+
+        diagnostics[
+            f"pass_{pass_index}"
+        ] = {
+            "diffs": diffs.copy(),
+
+            "row_profiles":
+                profiles.copy(),
+
+            "static_profile":
+                static_profile.copy(),
+
+            "correction_profiles":
+                correction_profiles.copy(),
+
+            "diff_model":
+                diff_model.copy(),
+
+            "read_model":
+                read_model.copy(),
+
+            "good_fraction":
+                good_fraction_all.copy(),
+
+            "masks":
+                masks_all,
+        }
+
+
+    # =============================================================
+    # Return
+    # =============================================================
+
+    corrected = working
+
+    outputs = [
+        corrected
+    ]
+
+    if return_model:
+        outputs.append(
+            total_model
+        )
+
+    if return_diagnostics:
+        outputs.append(
+            diagnostics
+        )
+
+    if len(outputs) == 1:
+        return outputs[0]
+
+    return tuple(outputs)

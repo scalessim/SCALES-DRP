@@ -392,7 +392,7 @@ def read_table(input_dir=None, file_name=None):
     return retab
 
 
-def scales_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
+def scales_fits_writer1(ccddata, table=None, output_file=None, output_dir=None,
                      suffix=None):
     """
     A writer for KCCDData or CCDData objects.
@@ -487,6 +487,276 @@ def scales_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
     hdus_to_save.writeto(out_file, overwrite=True)
 
 
+def scales_fits_writer(
+    ccddata,
+    table=None,
+    output_file=None,
+    output_dir=None,
+    suffix=None,
+    quality_map=None,
+    chisq=None,
+):
+    """
+    Write a KCCDData or CCDData object to a FITS file.
+
+    Updates HISTORY in the FITS header with the SCALES-DRP package version,
+    git version, and git date.
+
+    Float64 science and uncertainty arrays are converted to float32.
+
+    Optionally writes:
+        DQ    : 2-D detector data-quality bit mask
+        CHISQ : 2-D chi-square map from ramp fitting
+
+    Parameters
+    ----------
+    ccddata : KCCDData or CCDData
+        Science data object to write.
+
+    table : FITS Table, optional
+        Currently not used.
+
+    output_file : str
+        Base filename to write.
+
+    output_dir : str
+        Directory into which the FITS file is written.
+
+    suffix : str, optional
+        Suffix appended to the output filename.
+
+    quality_map : ndarray, optional
+        2-D detector data-quality bit mask.
+
+        Expected bit definitions:
+
+            bit 0 : BPM
+            bit 1 : directly saturated during ramp
+            bit 2 : saturated neighbor caused earlier ramp cutoff
+
+        Bits may be combined.
+
+    chisq : ndarray, optional
+        2-D map of chi-square values from ramp fitting.
+        Written as float32 in the CHISQ extension.
+
+    Returns
+    -------
+    None
+    """
+
+    # ------------------------------------------------------------------
+    # Add pipeline / git version information to HISTORY
+    # ------------------------------------------------------------------
+
+    history = ccddata.header.get("HISTORY", [])
+
+    # HISTORY can occasionally be a single string
+    if isinstance(history, str):
+        history = [history]
+
+    contains_version = any(
+        "scalesdrp version" in str(h)
+        for h in history
+    )
+
+    if not contains_version:
+
+        # Package version
+        try:
+            ver = version("scalesdrp")
+        except PackageNotFoundError:
+            ver = "unknown"
+
+        ccddata.header.add_history(f"scalesdrp version={ver}")
+
+        # Find .git directory relative to this primitive
+        primitive_loc = os.path.dirname(os.path.abspath(__file__))
+        git_loc = primitive_loc[:-18] + ".git"
+
+        git1 = subprocess.run(
+            [
+                "git",
+                "--git-dir",
+                git_loc,
+                "describe",
+                "--tags",
+                "--long",
+            ],
+            capture_output=True,
+        )
+
+        git2 = subprocess.run(
+            [
+                "git",
+                "--git-dir",
+                git_loc,
+                "log",
+                "-1",
+                "--format=%cd",
+            ],
+            capture_output=True,
+        )
+
+        if not bool(git1.stderr) and not bool(git2.stderr):
+
+            git_v = git1.stdout.decode("utf-8").strip()
+            git_d = git2.stdout.decode("utf-8").strip()
+
+            ccddata.header.add_history(f"git version={git_v}")
+            ccddata.header.add_history(f"git date={git_d}")
+
+        else:
+            logger.debug(
+                "Package not installed from a git repo, skipping git info"
+            )
+
+    # ------------------------------------------------------------------
+    # Convert science data to float32
+    # ------------------------------------------------------------------
+
+    if (
+        ccddata.data is not None
+        and ccddata.data.dtype == np.float64
+    ):
+        ccddata.data = ccddata.data.astype(np.float32)
+
+    # ------------------------------------------------------------------
+    # Convert uncertainty to float32
+    # ------------------------------------------------------------------
+
+    if (
+        ccddata.uncertainty is not None
+        and ccddata.uncertainty.array.dtype == np.float64
+    ):
+        ccddata.uncertainty.array = (
+            ccddata.uncertainty.array.astype(np.float32)
+        )
+
+    # ------------------------------------------------------------------
+    # Construct output filename
+    # ------------------------------------------------------------------
+
+    out_file = os.path.join(
+        output_dir,
+        os.path.basename(output_file),
+    )
+
+    if suffix is not None:
+        main_name, extension = os.path.splitext(out_file)
+        out_file = main_name + "_" + suffix + extension
+
+    # ------------------------------------------------------------------
+    # Build base HDUList
+    # ------------------------------------------------------------------
+
+    hdus_to_save = ccddata.to_hdu()
+
+    # ------------------------------------------------------------------
+    # DQ extension
+    # ------------------------------------------------------------------
+
+    if quality_map is not None:
+
+        dq = np.asarray(quality_map)
+
+        if dq.ndim != 2:
+            raise ValueError(
+                "quality_map must be a 2-D array. "
+                f"Received shape {dq.shape}"
+            )
+
+        # Verify it matches the science image
+        if (
+            ccddata.data is not None
+            and dq.shape != ccddata.data.shape
+        ):
+            raise ValueError(
+                "quality_map shape does not match science data: "
+                f"{dq.shape} != {ccddata.data.shape}"
+            )
+
+        # DQ is a bit mask, so force unsigned integer storage
+        dq = dq.astype(np.uint32, copy=False)
+
+        hdu_dq = fits.ImageHDU(
+            data=dq,
+            name="DQ",
+        )
+
+        hdu_dq.header["EXTDESC"] = (
+            "Detector data-quality bit mask"
+        )
+
+        hdu_dq.header["DQ0"] = (
+            "bit 0: detector bad pixel (BPM)"
+        )
+
+        hdu_dq.header["DQ1"] = (
+            "bit 1: directly saturated during ramp"
+        )
+
+        hdu_dq.header["DQ2"] = (
+            "bit 2: saturated neighbor caused earlier cutoff"
+        )
+
+        hdus_to_save.append(hdu_dq)
+
+    # ------------------------------------------------------------------
+    # CHISQ extension
+    # ------------------------------------------------------------------
+
+    if chisq is not None:
+
+        chisq_map = np.asarray(chisq)
+
+        if chisq_map.ndim != 2:
+            raise ValueError(
+                "chisq must be a 2-D array. "
+                f"Received shape {chisq_map.shape}"
+            )
+
+        # Verify it matches the science image
+        if (
+            ccddata.data is not None
+            and chisq_map.shape != ccddata.data.shape
+        ):
+            raise ValueError(
+                "chisq shape does not match science data: "
+                f"{chisq_map.shape} != {ccddata.data.shape}"
+            )
+
+        chisq_map = chisq_map.astype(
+            np.float32,
+            copy=False,
+        )
+
+        hdu_chisq = fits.ImageHDU(
+            data=chisq_map,
+            name="CHISQ",
+        )
+
+        hdu_chisq.header["EXTDESC"] = (
+            "Chi-square value from ramp fit"
+        )
+
+        hdus_to_save.append(hdu_chisq)
+
+    # ------------------------------------------------------------------
+    # Write file
+    # ------------------------------------------------------------------
+
+    logger.info(
+        ">>> Saving %d HDUs to %s",
+        len(hdus_to_save),
+        out_file,
+    )
+
+    hdus_to_save.writeto(
+        out_file,
+        overwrite=True,
+    )
+
 
 def fits_writer_calib(
     data,                  # 2D or 3D array
@@ -497,72 +767,235 @@ def fits_writer_calib(
     overwrite=True,
     uncert=None,
     dq=None,
+    chisq=None,
 ):
     """
-    Write data (and optional uncertainty) to a FITS file inside redux/.
+    Write calibration data and optional auxiliary products to a FITS file
+    inside redux/.
 
     Parameters
     ----------
     data : ndarray
-        calibration array.
+        Calibration array.
+
     header : fits.Header
         FITS header for the primary HDU.
+
     output_dir : str
-        Output directory (redux/ will be created inside this).
+        Output directory. A redux/ directory will be created inside this.
+
     input_filename : str
-        Original filename, used to derive output filename.
+        Original filename, used to derive the output filename.
+
     suffix : str
-        Suffix appended before extension (e.g. '_mdark', '_mflat').
+        Suffix appended before the extension
+        (e.g. '_mdark', '_mflat').
+
     overwrite : bool, optional
-        Whether to overwrite existing file (default: True).
+        Whether to overwrite an existing file. Default is True.
+
     uncert : ndarray, optional
-        Uncertainty array, same shape as data. Saved as 'UNCERT' extension.
+        Uncertainty array. Must have the same shape as data.
+        Saved as the 'UNCERT' extension.
+
+    dq : ndarray, optional
+        Data-quality bit mask. Must have the same shape as data.
+
+        Current DQ definition:
+
+            bit 0 : detector bad pixel / BPM
+            bit 1 : directly saturated during ramp
+            bit 2 : saturated neighbor caused earlier ramp cutoff
+
+        Bits may be combined.
+
+    chisq : ndarray, optional
+        Chi-square map from ramp fitting. Must have the same shape as data.
+        Saved as the 'CHISQ' extension.
 
     Returns
     -------
     output_path : str
         Full path to the written FITS file.
     """
-    # --- ensure directories exist ---
-    os.makedirs(os.path.join(output_dir, "redux"), exist_ok=True)
 
-    # --- construct filename ---
-    base_name = os.path.basename(input_filename)
-    file_root, file_ext = os.path.splitext(base_name)
-    output_filename = f"{file_root}{suffix}{file_ext}"
-    output_path = os.path.join(output_dir, "redux", output_filename)
+    # --------------------------------------------------------------
+    # Ensure output directory exists
+    # --------------------------------------------------------------
+    redux_dir = os.path.join(
+        output_dir,
+        "redux"
+    )
 
-    # --- build HDUList ---
-    hdus = [fits.PrimaryHDU(data=np.asarray(data, dtype=np.float32), header=header)]
+    os.makedirs(
+        redux_dir,
+        exist_ok=True
+    )
 
-    if dq is not None:
-        dq = np.asarray(dq)
-        if not np.issubdtype(dq.dtype, np.integer):
-            dq = dq.astype(np.uint32)
+    # --------------------------------------------------------------
+    # Construct output filename
+    # --------------------------------------------------------------
+    base_name = os.path.basename(
+        input_filename
+    )
 
-        dq_hdu = fits.ImageHDU(
-            data=dq,
-            name="DQ",
-            do_not_scale_image_data=True)
-        dq_hdu.header["EXTDESC"] = "Data quality bit mask"
-        dq_hdu.header["DQ0"] = "bit 0: do not use / input BPM"
-        dq_hdu.header["DQ1"] = "bit 1: no linearity correction"
-        dq_hdu.header["DQ2"] = "bit 2: saturated read"
-        dq_hdu.header["DQ3"] = "bit 3: bad linearity correction value"
-        dq_hdu.header["DQ4"] = "bit 4: non-monotonic linearity correction"
-        dq_hdu.header["DQ5"] = "bit 5: linearity correction applied"
-        hdus.append(dq_hdu)
+    file_root, file_ext = os.path.splitext(
+        base_name
+    )
 
-    # add uncertainty extension if provided
+    output_filename = (
+        f"{file_root}{suffix}{file_ext}"
+    )
+
+    output_path = os.path.join(
+        redux_dir,
+        output_filename
+    )
+
+    # --------------------------------------------------------------
+    # Primary HDU
+    # --------------------------------------------------------------
+    data_array = np.asarray(
+        data,
+        dtype=np.float32
+    )
+
+    hdus = [
+        fits.PrimaryHDU(
+            data=data_array,
+            header=header
+        )
+    ]
+
+    # --------------------------------------------------------------
+    # Uncertainty extension
+    # --------------------------------------------------------------
     if uncert is not None:
-        uncert = np.asarray(uncert)
-        if uncert.shape != data.shape:
-            warnings.warn(f"Uncertainty shape {uncert.shape} does not match data {data.shape}; skipping UNCERT extension.")
+
+        uncert_array = np.asarray(
+            uncert
+        )
+
+        if uncert_array.shape != data_array.shape:
+
+            warnings.warn(
+                f"Uncertainty shape {uncert_array.shape} "
+                f"does not match data shape {data_array.shape}; "
+                "skipping UNCERT extension."
+            )
+
         else:
-            hdu_uncert = fits.ImageHDU(data=np.asarray(uncert, dtype=np.float32), name="UNCERT")
-            hdus.append(hdu_uncert)
-    hdul = fits.HDUList(hdus)
-    # --- write to disk ---
-    hdul.writeto(output_path, overwrite=overwrite)
-    # --- optional: return path for downstream pipeline ---
+
+            hdu_uncert = fits.ImageHDU(
+                data=uncert_array.astype(
+                    np.float32,
+                    copy=False
+                ),
+                name="UNCERT"
+            )
+
+            hdu_uncert.header["EXTDESC"] = (
+                "Uncertainty associated with science/calibration data"
+            )
+
+            hdus.append(
+                hdu_uncert
+            )
+
+    # --------------------------------------------------------------
+    # DQ extension
+    # --------------------------------------------------------------
+    if dq is not None:
+
+        dq_array = np.asarray(
+            dq
+        )
+
+        if dq_array.shape != data_array.shape:
+
+            warnings.warn(
+                f"DQ shape {dq_array.shape} "
+                f"does not match data shape {data_array.shape}; "
+                "skipping DQ extension."
+            )
+
+        else:
+
+            dq_array = dq_array.astype(
+                np.uint32,
+                copy=False
+            )
+
+            dq_hdu = fits.ImageHDU(
+                data=dq_array,
+                name="DQ"
+            )
+
+            dq_hdu.header["EXTDESC"] = (
+                "Detector data-quality bit mask"
+            )
+
+            dq_hdu.header["DQ0"] = (
+                "bit 0: detector bad pixel / BPM"
+            )
+
+            dq_hdu.header["DQ1"] = (
+                "bit 1: directly saturated during ramp"
+            )
+
+            dq_hdu.header["DQ2"] = (
+                "bit 2: saturated neighbor caused earlier ramp cutoff"
+            )
+
+            hdus.append(
+                dq_hdu
+            )
+
+    # --------------------------------------------------------------
+    # Chi-square extension
+    # --------------------------------------------------------------
+    if chisq is not None:
+
+        chisq_array = np.asarray(
+            chisq
+        )
+
+        if chisq_array.shape != data_array.shape:
+
+            warnings.warn(
+                f"CHISQ shape {chisq_array.shape} "
+                f"does not match data shape {data_array.shape}; "
+                "skipping CHISQ extension."
+            )
+
+        else:
+
+            hdu_chisq = fits.ImageHDU(
+                data=chisq_array.astype(
+                    np.float32,
+                    copy=False
+                ),
+                name="CHISQ"
+            )
+
+            hdu_chisq.header["EXTDESC"] = (
+                "Chi-square value from ramp fit"
+            )
+
+            hdus.append(
+                hdu_chisq
+            )
+
+    # --------------------------------------------------------------
+    # Build and write HDUList
+    # --------------------------------------------------------------
+    hdul = fits.HDUList(
+        hdus
+    )
+
+    hdul.writeto(
+        output_path,
+        overwrite=overwrite
+    )
+
     return output_path

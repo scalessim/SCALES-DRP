@@ -32,7 +32,7 @@ from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
 from scipy.ndimage import distance_transform_edt, gaussian_filter
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 from keckdrpframework.models.arguments import Arguments
-
+import scalesdrp.primitives.reference as reference
 ############# functions to check avoid processing again #########################
 def read_existing_l1(l1_path):
 
@@ -955,11 +955,12 @@ def _ols_row_and_uncert(row_reads,valid_reads_mask,t,sig_row):
     return slope_row, slope_unc_row
 
 
-def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
+def ramp_fit1(input_read, total_exptime, SIG_map_scaled, *,
     return_pedestal=True,
     reset_prior_strength=3.0, # prior σ = k * SIG per pixel
     use_sigma_clip=False,  # optional; physics mask usually suffices
-    sigma_clip=3.0, max_iter=3, min_reads=5, tile=(128, 128),
+    sigma_clip=3.0, max_iter=3,
+    min_reads=5, tile=(128, 128),
     JUMP_THRESH_ONEOMIT=20.25,
     JUMP_THRESH_TWOOMIT=23.8,
     group_dq=None):
@@ -1022,6 +1023,15 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
         base_valid &= _sigma_clip_reads(input_read)
 
     diffs = input_read[1:] - input_read[:-1]
+    #1/f correction on the read difference
+    #diffs = reference.ref_filter_orig(
+    #        diffs1,nchans=4, in_place=False,
+    #        avg_type='row_wise',
+    #        left_ref=True, right_ref=True,
+    #        nleft=4, nright=4,
+    #        mean_func=np.nanmedian, smooth=False,
+    #        savgol=False, winsize=31, order=3,
+    #    )
 
     n_fallback = 0
     if group_dq is not None:
@@ -1072,7 +1082,8 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
     slope  = np.full((H, W), np.nan, float)
     ped    = np.full((H, W), np.nan, float)
     uncert = np.full((H, W), np.nan, float)
-
+    chisq = np.full((H, W), np.nan, float)
+    
     for i in range(H):
         if i % 128 == 0:
             print(f"Fitting row {i}/{H}...")
@@ -1087,6 +1098,7 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
         row_slope  = np.full(Wrow, np.nan, float)
         row_ped    = np.full(Wrow, np.nan, float)
         row_uncert = np.full(Wrow, np.nan, float)
+        row_chisq  = np.full(Wrow, np.nan, float)
 
         # 0) Usable diffs BEFORE jump detection
         usable0 = m_row.sum(axis=0)
@@ -1177,6 +1189,7 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
                 row_slope[idx_final_fit]  = final_res.countrate
                 row_ped[idx_final_fit]    = final_res.pedestal
                 row_uncert[idx_final_fit] = final_res.uncert     # <-- from fitramp
+                row_chisq[idx_final_fit]  = final_res.chisq
             except Exception:
                 pass
 
@@ -1204,9 +1217,1050 @@ def ramp_fit(input_read, total_exptime, SIG_map_scaled, *,
         slope[i, :]  = row_slope
         ped[i,   :]  = row_ped
         uncert[i, :] = row_uncert
+        chisq[i, :] = row_chisq
     t2=time.time()
     print(f"Ramp fitting completed in {t2 - t1:.3f} seconds.")
-    return (slope, ped, uncert) if return_pedestal else (slope, uncert)
+    return (slope, ped, uncert, chisq) if return_pedestal else (slope, uncert)
+##################################################################################
+
+def ramp_fit(
+    input_read,
+    total_exptime,
+    SIG_map_scaled,
+    *,
+    return_pedestal=True,
+    reset_prior_strength=3.0,
+    use_sigma_clip=False,
+    sigma_clip=3.0,
+    max_iter=3,
+    min_reads=5,
+    tile=(128, 128),
+    JUMP_THRESH_ONEOMIT=20.25,
+    JUMP_THRESH_TWOOMIT=23.8,
+    group_dq=None,
+):
+    """
+    Fit detector ramps and return slope, uncertainty, chi-square,
+    and optionally pedestal.
+
+    The preferred fit is fitramp with pedestal=True. If that fit
+    cannot be performed for a pixel, a robust OLS fit is used as
+    a fallback.
+
+    Parameters
+    ----------
+    input_read : ndarray, shape (Nreads, H, W)
+        Input detector ramp.
+
+    total_exptime : float
+        Total exposure time.
+
+    SIG_map_scaled : ndarray, shape (H, W)
+        Per-pixel noise estimate used by the ramp fitter.
+
+    return_pedestal : bool, optional
+        If True, return pedestal in addition to slope, uncertainty,
+        and chi-square.
+
+    reset_prior_strength : float, optional
+        Reset prior sigma is:
+
+            reset_prior_strength * SIG_map_scaled
+
+    use_sigma_clip : bool, optional
+        Apply an initial sigma-clipping mask to the reads.
+
+    sigma_clip : float, optional
+        Sigma threshold used by the optional clipping.
+
+    max_iter : int, optional
+        Maximum number of sigma-clipping iterations.
+
+    min_reads : int, optional
+        Minimum number of reads used during sigma clipping.
+
+    tile : tuple, optional
+        Tile size used for sigma clipping.
+
+    JUMP_THRESH_ONEOMIT : float, optional
+        fitramp threshold for one-omit jump detection.
+
+    JUMP_THRESH_TWOOMIT : float, optional
+        fitramp threshold for two-omit jump detection.
+
+    group_dq : ndarray, bool, shape (Nreads, H, W), optional
+        Dynamic read-validity mask.
+
+        True  = use read
+        False = reject read
+
+        The dynamic mask is only applied to a pixel if at least one
+        valid read difference remains. Otherwise the unmasked ramp is
+        used for that pixel.
+
+    Returns
+    -------
+    If return_pedestal=True:
+
+        slope, pedestal, uncertainty, chisq
+
+    otherwise:
+
+        slope, uncertainty, chisq
+    """
+
+    N, H, W = input_read.shape
+
+    dt = float(total_exptime) / N
+
+    t = (
+        np.arange(N, dtype=float) + 0.5
+    ) * dt
+
+    t1 = time.time()
+
+    # ================================================================
+    # Helper: sigma clipping
+    # ================================================================
+
+    def _sigma_clip_reads(cube):
+
+        from tqdm import tqdm
+
+        keep = np.ones_like(
+            cube,
+            dtype=bool
+        )
+
+        Ty, Tx = tile
+
+        for y0 in tqdm(
+            range(0, H, Ty),
+            desc="σ-clip tiles"
+        ):
+
+            y1 = min(
+                H,
+                y0 + Ty
+            )
+
+            for x0 in range(0, W, Tx):
+
+                x1 = min(
+                    W,
+                    x0 + Tx
+                )
+
+                sub = cube[
+                    :,
+                    y0:y1,
+                    x0:x1
+                ]
+
+                n, ty, tx = sub.shape
+
+                k = ty * tx
+
+                Y = sub.reshape(
+                    n,
+                    k
+                )
+
+                mask = np.isfinite(Y)
+
+                time_idx = np.arange(
+                    n,
+                    dtype=np.float32
+                )
+
+                for _ in range(max_iter):
+
+                    cnt = mask.sum(axis=0)
+
+                    if not np.any(
+                        cnt >= min_reads
+                    ):
+                        break
+
+                    S0 = cnt
+
+                    St = (
+                        time_idx @ mask
+                    )
+
+                    Stt = (
+                        (time_idx ** 2) @ mask
+                    )
+
+                    Wy = Y * mask
+
+                    Sy = Wy.sum(axis=0)
+
+                    Sty = (
+                        time_idx @ Wy
+                    )
+
+                    Var_t = (
+                        Stt
+                        - (St * St)
+                        / np.maximum(S0, 1)
+                    )
+
+                    Cov_ty = (
+                        Sty
+                        - (St * Sy)
+                        / np.maximum(S0, 1)
+                    )
+
+                    b = np.zeros(
+                        k,
+                        dtype=np.float32
+                    )
+
+                    ok = Var_t > 0
+
+                    b[ok] = (
+                        Cov_ty[ok]
+                        / Var_t[ok]
+                    )
+
+                    a = (
+                        Sy - b * St
+                    ) / np.maximum(S0, 1)
+
+                    Yhat = (
+                        a
+                        + np.outer(
+                            time_idx,
+                            b
+                        )
+                    )
+
+                    resid = Y - Yhat
+
+                    resid[~mask] = np.nan
+
+                    s = np.nanstd(
+                        resid,
+                        axis=0
+                    )
+
+                    new_mask = (
+                        (np.abs(resid) < sigma_clip * s)
+                        & np.isfinite(Y)
+                    )
+
+                    if np.array_equal(
+                        new_mask,
+                        mask
+                    ):
+                        break
+
+                    mask = new_mask
+
+                keep[
+                    :,
+                    y0:y1,
+                    x0:x1
+                ] = mask.reshape(
+                    n,
+                    ty,
+                    tx
+                )
+
+        return keep
+
+    # ================================================================
+    # Helper: OLS chi-square
+    # ================================================================
+    
+    def _ols_chisq_row(
+        reads_row,
+        valid_row,
+        t,
+        slope_row,
+        sig_row,
+    ):
+        """
+        Vectorized OLS chi-square for one detector row.
+
+        Parameters
+        ----------
+        reads_row : ndarray, shape (N, W)
+        valid_row : ndarray, bool, shape (N, W)
+        t : ndarray, shape (N,)
+        slope_row : ndarray, shape (W,)
+        sig_row : ndarray, shape (W,)
+
+        Returns
+        -------
+        chisq_row : ndarray, shape (W,)
+        """
+
+        # Valid points
+        mask = (
+            valid_row
+            & np.isfinite(reads_row)
+        )
+
+        nvalid = mask.sum(axis=0)
+
+        # --------------------------------------------------------------
+        # OLS intercept corresponding to supplied slope
+        #
+        # intercept = mean(y - slope*t)
+        # over valid reads
+        # --------------------------------------------------------------
+
+        model_without_intercept = (
+            t[:, None] * slope_row[None, :]
+        )
+
+        residual0 = (
+            reads_row
+            - model_without_intercept
+        )
+
+        # Ignore invalid reads
+        residual0_masked = np.where(
+            mask,
+            residual0,
+            0.0
+        )
+
+        intercept = np.full(
+            reads_row.shape[1],
+            np.nan,
+            dtype=float
+        )
+
+        good_count = nvalid > 0
+
+        intercept[good_count] = (
+            residual0_masked[:, good_count].sum(axis=0)
+            / nvalid[good_count]
+        )
+
+        # --------------------------------------------------------------
+        # Full model and residual
+        # --------------------------------------------------------------
+
+        model = (
+            intercept[None, :]
+            + model_without_intercept
+        )
+
+        residual = (
+            reads_row - model
+        )
+
+        # --------------------------------------------------------------
+        # Chi-square
+        # --------------------------------------------------------------
+
+        valid_sigma = (
+            np.isfinite(sig_row)
+            & (sig_row > 0)
+        )
+
+        good = (
+            (nvalid >= 2)
+            & np.isfinite(slope_row)
+            & np.isfinite(intercept)
+            & valid_sigma
+        )
+
+        chisq_row = np.full(
+            reads_row.shape[1],
+            np.nan,
+            dtype=float
+        )
+
+        normalized_resid2 = (
+            residual
+            / sig_row[None, :]
+        ) ** 2
+
+        normalized_resid2 = np.where(
+            mask,
+            normalized_resid2,
+            0.0
+        )
+
+        chisq_all = np.sum(
+            normalized_resid2,
+            axis=0
+        )
+
+        chisq_row[good] = (
+            chisq_all[good]
+        )
+
+        return chisq_row
+
+    # ================================================================
+    # Initial read-validity mask
+    # ================================================================
+
+    base_valid_nomask = np.isfinite(
+        input_read
+    )
+
+    if use_sigma_clip:
+
+        base_valid_nomask &= (
+            _sigma_clip_reads(
+                input_read
+            )
+        )
+
+    # ================================================================
+    # Read differences
+    # ================================================================
+
+    diffs = (
+        input_read[1:]
+        - input_read[:-1]
+    )
+
+    # ================================================================
+    # Dynamic saturation / group DQ mask
+    # ================================================================
+
+    n_fallback = 0
+
+    if group_dq is not None:
+
+        group_dq = np.asarray(
+            group_dq,
+            dtype=bool
+        )
+
+        if (
+            group_dq.shape
+            != input_read.shape
+        ):
+            raise ValueError(
+                f"group_dq shape "
+                f"{group_dq.shape} "
+                f"!= input_read shape "
+                f"{input_read.shape}"
+            )
+
+        # Apply the dynamic mask
+        masked_valid = (
+            base_valid_nomask
+            & group_dq
+        )
+
+        # Valid differences after dynamic masking
+        masked_pair = (
+            masked_valid[1:]
+            & masked_valid[:-1]
+            & (diffs > 0)
+        )
+
+        # Dynamic mask may only be applied where at least
+        # one valid difference remains.
+        can_apply_mask = np.any(
+            masked_pair,
+            axis=0
+        )
+
+        # Did group_dq actually remove anything?
+        dq_changes_pixel = np.any(
+            base_valid_nomask
+            & ~group_dq,
+            axis=0
+        )
+
+        # Pixels where applying group_dq would leave
+        # no usable difference.
+        fallback_pixels = (
+            dq_changes_pixel
+            & ~can_apply_mask
+        )
+
+        n_fallback = np.count_nonzero(
+            fallback_pixels
+        )
+
+        # Apply group_dq only where it leaves a usable ramp.
+        base_valid = np.where(
+            can_apply_mask[None, :, :],
+            masked_valid,
+            base_valid_nomask
+        )
+
+    else:
+
+        base_valid = (
+            base_valid_nomask
+        )
+
+    # ================================================================
+    # Physical difference mask
+    # ================================================================
+
+    pair_mask = (
+        base_valid[1:]
+        & base_valid[:-1]
+        & (diffs > 0)
+    )
+
+    if n_fallback > 0:
+
+        print(
+            f"Dynamic saturation mask ignored for "
+            f"{n_fallback:,} pixels because it would "
+            f"remove all valid read differences."
+        )
+
+    # ================================================================
+    # Reset prior
+    # ================================================================
+
+    first_read = input_read[0]
+
+    first_ok = (
+        base_valid[0]
+        & np.isfinite(first_read)
+    )
+
+    resetval_map = np.where(
+        first_ok,
+        first_read,
+        0.0
+    )
+
+    resetsig_map = np.where(
+        first_ok,
+        reset_prior_strength
+        * SIG_map_scaled,
+        np.inf
+    )
+
+    # ================================================================
+    # fitramp covariance objects
+    # ================================================================
+
+    C_no = fitramp.Covar(
+        t,
+        pedestal=False
+    )
+
+    C_ped = fitramp.Covar(
+        t,
+        pedestal=True
+    )
+
+    # ================================================================
+    # Output arrays
+    # ================================================================
+
+    slope = np.full(
+        (H, W),
+        np.nan,
+        dtype=float
+    )
+
+    ped = np.full(
+        (H, W),
+        np.nan,
+        dtype=float
+    )
+
+    uncert = np.full(
+        (H, W),
+        np.nan,
+        dtype=float
+    )
+
+    chisq = np.full(
+        (H, W),
+        np.nan,
+        dtype=float
+    )
+
+    # ================================================================
+    # Ramp fit row-by-row
+    # ================================================================
+
+    for i in range(H):
+
+        if i % 128 == 0:
+            print(
+                f"Fitting row {i}/{H}..."
+            )
+
+        sig_row = (
+            SIG_map_scaled[i, :]
+        )
+
+        d_row = (
+            diffs[:, i, :]
+        )
+
+        m_row = (
+            pair_mask[:, i, :]
+        )
+
+        resetval = (
+            resetval_map[i, :]
+        )
+
+        resetsig = (
+            resetsig_map[i, :]
+        )
+
+        Wrow = d_row.shape[1]
+
+        row_slope = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        row_ped = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        row_uncert = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        row_chisq = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        # ------------------------------------------------------------
+        # 0) Number of usable differences before jump detection
+        # ------------------------------------------------------------
+
+        usable0 = m_row.sum(
+            axis=0
+        )
+
+        # ------------------------------------------------------------
+        # 1) Initial slope seed
+        # ------------------------------------------------------------
+
+        seed = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        idx_seed_fit = (
+            usable0 >= 2
+        )
+
+        idx_seed_ols = (
+            ~idx_seed_fit
+        )
+
+        # ------------------------------------------------------------
+        # fitramp seed
+        # ------------------------------------------------------------
+
+        if np.any(idx_seed_fit):
+
+            try:
+
+                d_sub = d_row[
+                    :,
+                    idx_seed_fit
+                ]
+
+                m_sub = m_row[
+                    :,
+                    idx_seed_fit
+                ]
+
+                sig_sub = sig_row[
+                    idx_seed_fit
+                ]
+
+                with warnings.catch_warnings():
+
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=RuntimeWarning
+                    )
+
+                    init_res = fitramp.fit_ramps(
+                        d_sub,
+                        C_no,
+                        sig_sub,
+                        diffs2use=m_sub,
+                        countrateguess=None,
+                        rescale=True
+                    )
+
+                seed[
+                    idx_seed_fit
+                ] = init_res.countrate
+
+            except Exception:
+
+                idx_seed_ols |= (
+                    idx_seed_fit
+                )
+
+        # ------------------------------------------------------------
+        # OLS seed
+        # ------------------------------------------------------------
+
+        if np.any(idx_seed_ols):
+
+            ols_row, _ = (
+                _ols_row_and_uncert(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    sig_row
+                )
+            )
+
+            seed[
+                idx_seed_ols
+            ] = ols_row[
+                idx_seed_ols
+            ]
+
+        # ------------------------------------------------------------
+        # Fill failed fitramp seeds with OLS
+        # ------------------------------------------------------------
+
+        bad_seed = (
+            ~np.isfinite(seed)
+        )
+
+        if np.any(bad_seed):
+
+            ols_row, _ = (
+                _ols_row_and_uncert(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    sig_row
+                )
+            )
+
+            seed[
+                bad_seed
+            ] = ols_row[
+                bad_seed
+            ]
+
+        # ------------------------------------------------------------
+        # 2) Jump detection
+        # ------------------------------------------------------------
+
+        m_row2 = m_row.copy()
+
+        idx_jump = (
+            usable0 >= 1
+        )
+
+        if np.any(idx_jump):
+
+            try:
+
+                d_sub = d_row[
+                    :,
+                    idx_jump
+                ]
+
+                m_sub = m_row[
+                    :,
+                    idx_jump
+                ]
+
+                sig_sub = sig_row[
+                    idx_jump
+                ]
+
+                with warnings.catch_warnings():
+
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=RuntimeWarning
+                    )
+
+                    m2_sub, _ = (
+                        fitramp.mask_jumps(
+                            d_sub,
+                            C_no,
+                            sig_sub,
+                            threshold_oneomit=(
+                                JUMP_THRESH_ONEOMIT
+                            ),
+                            threshold_twoomit=(
+                                JUMP_THRESH_TWOOMIT
+                            ),
+                            diffs2use=m_sub
+                        )
+                    )
+
+                m_row2[
+                    :,
+                    idx_jump
+                ] = m2_sub
+
+            except Exception:
+                pass
+
+        usable_final = (
+            m_row2.sum(
+                axis=0
+            )
+        )
+
+        # ------------------------------------------------------------
+        # 3) Final fitramp fit with pedestal
+        # ------------------------------------------------------------
+
+        idx_final_fit = (
+            (usable_final >= 1)
+            &
+            (
+                np.isfinite(resetsig)
+                |
+                (usable_final >= 2)
+            )
+        )
+
+        if np.any(idx_final_fit):
+
+            try:
+
+                d_sub = d_row[
+                    :,
+                    idx_final_fit
+                ]
+
+                m_sub = m_row2[
+                    :,
+                    idx_final_fit
+                ]
+
+                sig_sub = sig_row[
+                    idx_final_fit
+                ]
+
+                seed_sub = seed[
+                    idx_final_fit
+                ]
+
+                r0_sub = resetval[
+                    idx_final_fit
+                ]
+
+                s0_sub = resetsig[
+                    idx_final_fit
+                ]
+
+                with warnings.catch_warnings():
+
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=RuntimeWarning
+                    )
+
+                    final_res = fitramp.fit_ramps(
+                        d_sub,
+                        C_ped,
+                        sig_sub,
+                        diffs2use=m_sub,
+                        countrateguess=seed_sub,
+                        resetval=r0_sub,
+                        resetsig=s0_sub,
+                        rescale=True
+                    )
+
+                row_slope[
+                    idx_final_fit
+                ] = final_res.countrate
+
+                row_ped[
+                    idx_final_fit
+                ] = final_res.pedestal
+
+                row_uncert[
+                    idx_final_fit
+                ] = final_res.uncert
+
+                row_chisq[
+                    idx_final_fit
+                ] = final_res.chisq
+
+            except Exception:
+                pass
+
+        # ------------------------------------------------------------
+        # 4) OLS fallback
+        # ------------------------------------------------------------
+
+        need_fallback = (
+            (~np.isfinite(row_slope))
+            |
+            (usable_final == 0)
+            |
+            (~idx_final_fit)
+        )
+
+        if np.any(need_fallback):
+
+            ols_row, ols_unc = (
+                _ols_row_and_uncert(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    sig_row
+                )
+            )
+
+            ols_chisq = (
+                _ols_chisq_row(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    ols_row,
+                    sig_row
+                )
+            )
+
+            row_slope[
+                need_fallback
+            ] = ols_row[
+                need_fallback
+            ]
+
+            row_uncert[
+                need_fallback
+            ] = ols_unc[
+                need_fallback
+            ]
+
+            row_ped[
+                need_fallback
+            ] = resetval[
+                need_fallback
+            ]
+
+            row_chisq[
+                need_fallback
+            ] = ols_chisq[
+                need_fallback
+            ]
+
+        # ------------------------------------------------------------
+        # 5) Final sanitation
+        # ------------------------------------------------------------
+
+        bad_final = (
+            ~np.isfinite(
+                row_slope
+            )
+        )
+
+        if np.any(bad_final):
+
+            ols_row, ols_unc = (
+                _ols_row_and_uncert(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    sig_row
+                )
+            )
+
+            ols_chisq = (
+                _ols_chisq_row(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    ols_row,
+                    sig_row
+                )
+            )
+
+            row_slope[
+                bad_final
+            ] = ols_row[
+                bad_final
+            ]
+
+            row_uncert[
+                bad_final
+            ] = ols_unc[
+                bad_final
+            ]
+
+            row_ped[
+                bad_final
+            ] = resetval[
+                bad_final
+            ]
+
+            row_chisq[
+                bad_final
+            ] = ols_chisq[
+                bad_final
+            ]
+
+        # ------------------------------------------------------------
+        # Save row
+        # ------------------------------------------------------------
+
+        slope[i, :] = (
+            row_slope
+        )
+
+        ped[i, :] = (
+            row_ped
+        )
+
+        uncert[i, :] = (
+            row_uncert
+        )
+
+        chisq[i, :] = (
+            row_chisq
+        )
+
+    # ================================================================
+    # Finished
+    # ================================================================
+
+    t2 = time.time()
+
+    print(
+        f"Ramp fitting completed in "
+        f"{t2 - t1:.3f} seconds."
+    )
+
+    if return_pedestal:
+
+        return (
+            slope,
+            ped,
+            uncert,
+            chisq
+        )
+
+    return (
+        slope,
+        uncert,
+        chisq
+    )
 
 ######################################################################################
 def estimate_uncert_single_read(

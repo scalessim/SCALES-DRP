@@ -299,15 +299,14 @@ class StartCalib(BasePrimitive):
                             )
                         
                         self.logger.info("+++++++++++ ramp fitting started +++++++++++")
-                        final_slope,reset,uncert = scbasic.ramp_fit(
+                        final_slope,reset,uncert,chisq = scbasic.ramp_fit(
                             corrected_cube,
                             #sci_im_full_original3,
                             readtime,
                             SIG_map_scaled,
-                            group_dq = None) #keep group_dq=good_read_mask when linearity is on otherwise None
+                            group_dq = good_read_mask) #keep group_dq=good_read_mask when linearity is on otherwise None
 
-                        #dq_2d = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
-
+                        dq_2d = quality_map.astype(np.uint32)
                     self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
 
                     #dynamic mask section
@@ -337,7 +336,8 @@ class StartCalib(BasePrimitive):
                         suffix='_L1',
                         overwrite=True,
                         uncert = bpm_slope_uncert,
-                        dq=None)
+                        dq=dq_2d,
+                        chisq=chisq)
 
                     scbasic.proctab_update(
                         header=data_header,

@@ -174,12 +174,13 @@ class RampFit(BasePrimitive):
 
             #self.logger.info("+++++++++++ odd even column swapping +++++++++++")
             sci_im_full_original1 = scbasic.swap_odd_even_columns(input_data,do_swap=False)
-
+            print('NaNs in the input data=',np.isnan(input_data).sum())
             self.logger.info("refpix and 1/f correction started")
             sci_im_full_original = reference.reffix_hxrg(sci_im_full_original1, nchans=4, resid_colsub=False)
             self.action.args.ccddata.header['HISTORY'] = 'Refpix and 1/f correction applied'
             self.logger.info("refpix and 1/f correction completed")
-
+            print('NaNs in the reference pixel corrected data=',np.isnan(sci_im_full_original).sum())
+            
             if sci_im_full_original.ndim ==2:
                 final_slope = sci_im_full_original
                 uncert = scbasic.estimate_uncert_single_read(
@@ -202,7 +203,7 @@ class RampFit(BasePrimitive):
                         return_aux=True,
                         )
                     )
-
+                print('NaNs in the linearity corrected data=',np.isnan(corrected_cube).sum())
                 self.action.args.ccddata.header['HISTORY'] = 'Non-linearity correction applied'
                 self.logger.info("+++++++++++ linearity correction finished +++++++++++")
                 self.logger.info("+++++++++++ Flagging nearest neighbors using saturation map +++++++++++")
@@ -213,16 +214,17 @@ class RampFit(BasePrimitive):
                     bpm=master_bpm,
                     neighbor_radius=1,
                     )
-
+                
                 self.logger.info("+++++++++++ ramp fitting started +++++++++++")
-                final_slope,final_reset,uncert = scbasic.ramp_fit(
+                final_slope,final_reset,uncert,chisq = scbasic.ramp_fit(
                     corrected_cube,
                     #sci_im_full_original,
                     total_exptime,
                     SIG_map_scaled,
                     group_dq = good_read_mask) #change group_dq=good_read_mask or None
 
-                #self.action.args.ccddata.dq = np.bitwise_or.reduce(lin_dq, axis=0).astype(np.uint32)
+                self.action.args.ccddata.dq = quality_map.astype(np.uint32)
+                print('NaNs in the slope data=',np.isnan(final_slope).sum())
 
             self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
             #final_ramp = bpm.apply_full_correction(final_slope,obsmode)
@@ -243,6 +245,7 @@ class RampFit(BasePrimitive):
             self.action.args.ccddata.header['HISTORY'] = 'Bad pixel correction applied'
 
             self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
+            print('NaNs in the bpm corrected slope data=',np.isnan(final_ramp).sum())
             keywords_unique = {
                 key: self.action.args.ccddata.header.get(key)
                 for key in ['CAMERA', 'MCLOCK', 'EXPTIME']}
@@ -303,6 +306,7 @@ class RampFit(BasePrimitive):
 
             self.action.args.ccddata.data = final_ramp
             self.action.args.ccddata.uncertainty = StdDevUncertainty(final_uncert.astype(np.float32))
+            self.action.args.ccddata.chisq = StdDevUncertainty(chisq.astype(np.float32))
 
             log_string = RampFit.__module__
             self.action.args.ccddata.header['HISTORY'] = log_string
@@ -313,6 +317,8 @@ class RampFit(BasePrimitive):
                 table=self.action.args.table,
                 output_file=self.action.args.name,
                 output_dir=self.config.instrument.output_directory,
+                quality_map=quality_map,
+                chisq=chisq,
                 suffix="L1")
 
             scbasic.proctab_update(
