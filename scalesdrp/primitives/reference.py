@@ -21,7 +21,7 @@ def reffix_hxrg(
     in_place=False,
 
     # Amplifier/top-bottom reference correction
-    altcol=False,
+    altcol=True,
     channelwise=True,
     supermean=False,
     top_ref=True,
@@ -49,7 +49,7 @@ def reffix_hxrg(
     resid_colsub=False,
 
     # 1/f correction
-    fixcol=False,
+    fixcol=True,
     ref_avg_type='row_wise', #frame, pix, row_wise
     ref_perint=False,
     ref_edge_wrap=False,
@@ -64,12 +64,11 @@ def reffix_hxrg(
     ref_order=3,
 
     #pickup noise removal
-    pickup=True,
+    pickup=False,
     sigma_thresh=4.0,
     dilate_iter=2,
     highpass_size=101,
     per_amp=False,
-
     **kwargs
 ):
     """Apply HxRG reference-pixel corrections.
@@ -112,15 +111,6 @@ def reffix_hxrg(
         )
 
     if fixcol:
-        #arr = ref_filter_orig(
-        #    arr, nchans=nchans, in_place=False,
-        #    avg_type=ref_avg_type, perint=ref_perint,
-        #    edge_wrap=ref_edge_wrap,
-        #    left_ref=ref_left, right_ref=ref_right,
-        #    nleft=ref_nleft, nright=ref_nright,
-        #    mean_func=ref_mean_func, smooth=ref_smooth,
-        #    savgol=ref_savgol, winsize=ref_winsize, order=ref_order,
-        #)
         arr = ref_filter(
             arr,
             nchans=nchans,
@@ -157,7 +147,6 @@ def reffix_hxrg(
             n_passes=1,
             return_model=False,
         )
-
     return arr
 
 ################################## acn ################################
@@ -2405,3 +2394,49 @@ def correct_evolving_row_pickup(
         return outputs[0]
 
     return tuple(outputs)
+
+def masked_row_destripe(data, sigma_thresh=2.0, dilate_iter=3, n_passes=2):
+        """
+        Remove row-wise (horizontal band) noise from `data` without being biased
+        by compact sources.
+
+        Parameters
+        ----------
+        data : 2D ndarray
+            Input image.
+        sigma_thresh : float
+            Pixels more than this many robust-sigma above the robust median are
+            flagged as "source" pixels and excluded from the row statistic.
+            Lower = more aggressive masking (better for heavily source-filled
+            rows, but risks eating faint background structure).
+        dilate_iter : int
+            Number of binary dilation iterations applied to the source mask, to
+            cover the faint wings of each spot (not just its bright core).
+        n_passes : int
+            Number of times to repeat the mask-and-subtract cycle. A second pass
+            usually cleans up rows where the first-pass mask was incomplete.
+
+        Returns
+        -------
+        corrected : 2D ndarray
+            Destriped image (same shape as `data`).
+        row_baseline : 1D ndarray
+            The per-row offset that was subtracted (length = data.shape[0]).
+        mask : 2D bool ndarray
+            Final source mask used on the last pass.
+        """
+        working = data.copy()
+        row_baseline = np.zeros(data.shape[0])
+        mask = None
+
+        for _ in range(n_passes):
+            mean, med, std = sigma_clipped_stats(working, sigma=3.0, maxiters=5)
+            mask = working > (med + sigma_thresh * std)
+            mask = binary_dilation(mask, iterations=dilate_iter)
+            masked = np.ma.array(working, mask=mask)
+            pass_baseline = np.ma.median(masked, axis=1).filled(0.0)
+            row_baseline += pass_baseline
+            working = data - row_baseline[:, None]
+
+        corrected = data - row_baseline[:, None]
+        return corrected #, row_baseline, mask

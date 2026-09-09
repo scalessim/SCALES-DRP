@@ -69,8 +69,11 @@ class SpectralExtract(BasePrimitive):
             det_config = self.action.args.ccddata.header['MCLOCK']
             package = __name__.split('.')[0]
             det_config = str(det_config).strip()
-
-
+            modslnam = self.action.args.ccddata.header['MODSLNAM']
+            dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
+            ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam)
+            print('#############################',ifsmode,'######################')
+            
             if det_config =='5.0 MHz':  #fast1.0
                 readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
 
@@ -92,7 +95,7 @@ class SpectralExtract(BasePrimitive):
 
             data_vector_d = data_image.flatten().astype(np.float64)
 
-            ifsmode = self.action.args.ccddata.header['IFSMODE']
+            #ifsmode = self.action.args.ccddata.header['IFSMODE']
             print(ifsmode)
             if ifsmode=='LowRes-K':
                 R_for_extract = load_npz(calib_path+self.context.C2_rmat_LowRes_K)

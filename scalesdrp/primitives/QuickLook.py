@@ -567,12 +567,12 @@ class QuickLook(BasePrimitive):
                     elif data_1.ndim == 2:
                         self.logger.info("Found a single frame.")
                         data_11 = self.swap_odd_even_columns(data_1,do_swap=False)
-                        slope_filled1 = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
+                        slope_filled1 = reference.reffix_hxrg(data_11)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
 
                     elif data_1.ndim == 3:
                         data_11 = self.swap_odd_even_columns(data_1,do_swap=False)
-                        img_corr = reference.reffix_hxrg(data_11, nchans=4, fixcol=True,altcol=True)
+                        img_corr = reference.reffix_hxrg(data_11)
                         self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
                         slope_filled1 = self.iterative_sigma_weighted_ramp_fit(
                             img_corr,
@@ -589,7 +589,7 @@ class QuickLook(BasePrimitive):
                         raise ValueError(f"Expected (2D, 3D) shapes, got {img2d.shape}, {ramp3d.shape}")
 
                     data_11 = self.swap_odd_even_columns(ramp3d,do_swap=False)
-                    img_corr = reference.reffix_hxrg(data_11, nchans=4, fixcol=True)
+                    img_corr = reference.reffix_hxrg(data_11)
                     self.logger.info("+++++++++++ ACN & 1/f Correction applied +++++++++++")
                     slope_filled1 = self.iterative_sigma_weighted_ramp_fit(
                         img_corr,
@@ -604,7 +604,8 @@ class QuickLook(BasePrimitive):
             #slope_filled = np.array(slope_filled2).reshape(slope_filled1.shape)
             self.logger.info("BPM correction completed")
             self.fits_writer_steps(
-                data=slope_filled1,
+                #data=slope_filled1,
+                data=img_corr,
                 header=hdr,
                 output_dir=output_dir,
                 input_filename=filename,
@@ -620,8 +621,8 @@ class QuickLook(BasePrimitive):
             self.logger.info("BPM correction completed")
 
             self.fits_writer_steps(
-                #data=img_corr,
-                data=slope_filled1,
+                data=img_corr,
+                #data=slope_filled1,
                 header=hdr,
                 output_dir=output_dir,
                 input_filename=filename,

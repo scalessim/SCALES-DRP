@@ -246,6 +246,13 @@ class RampFit(BasePrimitive):
 
             self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
             print('NaNs in the bpm corrected slope data=',np.isnan(final_ramp).sum())
+            
+            #final_ramp = reference.masked_row_destripe(
+            #    final_ramp2,
+            #    sigma_thresh=2.0,
+            #    dilate_iter=3,
+            #    n_passes=2)
+
             keywords_unique = {
                 key: self.action.args.ccddata.header.get(key)
                 for key in ['CAMERA', 'MCLOCK', 'EXPTIME']}

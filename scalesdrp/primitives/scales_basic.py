@@ -2540,7 +2540,7 @@ def load_single_master_file(expected_keywords, master_type):
             return (data, uncert)
     return (None, None)
 #################################################################################
-def ifsmode_select(self,modslnam, dsprsnam):
+def select_ifsmode(modslnam, dsprsnam):
     modslnam = modslnam.strip()
     dsprsnam = dsprsnam.strip()
     grating = dsprsnam.split("-")[0]
