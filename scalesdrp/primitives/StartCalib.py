@@ -102,11 +102,16 @@ class StartCalib(BasePrimitive):
                 filenames = group['filenames']
                 obsmode = params.get('camera', 'obsmode')
 
-                ifsmode = params.get('dsprsnam', 'N/A')
+                dsprsnam = params.get('dsprsnam', 'N/A')
+                modslnam = params.get('modslnam', 'N/A')
                 filtername = params.get('imgfw2n', 'N/A')
                 exptime = params.get('exptime', 0)
                 mclock = params.get('mclock', 0)
                 wavelength = params.get('monowave', None)
+                if obsmode == 'IFS':
+                    ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam)
+                else:
+                    ifsmode = 'N/A'
                 #self.logger.info(f"Processing {imtype}: {len(filenames)} files "
                 #    f"(OBSMODE={obsmode}, IFSMODE={ifsmode}, FILTER={filtername}, EXPTIME={exptime}, MCLOCK={mclock})")
                 wl_str = f", WAVELENGTH={wavelength}" if wavelength is not None else ""

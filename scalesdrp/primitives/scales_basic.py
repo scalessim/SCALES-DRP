@@ -2541,18 +2541,40 @@ def load_single_master_file(expected_keywords, master_type):
     return (None, None)
 #################################################################################
 def select_ifsmode(modslnam, dsprsnam):
-    modslnam = modslnam.strip()
-    dsprsnam = dsprsnam.strip()
-    grating = dsprsnam.split("-")[0]
+    """
+    Determine the SCALES IFS mode from MODSLNAM and DSPRSNAM.
+
+    Returns
+    -------
+    str
+        Examples:
+        'MedRes-K'
+        'LowRes-K'
+        'N/A' for non-IFS or unrecognized modes.
+    """
+
+    modslnam = str(modslnam).strip()
+    dsprsnam = str(dsprsnam).strip()
 
     if modslnam == "MedRes":
-        band = grating[0]
-        ifsmode = f"{modslnam}-{band}"
-    elif modslnam == "LowRes":
-        band = grating
-        ifsmode = f"{modslnam}-{band}"
-    return ifsmode
+        grating = dsprsnam.split("-")[0]
 
+        if not grating or grating == "N/A":
+            return "N/A"
+
+        band = grating[0]
+        return f"{modslnam}-{band}"
+
+    elif modslnam == "LowRes":
+        grating = dsprsnam.split("-")[0]
+
+        if not grating or grating == "N/A":
+            return "N/A"
+
+        band = grating
+        return f"{modslnam}-{band}"
+
+    return "N/A"
 ############## lenslet flat may change #####################################################
 def load_and_normalize_lenslet_flat(
     ifsmode,
@@ -3080,7 +3102,7 @@ def group_files_by_header(dt):
             base_keys = ['CAMERA', 'IMGFW2N', 'IMTYPE', 'EXPTIME', 'MCLOCK']
             print(f"Grouping Imager data by {base_keys}")
         elif cam_u == 'IFS':
-            base_keys = ['CAMERA', 'DSPRSNAM', 'IMTYPE', 'EXPTIME', 'MCLOCK']
+            base_keys = ['CAMERA', 'DSPRSNAM','MODSLNAM', 'IMTYPE', 'EXPTIME', 'MCLOCK']
             print(f"Grouping IFS data by {base_keys}")
         else:
             print(f"Unknown CAMERA '{cam}' skipping.")
