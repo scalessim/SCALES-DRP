@@ -37,12 +37,21 @@ class Scales_pipeline(BasePipeline):
         # OBJECT PROCESSING
         "process_object":            ("ProcessObject",
                                       "object_processing_started",
+                                      "acn_onef"),
+        "acn_onef":                  ("AcnOnef",
+                                      "detector_level_correction_started",
+                                      "linearity_correct"),
+        "linearity_correct":         ("LinearityCorrect",
+                                      "non-linearity_correction_started",
                                       "ramp_fit"),
         "ramp_fit":                  ("RampFit",
                                       "science_ramp_fitting",
+                                      "dark_flat_correct"),
+        "dark_flat_correct":         ("CalibCorrect",
+                                      "dark_flat_correction_started",
                                       "spectral_extract"),
         "spectral_extract":          ("SpectralExtract",
-                                      "Extraction started",
+                                      "Spectral Extraction started",
                                       None),
 
         "next_file_stop":            ("ingest_file", "file_ingested", None)

@@ -2,10 +2,12 @@ from scalesdrp.core.scales_proctab import Proctab
 from scalesdrp.core.scales_pkg_resources import get_resource_path
 from scalesdrp.core.matplot_plotting import mpl_plot, mpl_clear
 import scalesdrp.primitives.fitramp as fitramp
+import scalesdrp.primitives.robust as robust
 import scipy.sparse as sp
 import pandas as pd
 import numpy as np
 import pickle
+from scipy.stats import trim_mean
 from importlib.resources import files
 from pathlib import Path
 from astropy.io import fits
@@ -3136,4 +3138,34 @@ def group_files_by_header(dt):
         print(f"Created {len(file_groups)} groups from data table.")
     return file_groups
 
+def resolve_mean_func(name):
+    if callable(name):
+        return name
 
+    funcs = {
+        "mean": np.mean,
+        "np.mean": np.mean,
+
+        "nanmean": np.nanmean,
+        "np.nanmean": np.nanmean,
+
+        "median": np.median,
+        "np.median": np.median,
+
+        "nanmedian": np.nanmedian,
+        "np.nanmedian": np.nanmedian,
+
+        "robust_mean": robust.mean,
+        "robust.mean": robust.mean,
+
+        "robust_median": robust.median,
+        "robust.median": robust.median,
+    }
+
+    try:
+        return funcs[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown mean function: {name}. "
+            f"Valid choices are: {list(funcs.keys())}"
+        )

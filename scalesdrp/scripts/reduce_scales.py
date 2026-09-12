@@ -302,7 +302,38 @@ def main():
     framework.context.C2_rmat_MedRes_M = scales_config.C2_rmat_MedRes_M
 
     framework.context.subtract_row_median = scales_config.subtract_row_median
-
+    framework.context.do_swap = scales_config.do_swap
+    framework.context.nchans = scales_config.nchans
+    framework.context.altcol = scales_config.altcol
+    framework.context.channelwise = scales_config.channelwise
+    framework.context.amp_mean_func = scales_config.amp_mean_func
+    framework.context.do_acn = scales_config.do_acn
+    framework.context.acn_avg_type = scales_config.acn_avg_type
+    framework.context.acn_mean_func = scales_config.acn_mean_func
+    framework.context.acn_smooth = scales_config.acn_smooth
+    framework.context.acn_savgol = scales_config.acn_savgol
+    framework.context.acn_winsize = scales_config.acn_winsize
+    framework.context.acn_order = scales_config.acn_order
+    framework.context.resid_colsub = scales_config.resid_colsub
+    framework.context.fixcol = scales_config.fixcol
+    framework.context.ref_avg_type = scales_config.ref_avg_type
+    framework.context.ref_mean_func = scales_config.ref_mean_func
+    framework.context.ref_smooth = scales_config.ref_smooth
+    framework.context.ref_savgol = scales_config.ref_savgol
+    framework.context.ref_winsize = scales_config.ref_winsize
+    framework.context.ref_order = scales_config.ref_order
+    framework.context.pickup = scales_config.pickup
+    framework.context.sigma_thresh = scales_config.sigma_thresh
+    framework.context.dilate_iter = scales_config.dilate_iter
+    framework.context.highpass_size = scales_config.highpass_size
+    framework.context.per_amp = scales_config.per_amp
+    framework.context.do_linearity = scales_config.do_linearity
+    framework.context.apply_sat_mask = scales_config.apply_sat_mask
+    framework.context.apply_bpm = scales_config.apply_bpm
+    framework.context.apply_dark = scales_config.apply_dark
+    framework.context.apply_det_flat = scales_config.apply_det_flat
+    framework.context.apply_bias = scales_config.apply_bias
+    framework.context.apply_lens_flat = scales_config.apply_lens_flat
     # implement the group mode
     if args.group_mode is True:
         data_set = framework.context.data_set
