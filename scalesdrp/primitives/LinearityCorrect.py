@@ -11,6 +11,7 @@ from scalesdrp.core.scales_proctab import Proctab
 from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
+import matplotlib.pyplot as plt
 
 class LinearityCorrect(BasePrimitive):
 
@@ -45,7 +46,7 @@ class LinearityCorrect(BasePrimitive):
             det_config = self.action.args.ccddata.header['MCLOCK']
             package = __name__.split('.')[0]
             det_config = str(det_config).strip()
-
+            plot_dir = self.config.instrument.plot_directory
             calibfilepath = self.context.calib_file_path
             calib_path = str(get_resource_path(package, calibfilepath))+'/'
             
@@ -96,11 +97,16 @@ class LinearityCorrect(BasePrimitive):
                 if os.path.exists(l1_path):
                     self.logger.info(f"Found existing L1 file: {l1_path}")
                     try:
-                        l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
+                        l1_slope, l1_uncert,l1_dq, l1_chisq,l1_header = scbasic.read_existing_l1(l1_path)
                         self.action.args.ccddata.data = l1_slope
                         self.action.args.ccddata.header = l1_header
+                        if l1_uncert is not None:
+                            self.action.args.ccddata.uncertainty = (StdDevUncertainty(l1_uncert.astype(np.float32)))
+                        else:
+                            self.action.args.ccddata.uncertainty = None
 
-                        self.action.args.ccddata.uncertainty = StdDevUncertainty(l1_uncert)
+                        self.action.args.ccddata.dq = l1_dq
+                        self.action.args.ccddata.chisq = l1_chisq
 
                         self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
                         return self.action.args
@@ -130,12 +136,27 @@ class LinearityCorrect(BasePrimitive):
                             )
                         )
                     self.action.args.ccddata.data = corrected_cube
+                    self.action.args.ccddata.header['HISTORY'] = (f'Linearity correction applied using {os.path.basename(lin_coeff)}')
+                    
+                    fig, axes = scbasic.plot_linearity_correction_diagnostics(
+                        raw_cube=sci_im_full_original,
+                        corrected_cube=corrected_cube,
+                        saturation_mask=sat_mask,
+                        applied_mask=applied_mask,
+                        output_dir=plot_dir,
+                        save_prefix=f"{self.action.args.name}_lin",
+                        skip_initial_reads=0,
+                        minimum_signal_dn=0.0,
+                        show=False)
+                    plt.close(fig)
+
+                    self.logger.info("+++++++++++ linearity correction finished +++++++++++")
                 else:
                     self.action.args.ccddata.data = sci_im_full_original
+                    self.logger.info("+++++++++++ linearity correction not applied +++++++++++")
 
                 #print('NaNs in the linearity corrected data=',np.isnan(corrected_cube).sum())
-                self.action.args.ccddata.header['HISTORY'] = (f'Linearity correction applied using {os.path.basename(lin_coeff)}')
-                self.logger.info("+++++++++++ linearity correction finished +++++++++++")
+                
                 
 
             log_string = LinearityCorrect.__module__

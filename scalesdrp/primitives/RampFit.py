@@ -17,6 +17,7 @@ import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
 from multiprocessing import Pool
+import matplotlib.pyplot as plt
 
 class RampFit(BasePrimitive):
 
@@ -67,16 +68,21 @@ class RampFit(BasePrimitive):
             filename = self.action.args.ccddata.header.get("OFNAME")
             package = __name__.split('.')[0]
             det_config = str(det_config).strip()
-
+            plot_dir = self.config.instrument.plot_directory
             calibfilepath = self.context.calib_file_path
             calib_path = str(get_resource_path(package, calibfilepath))+'/'
             if obsmode =='Im':
+                rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img)
+                bpm = self.context.bpm_img
+                master_bpm = fits.getdata(calib_path+bpm)
+
                 if det_config =='5.0 MHz':  #fast1.0
                     readnoise = self.context.sig_map_img_fast1
                     SIG_map_scaled = fits.getdata(calib_path+readnoise)
-                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast1)
-                    bpm = self.context.bpm_img_fast1
-                    master_bpm = fits.getdata(calib_path+bpm)
+                    #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast1)
+                    #bpm = self.context.bpm_img_fast1
+                    #master_bpm = fits.getdata(calib_path+bpm)
+                    gain = self.context.gain_img_fast1
                     sat_map_file = self.context.sat_map_img_fast1
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
@@ -85,9 +91,10 @@ class RampFit(BasePrimitive):
                     readnoise = self.context.sig_map_img_fast0p6
                     SIG_map_scaled = fits.getdata(calib_path+readnoise)
                     SIG_map_scaled[np.where(np.isnan(SIG_map_scaled)==True)] = np.nanmedian(SIG_map_scaled)
-                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
-                    bpm = self.context.bpm_img_fast0p6
-                    master_bpm = fits.getdata(calib_path+bpm)
+                    #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
+                    #bpm = self.context.bpm_img_fast0p6
+                    #master_bpm = fits.getdata(calib_path+bpm)
+                    gain = self.context.gain_img_fast0p6
                     sat_map_file = self.context.sat_map_img_fast0p6
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
@@ -95,9 +102,10 @@ class RampFit(BasePrimitive):
                 elif det_config =='20.0 MHz': #slow
                     readnoise = self.context.sig_map_img_slow
                     SIG_map_scaled = fits.getdata(calib_path+readnoise)
-                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_slow)
-                    bpm = self.context.bpm_img_slow
-                    master_bpm = fits.getdata(calib_path+bpm)
+                    #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_slow)
+                    #bpm = self.context.bpm_img_slow
+                    #master_bpm = fits.getdata(calib_path+bpm)
+                    gain = self.context.gain_img_slow
                     sat_map_file = self.context.sat_map_img_slow
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
@@ -105,20 +113,26 @@ class RampFit(BasePrimitive):
                 else: #default if MCLCOCK is not one of those specified above
                     readnoise = self.context.sig_map_img_fast0p6
                     SIG_map_scaled = fits.getdata(calib_path+readnoise)
-                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
-                    bpm = self.context.bpm_img_fast0p6
-                    master_bpm = fits.getdata(calib_path+bpm)
+                    #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
+                    #bpm = self.context.bpm_img_fast0p6
+                    #master_bpm = fits.getdata(calib_path+bpm)
+                    gain = self.context.gain_img_fast0p6
                     sat_map_file = self.context.sat_map_img_fast0p6
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
             elif obsmode =='IFS':
+                rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs)
+                bpm = self.context.bpm_ifs
+                master_bpm = fits.getdata(calib_path+bpm)
+
                 if det_config =='5.0 MHz':  #fast1.0
                     readnoise = self.context.sig_map_ifs_fast1
                     SIG_map_scaled = fits.getdata(calib_path+readnoise)
-                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast1)
-                    bpm = self.context.bpm_ifs_fast1
-                    master_bpm = fits.getdata(calib_path+bpm)
+                    #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast1)
+                    #bpm = self.context.bpm_ifs_fast1
+                    #master_bpm = fits.getdata(calib_path+bpm)
+                    gain = self.context.gain_ifs_fast1
                     sat_map_file = self.context.sat_map_ifs_fast1
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
@@ -126,9 +140,10 @@ class RampFit(BasePrimitive):
                 elif det_config =='9.0 MHz': #fast1.0
                     readnoise = self.context.sig_map_ifs_fast0p6
                     SIG_map_scaled = fits.getdata(calib_path+readnoise)
-                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
-                    bpm = self.context.bpm_ifs_fast0p6
-                    master_bpm = fits.getdata(calib_path+bpm)
+                    #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
+                    #bpm = self.context.bpm_ifs_fast0p6
+                    #master_bpm = fits.getdata(calib_path+bpm)
+                    gain = self.context.gain_ifs_fast0p6
                     sat_map_file = self.context.sat_map_ifs_fast0p6
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
@@ -136,9 +151,10 @@ class RampFit(BasePrimitive):
                 elif det_config =='20.0 MHz': #slow
                     readnoise = self.context.sig_map_ifs_slow
                     SIG_map_scaled = fits.getdata(calib_path+readnoise)
-                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_slow)
-                    bpm = self.context.bpm_ifs_slow
-                    master_bpm = fits.getdata(calib_path+bpm)
+                    #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_slow)
+                    #bpm = self.context.bpm_ifs_slow
+                    #master_bpm = fits.getdata(calib_path+bpm)
+                    gain = self.context.gain_ifs_slow
                     sat_map_file = self.context.sat_map_ifs_slow
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
@@ -146,9 +162,9 @@ class RampFit(BasePrimitive):
                 else: #default
                     readnoise = self.context.sig_map_ifs_fast0p6
                     SIG_map_scaled = fits.getdata(calib_path+readnoise)
-                    rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
-                    bpm = self.context.bpm_ifs_fast0p6
-                    master_bpm = fits.getdata(calib_path+bpm)
+                    #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
+                    #bpm = self.context.bpm_ifs_fast0p6
+                    #master_bpm = fits.getdata(calib_path+bpm)
                     sat_map_file = self.context.sat_map_ifs_fast0p6
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
@@ -171,11 +187,16 @@ class RampFit(BasePrimitive):
                 if os.path.exists(l1_path):
                     self.logger.info(f"Found existing L1 file: {l1_path}")
                     try:
-                        l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
+                        l1_slope, l1_uncert,l1_dq, l1_chisq,l1_header = scbasic.read_existing_l1(l1_path)
                         self.action.args.ccddata.data = l1_slope
                         self.action.args.ccddata.header = l1_header
+                        if l1_uncert is not None:
+                            self.action.args.ccddata.uncertainty = (StdDevUncertainty(l1_uncert.astype(np.float32)))
+                        else:
+                            self.action.args.ccddata.uncertainty = None
 
-                        self.action.args.ccddata.uncertainty = StdDevUncertainty(l1_uncert)
+                        self.action.args.ccddata.dq = l1_dq
+                        self.action.args.ccddata.chisq = l1_chisq
 
                         self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
                         return self.action.args
@@ -190,7 +211,11 @@ class RampFit(BasePrimitive):
                 uncert = scbasic.estimate_uncert_single_read(
                     image_dn=final_slope,
                     readnoise_map_dn=SIG_map_scaled,
-                    gain=1.0)
+                    gain=gain)
+                
+                final_slope *= gain   # e-/s
+                uncert *= gain        # e-/s
+                
                 self.action.args.ccddata.dq = None
                 self.action.args.ccddata.chisq = None
 
@@ -203,6 +228,15 @@ class RampFit(BasePrimitive):
                         bpm=master_bpm,
                         neighbor_radius=1)
                     self.action.args.ccddata.dq = quality_map.astype(np.uint32)
+                    
+                    fig, ax = scbasic.plot_good_reads_for_ramp_fitting(
+                        good_read_mask=good_read_mask,
+                        output_dir=plot_dir,
+                        save_prefix=f"{self.action.args.name}_ramp",
+                        skip_initial_reads=0,
+                        show=False)
+                    plt.close(fig)
+
                     self.action.args.ccddata.header['HISTORY'] = (f'Saturation map applied using {os.path.basename(sat_map_file)}')
                     self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                     final_slope,final_reset,uncert,chisq = scbasic.ramp_fit(
@@ -210,6 +244,10 @@ class RampFit(BasePrimitive):
                         total_exptime,
                         SIG_map_scaled,
                         group_dq = good_read_mask)
+                    
+                    final_slope *= gain   # e-/s
+                    final_reset *= gain   # e-
+                    uncert *= gain        # e-/s
                 
                 elif self.config.instrument.apply_sat_mask == False:
 
@@ -223,27 +261,39 @@ class RampFit(BasePrimitive):
                         SIG_map_scaled,
                         group_dq = None)
 
+                    final_slope *= gain   # e-/s
+                    final_reset *= gain   # e-
+                    uncert *= gain        # e-/s
+
                 self.action.args.ccddata.header['HISTORY'] =(f'Readnoise map applied using {os.path.basename(readnoise)}')
 
                 #print('NaNs in the slope data=',np.isnan(final_slope).sum())
                 self.action.args.ccddata.chisq = chisq
 
-            self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
-
             if self.config.instrument.apply_bpm == True:
+                self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
                 final_ramp1 = rmat1*np.matrix(final_slope.flatten().reshape([np.prod(final_slope.shape),1]))
                 final_ramp = np.array(final_ramp1).reshape(final_slope.shape)
 
                 final_ramp1_uncert = rmat1*np.matrix(uncert.flatten().reshape([np.prod(uncert.shape),1]))
                 final_uncert = np.array(final_ramp1_uncert).reshape(uncert.shape)
                 self.action.args.ccddata.header['HISTORY'] =(f'bad pixel map applied using {os.path.basename(bpm)}')
-            
+                self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
+                plot_path = scbasic.plot_bad_pixel_correction_comparison(
+                    slope_before=final_slope,
+                    slope_after=final_ramp,
+                    output_dir=plot_dir,
+                    filename=f"{self.action.args.name}_bpm_comp.png",
+                    title="SCALES — Bad-Pixel Correction",
+                    unit="DN/s",
+                    show=False)
             else:
+                self.logger.info("+++++++++++ Bad pixel correction is turned off +++++++++++")
                 final_ramp = final_slope
                 final_uncert = uncert
                 self.action.args.ccddata.header['HISTORY'] =(f'bad pixel map is NOT applied')
             
-            self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
+            
             #print('NaNs in the bpm corrected slope data=',np.isnan(final_ramp).sum())
 
             self.action.args.ccddata.data = final_ramp

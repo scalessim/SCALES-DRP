@@ -1,6 +1,7 @@
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 import scalesdrp.primitives.fitramp as fitramp
 import scalesdrp.primitives.robust as robust
+from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
 import scalesdrp.primitives.reference as reference #1/f and reference pixel correction
 import scalesdrp.primitives.linearity_correct as linearity_correct #linearity correction
 import scalesdrp.primitives.bpm_correction as bpm #bpm correction
@@ -24,6 +25,7 @@ import os
 import matplotlib.pyplot as plt
 from scipy.optimize import leastsq
 import time
+from astropy.nddata import StdDevUncertainty
 from scipy.signal import savgol_filter
 from scipy.ndimage import convolve, median_filter
 from scipy.interpolate import griddata
@@ -33,7 +35,9 @@ from astropy.stats import sigma_clipped_stats
 from astropy.convolution import convolve as astropy_convolve
 from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
 from scipy.ndimage import distance_transform_edt, gaussian_filter
-
+from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
+import scalesdrp.primitives.scales_basic as scbasic
+import scalesdrp.primitives.robust as robust
 from tqdm import tqdm
 
 import logging
@@ -73,514 +77,415 @@ class StartCalib(BasePrimitive):
             self.proctab = Proctab(logger=self.logger if hasattr(self, "logger") else logging.getLogger("SCALES"))
 
     def _perform(self):
-        self.logger.info("+++++++++++ SCALES calibration starting +++++++++++")
-        dt = self.context.data_set.data_table
+        imtype = self.action.args.ccddata.header['IMTYPE']
+        total_exptime = self.action.args.ccddata.header['EXPTIME']
+        obsmode = self.action.args.ccddata.header['CAMERA']
+        det_config = self.action.args.ccddata.header['MCLOCK']
+        filename = self.action.args.ccddata.header.get("OFNAME")
+        package = __name__.split('.')[0]
+        det_config = str(det_config).strip()
+        calibfilepath = self.context.calib_file_path
+        calib_path = str(get_resource_path(package, calibfilepath))+'/'
+        plot_dir = self.config.instrument.plot_directory
 
-        all_groups = scbasic.group_files_by_header(dt)
-        if not all_groups:
-            self.logger.warning("No file groups found. Nothing to process.")
-            return
+        if obsmode =='Im':
+            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img)
+            bpm = self.context.bpm_img
+            master_bpm = fits.getdata(calib_path+bpm)
 
-        ols_t_global = None
-        organized_groups = {}
-        for group in all_groups:
-            params = group['params']
-            imtype = params.get('imtype', 'UNKNOWN')
-            if imtype not in organized_groups:
-                organized_groups[imtype] = []
-            organized_groups[imtype].append(group)
+            if det_config =='5.0 MHz':  #fast1.0
+                lin_coeff = calib_path+self.context.lin_coeff_img_fast1
+                readnoise = self.context.sig_map_img_fast1
+                SIG_map_scaled = fits.getdata(calib_path+readnoise)
+                gain = self.context.gain_img_fast1
+                #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast1)
+                #bpm = self.context.bpm_img_fast1
+                #master_bpm = fits.getdata(calib_path+bpm)
+                sat_map_file = self.context.sat_map_img_fast1
+                with fits.open(calib_path+sat_map_file) as hdul:
+                    sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
-        processing_order = ['BIAS', 'DARK', 'FLATLAMP','CALUNIT']
-        self.logger.info(f"Found groups for IMTYPEs: {list(organized_groups.keys())}")
+            elif det_config =='9.0 MHz': #fast0.6
+                lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
+                readnoise = self.context.sig_map_img_fast0p6
+                SIG_map_scaled = fits.getdata(calib_path+readnoise)
+                gain = self.context.gain_img_fast0p6
+                #SIG_map_scaled[np.where(np.isnan(SIG_map_scaled)==True)] = np.nanmedian(SIG_map_scaled)
+                #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
+                #bpm = self.context.bpm_img_fast0p6
+                #master_bpm = fits.getdata(calib_path+bpm)
+                sat_map_file = self.context.sat_map_img_fast0p6
+                with fits.open(calib_path+sat_map_file) as hdul:
+                    sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
-        for imtype in processing_order:
-            if imtype not in organized_groups:
-                continue
-            groups_for_this_type = organized_groups[imtype]
-            for group in groups_for_this_type:
-                params = group['params']
-                filenames = group['filenames']
-                obsmode = params.get('camera', 'obsmode')
+            elif det_config =='20.0 MHz': #slow5.2
+                lin_coeff = calib_path+self.context.lin_coeff_img_slow
+                readnoise = self.context.sig_map_img_slow
+                SIG_map_scaled = fits.getdata(calib_path+readnoise)
+                gain = self.context.gain_img_slow
+                #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_slow)
+                #bpm = self.context.bpm_img_slow
+                #master_bpm = fits.getdata(calib_path+bpm)
+                sat_map_file = self.context.sat_map_img_slow
+                with fits.open(calib_path+sat_map_file) as hdul:
+                    sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
 
-                dsprsnam = params.get('dsprsnam', 'N/A')
-                modslnam = params.get('modslnam', 'N/A')
-                filtername = params.get('imgfw2n', 'N/A')
-                exptime = params.get('exptime', 0)
-                mclock = params.get('mclock', 0)
-                wavelength = params.get('monowave', None)
-                if obsmode == 'IFS':
-                    ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam)
-                else:
-                    ifsmode = 'N/A'
-                #self.logger.info(f"Processing {imtype}: {len(filenames)} files "
-                #    f"(OBSMODE={obsmode}, IFSMODE={ifsmode}, FILTER={filtername}, EXPTIME={exptime}, MCLOCK={mclock})")
-                wl_str = f", WAVELENGTH={wavelength}" if wavelength is not None else ""
+            else: #default if MCLCOCK is not one of those specified above
+                lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
+                readnoise = self.context.sig_map_img_fast0p6
+                SIG_map_scaled = fits.getdata(calib_path+readnoise)
+                gain = self.context.gain_img_fast0p6
+                #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
+                #bpm = self.context.bpm_img_fast0p6
+                #master_bpm = fits.getdata(calib_path+bpm)
+                sat_map_file = self.context.sat_map_img_fast0p6
+                with fits.open(calib_path+sat_map_file) as hdul:
+                    sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+
+        elif obsmode =='IFS':
+            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs)
+            bpm = self.context.bpm_ifs
+            master_bpm = fits.getdata(calib_path+bpm)
+
+            if det_config =='5.0 MHz':  #fast1.0
+                lin_coeff = calib_path+self.context.lin_coeff_ifs_fast1
+                readnoise = self.context.sig_map_ifs_fast1
+                SIG_map_scaled = fits.getdata(calib_path+readnoise)
+                gain = self.context.gain_ifs_fast1
+                #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast1)
+                #bpm = self.context.bpm_ifs_fast1
+                #master_bpm = fits.getdata(calib_path+bpm)
+                sat_map_file = self.context.sat_map_ifs_fast1
+                with fits.open(calib_path+sat_map_file) as hdul:
+                    sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+
+            elif det_config =='9.0 MHz': #fast1.0
+                lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
+                readnoise = self.context.sig_map_ifs_fast0p6
+                SIG_map_scaled = fits.getdata(calib_path+readnoise)
+                gain = self.context.gain_ifs_fast0p6
+                #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
+                #bpm = self.context.bpm_ifs_fast0p6
+                #master_bpm = fits.getdata(calib_path+bpm)
+                sat_map_file = self.context.sat_map_ifs_fast0p6
+                with fits.open(calib_path+sat_map_file) as hdul:
+                    sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+
+            elif det_config =='20.0 MHz': #slow
+                lin_coeff = calib_path+self.context.lin_coeff_ifs_slow
+                readnoise = self.context.sig_map_ifs_slow
+                SIG_map_scaled = fits.getdata(calib_path+readnoise)
+                gain = self.context.gain_ifs_slow
+                #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_slow)
+                #bpm = self.context.bpm_ifs_slow
+                #master_bpm = fits.getdata(calib_path+bpm)
+                sat_map_file = self.context.sat_map_ifs_slow
+                with fits.open(calib_path+sat_map_file) as hdul:
+                    sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+
+            else: #default
+                lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
+                readnoise = self.context.sig_map_ifs_fast0p6
+                SIG_map_scaled = fits.getdata(calib_path+readnoise)
+                gain = self.context.gain_ifs_fast0p6
+                #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
+                #bpm = self.context.bpm_ifs_fast0p6
+                #master_bpm = fits.getdata(calib_path+bpm)
+                sat_map_file = self.context.sat_map_ifs_fast0p6
+                with fits.open(calib_path+sat_map_file) as hdul:
+                    sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+
+        input_data = self.action.args.ccddata.data
+        existing_products = {}
+
+        if self.context.clobber is False:
+            requested_suffixes = []
+
+            if not requested_suffixes:
+                requested_suffixes.append("_L1")
+
+            for suffix in requested_suffixes:
+
+                existing_products[suffix] = (
+                    scbasic.find_existing_proc_file(
+                        input_filename=filename,
+                        redux_dir=self.config.instrument.output_directory,
+                        suffix=suffix))
+            if all(
+                path is not None
+                for path in existing_products.values()):
+
                 self.logger.info(
-                    f"Processing {imtype}: {len(filenames)} files "
-                    f"(CAMERA={obsmode}, IFSMODE={ifsmode}, FILTER={filtername},"
-                    f"EXPTIME={exptime}, MCLOCK={mclock}{wl_str})")
-                group_ramps = []
-                group_uncerts = []
-                group_header_for_master = None
+                    f"All requested processed products already exist "
+                    f"for {filename}: "
+                    f"{list(existing_products.keys())}. "
+                    "Skipping raw processing.")
 
-                for filename in filenames:
+                return self.action.args
 
-                    redux_dir = os.path.join(self.action.args.dirname, "redux")
+        #self.logger.info("+++++++++++ odd even column swapping +++++++++++")
+        if self.config.instrument.do_swap == True:
+            input_data = scbasic.swap_odd_even_columns(input_data,do_swap=True)
+            self.action.args.ccddata.header['HISTORY'] = 'detector level odd-even correction applied in the DRP'
+            self.logger.info("detector level odd-even correction applied in the DRP")
+        #print('NaNs in the input data=',np.isnan(input_data).sum())
+            
+        self.logger.info("refpix and 1/f correction started")            
+        sci_im_full_original = reference.reffix_hxrg(
+            cube =input_data,
+            nchans=self.config.instrument.nchans,
+            altcol=self.config.instrument.altcol,
+            channelwise=self.config.instrument.channelwise,
+            amp_mean_func=scbasic.resolve_mean_func(self.config.instrument.amp_mean_func),
+            do_acn=self.config.instrument.do_acn,
+            acn_avg_type=self.config.instrument.acn_avg_type,
+            acn_mean_func=scbasic.resolve_mean_func(self.config.instrument.acn_mean_func),
+            acn_smooth=self.config.instrument.acn_smooth,
+            acn_savgol=self.config.instrument.acn_savgol,
+            acn_winsize=self.config.instrument.acn_winsize,
+            acn_order=self.config.instrument.acn_order,
+            resid_colsub=self.config.instrument.resid_colsub,
+            fixcol=self.config.instrument.fixcol,
+            ref_avg_type=self.config.instrument.ref_avg_type,
+            ref_mean_func=scbasic.resolve_mean_func(self.config.instrument.ref_mean_func),
+            ref_smooth=self.config.instrument.ref_smooth,
+            ref_savgol=self.config.instrument.ref_savgol,
+            ref_winsize=self.config.instrument.ref_winsize,
+            ref_order=self.config.instrument.ref_order,
+            pickup=self.config.instrument.pickup,
+            sigma_thresh=self.config.instrument.sigma_thresh,
+            dilate_iter=self.config.instrument.dilate_iter,
+            highpass_size=self.config.instrument.highpass_size,
+            per_amp=self.config.instrument.per_amp)
 
-                    existing_l1_name = scbasic.find_existing_proc_file(
-                        input_filename=filename,
-                        suffix="_L1",
-                        redux_dir=redux_dir)
+        hdr = self.action.args.ccddata.header
+        hdr['HISTORY'] = 'Refpix and 1/f correction applied'
+        hdr['HISTORY'] = (
+            f'nchans={self.config.instrument.nchans}, '
+            f'altcol={self.config.instrument.altcol}, '
+            f'channelwise={self.config.instrument.channelwise}')
+        hdr['HISTORY'] = (
+            f'amp_mean_func={self.config.instrument.amp_mean_func}')
+        hdr['HISTORY'] = (
+            f'do_acn={self.config.instrument.do_acn}, '
+            f'acn_avg_type={self.config.instrument.acn_avg_type}, '
+            f'acn_mean_func={self.config.instrument.acn_mean_func}')
+        hdr['HISTORY'] = (
+            f'acn_smooth={self.config.instrument.acn_smooth}, '
+            f'acn_savgol={self.config.instrument.acn_savgol}, '
+            f'acn_winsize={self.config.instrument.acn_winsize}, '
+            f'acn_order={self.config.instrument.acn_order}')
+        hdr['HISTORY'] = (
+            f'resid_colsub={self.config.instrument.resid_colsub}, '
+            f'fixcol={self.config.instrument.fixcol}')
+        hdr['HISTORY'] = (
+            f'ref_avg_type={self.config.instrument.ref_avg_type}, '
+            f'ref_mean_func={self.config.instrument.ref_mean_func}')
+        hdr['HISTORY'] = (
+            f'ref_smooth={self.config.instrument.ref_smooth}, '
+            f'ref_savgol={self.config.instrument.ref_savgol}, '
+            f'ref_winsize={self.config.instrument.ref_winsize}, '
+            f'ref_order={self.config.instrument.ref_order}')
+        hdr['HISTORY'] = (
+            f'pickup={self.config.instrument.pickup}, '
+            f'sigma_thresh={self.config.instrument.sigma_thresh}, '
+            f'dilate_iter={self.config.instrument.dilate_iter}')
+        hdr['HISTORY'] = (
+            f'highpass_size={self.config.instrument.highpass_size}, '
+            f'per_amp={self.config.instrument.per_amp}')
 
-                    if existing_l1_name is not None:
-                        l1_path = os.path.join(
-                            self.action.args.dirname,
-                            "redux",
-                            os.path.basename(existing_l1_name))
-                    else:
-                        l1_path = scbasic.get_l1_path_from_raw(
-                            input_filename = filename,
-                            output_dir = redux_dir)
+        self.logger.info("refpix and 1/f correction completed")
 
-                    if self.context.clobber==False:
-                        if os.path.exists(l1_path):
-                            self.logger.info(f"Found existing L1 file: {l1_path}")
-                            try:
-                                l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
-                                group_ramps.append(l1_slope)
-                                group_uncerts.append(l1_uncert)
+        plot_path = scbasic.plot_read_correction_comparison(
+            cube_before=input_data,
+            cube_after=sci_im_full_original,
+            output_dir=plot_dir,
+            filename=f"{self.action.args.name}_acn_onef_comp.png",
+            title="SCALES ACN and 1/f Correction",
+            unit="DN",
+            show=False)
+        #print('NaNs in the reference pixel corrected data=',np.isnan(sci_im_full_original).sum())
 
-                                if group_header_for_master is None:
-                                    group_header_for_master = l1_header.copy()
+        raw_before_linearity = None
+        corrected_cube = None
+        sat_mask = None
+        applied_mask = None
+        
+        if sci_im_full_original.ndim ==2:
+            self.action.args.ccddata.data = sci_im_full_original
+            self.action.args.ccddata.header['HISTORY'] = 'Non-linearity correction is NOT applied'
 
-                                self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
-                                continue
+        elif sci_im_full_original.ndim ==3:
+            if self.config.instrument.do_linearity == True:
+                self.logger.info("+++++++++++ linearity correction started +++++++++++")
+                raw_before_linearity = sci_im_full_original.copy()
 
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"Existing L1 file could not be used: {l1_path}. "
-                                    f"Reason: {e}. Reprocessing from raw file.")
-                        try:
-                            with fits.open(filename) as hdulist:
-                                sci_im_full_original1 = hdulist[0].data
-                                data_header = hdulist[0].header
-                                readtime = data_header['EXPTIME']
-                                det_config = data_header['MCLOCK']
-                        except Exception as e:
-                            self.logger.error(f"Failed to read {filename}: {e}")
-                            continue
+                corrected_cube, pedestal, sat_mask, applied_mask = (
+                    linearity_correct.apply_brandt_linearity_reference(
+                        input_cube=sci_im_full_original,
+                        coefficient_file=lin_coeff,
+                        n_pedestal_reads=2,
+                        pedestal_start_read=0,
+                        saturation_fraction=0.95,
+                        saturated_read_behavior="raw",
+                        apply_only_successful=False,
+                        return_aux=True))
 
-                    else:
-                        try:
-                            with fits.open(filename) as hdulist:
-                                sci_im_full_original1 = hdulist[0].data
-                                data_header = hdulist[0].header
-                                readtime = data_header['EXPTIME']
-                                det_config = data_header['MCLOCK']
-                        except Exception as e:
-                            self.logger.error(f"Failed to read {filename}: {e}")
+                self.action.args.ccddata.data = corrected_cube
+                self.action.args.ccddata.header['HISTORY'] = (f'Linearity correction applied using {os.path.basename(lin_coeff)}')
+                self.logger.info("+++++++++++ linearity correction finished +++++++++++")
 
+            else:
+                self.logger.info("+++++++++++ linearity correction is turned off +++++++++++")
+                self.action.args.ccddata.data = sci_im_full_original
+                
+        ############# RAMP FITTING ###################################################
+        quality_map = None
+        chisq = None
+        sci_im_full_original = self.action.args.ccddata.data
+        
+        if sci_im_full_original.ndim ==2:
+            final_slope = sci_im_full_original
+            uncert = scbasic.estimate_uncert_single_read(
+                image_dn=final_slope,
+                readnoise_map_dn=SIG_map_scaled,
+                gain=1.0)
+            
+            final_slope *= gain   # e-/s
+            uncert *= gain        # e-/s
 
+            self.action.args.ccddata.dq = None
+            self.action.args.ccddata.chisq = None
 
-                    package = __name__.split('.')[0]
+        elif sci_im_full_original.ndim ==3:
+            
+            if self.config.instrument.apply_sat_mask == True:
+                self.logger.info("+++++++++++ Masking saturated neighbours started +++++++++++")
+                quality_map, good_read_mask = saturation_correct.make_ramp_quality_mask(
+                    sci_im_full_original,
+                    sat_map,
+                    bpm=master_bpm,
+                    neighbor_radius=1)
 
-                    calibfilepath = self.context.calib_file_path
-                    calib_path = str(get_resource_path(package, calibfilepath))+'/'
-                    if obsmode =='Im':
-                        if det_config =='5.0 MHz':  #fast1.0
-                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast1)
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast1)
-                            lin_coeff = calib_path+self.context.lin_coeff_img_fast1
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast1)
-                            with fits.open(calib_path+self.context.sat_map_img_fast1) as hdul:
-                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+                fig, axes = scbasic.plot_linearity_saturation_diagnostics(
+                    raw_cube=raw_before_linearity,
+                    corrected_cube=corrected_cube,
+                    saturation_mask=sat_mask,
+                    applied_mask=applied_mask,
+                    good_read_mask=good_read_mask,
+                    output_dir=plot_dir,
+                    save_prefix=f"{self.action.args.name}_lin_dign",
+                    skip_initial_reads=2,
+                    minimum_signal_dn=0.0,
+                    show=False)
+                plt.close(fig)
+                
+                self.action.args.ccddata.dq = quality_map.astype(np.uint32)
+                self.action.args.ccddata.header['HISTORY'] = (f'Saturation map applied using {os.path.basename(sat_map_file)}')
+                self.logger.info("+++++++++++ ramp fitting started +++++++++++")
+                
+                final_slope,final_reset,uncert,chisq = scbasic.ramp_fit(
+                    sci_im_full_original,
+                    total_exptime,
+                    SIG_map_scaled,
+                    group_dq = good_read_mask)
 
-                        elif det_config =='9.0 MHz': #fast0.6
-                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
-                            SIG_map_scaled[np.where(np.isnan(SIG_map_scaled)==True)] = np.nanmedian(SIG_map_scaled)
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
-                            lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast0p6)
-                            with fits.open(calib_path+self.context.sat_map_img_fast0p6) as hdul:
-                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+                final_slope *= gain   # e-/s
+                final_reset *= gain   # e-
+                uncert *= gain        # e-/s
+                
+            elif self.config.instrument.apply_sat_mask == False:
+                self.logger.info("+++++++++++ Saturation correction is turned off +++++++++++")
+                self.action.args.ccddata.dq = None
+                self.action.args.ccddata.header['HISTORY'] = (f'Saturation map NOT applied')    
+                
+                self.logger.info("+++++++++++ ramp fitting started +++++++++++")
+                final_slope,final_reset,uncert,chisq = scbasic.ramp_fit(
+                    sci_im_full_original,
+                    total_exptime,
+                    SIG_map_scaled,
+                    group_dq = None)
 
-                        elif det_config =='20.0 MHz': #slow
-                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_slow)
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_slow)
-                            lin_coeff = calib_path+self.context.lin_coeff_img_slow
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_img_slow)
-                            with fits.open(calib_path+self.context.sat_map_img_slow) as hdul:
-                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+                final_slope *= gain   # e-/s
+                final_reset *= gain   # e-
+                uncert *= gain        # e-/s
 
-                        else: #default if MCLCOCK is not one of those specified above
-                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_img_fast0p6)
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img_fast0p6)
-                            lin_coeff = calib_path+self.context.lin_coeff_img_fast0p6
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_img_fast0p6)
-                            with fits.open(calib_path+self.context.sat_map_img_fast0p6) as hdul:
-                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+            self.action.args.ccddata.header['HISTORY'] =(f'Readnoise map applied using {os.path.basename(readnoise)}')
+            self.action.args.ccddata.chisq = chisq
 
-                    elif obsmode =='IFS':
-                        if det_config =='5.0 MHz':  #fast1.0
-                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast1)
-                            lin_coeff = calib_path+self.context.lin_coeff_ifs_fast1
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast1)
-                            with fits.open(calib_path+self.context.sat_map_ifs_fast1) as hdul:
-                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+        if self.config.instrument.apply_bpm == True:
+            final_ramp1 = rmat1*np.matrix(final_slope.flatten().reshape([np.prod(final_slope.shape),1]))
+            final_ramp = np.array(final_ramp1).reshape(final_slope.shape)
 
-                        elif det_config =='9.0 MHz': #fast1.0
-                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
-                            if True in np.isnan(SIG_map_scaled):
-                                print('nans in sig map')
-                                stop
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
-                            lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast0p6)
-                            with fits.open(calib_path+self.context.sat_map_ifs_fast0p6) as hdul:
-                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+            final_ramp1_uncert = rmat1*np.matrix(uncert.flatten().reshape([np.prod(uncert.shape),1]))
+            final_uncert = np.array(final_ramp1_uncert).reshape(uncert.shape)
+            self.action.args.ccddata.header['HISTORY'] =(f'bad pixel map applied using {os.path.basename(bpm)}')
+            self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
 
-                        elif det_config =='20.0 MHz': #slow
-                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_slow)
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_slow)
-                            lin_coeff = calib_path+self.context.lin_coeff_ifs_slow
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_slow)
-                            with fits.open(calib_path+self.context.sat_map_ifs_slow) as hdul:
-                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+            plot_path = scbasic.plot_bad_pixel_correction_comparison(
+                slope_before=final_slope,
+                slope_after=final_ramp,
+                output_dir=plot_dir,
+                filename=f"{self.action.args.name}_bpm_comp.png",
+                title="SCALES — Bad-Pixel Correction",
+                unit="e-/s",
+                show=False)
+        else:
+            self.logger.info("+++++++++++ Bad pixel correction is turned off +++++++++++")
+            final_ramp = final_slope
+            final_uncert = uncert
+            self.action.args.ccddata.header['HISTORY'] =(f'bad pixel map is NOT applied')
+            
+        
+        #print('NaNs in the bpm corrected slope data=',np.isnan(final_ramp).sum())
 
-                        else: #default
-                            SIG_map_scaled = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
-                            rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
-                            lin_coeff = calib_path+self.context.lin_coeff_ifs_fast0p6
-                            master_bpm = fits.getdata(calib_path+self.context.bpm_ifs_fast0p6)
-                            with fits.open(calib_path+self.context.sat_map_ifs_fast0p6) as hdul:
-                                sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
+        if self.config.instrument.subtract_row_median==True:
+            for ii in range(len(final_ramp)):
+                final_ramp[ii]-=np.nanmedian(final_ramp[ii])
 
-                    #self.logger.info("+++++++++++ odd even swapping +++++++++++")
-                    sci_im_full_original2 = scbasic.swap_odd_even_columns(sci_im_full_original1,do_swap=False)
+        if self.config.instrument.subtract_col_median==True:
+            for ii in range(len(final_ramp[0])):
+                final_ramp[:,ii]-=np.nanmedian(final_ramp[:,ii])
 
-                    self.logger.info("+++++++++++ ACN & 1/f correction started +++++++++++")
-                    sci_im_full_original3 = reference.reffix_hxrg(sci_im_full_original2, nchans=4, fixcol=True)
-                    data_header['HISTORY'] = "ACN & 1/f correction applied"
+        if self.config.instrument.subtract_img_readout_channels==True:
+            bounds = 4+510*np.array(range(5))
+            bias = np.zeros([2048,2048])
+            for i in range(4):
+                xstart = bounds[i]
+                xstop = bounds[i+1]
+                arr = final_ramp[:,xstart:xstop]
+                med = np.nanmedian(arr)
+                bias[:,xstart:xstop] = med
+            final_ramp = final_ramp-bias
 
-                    if  sci_im_full_original3.ndim == 2:
+        self.action.args.ccddata.data = final_ramp
+        self.action.args.ccddata.uncertainty = StdDevUncertainty(final_uncert.astype(np.float32))
 
-                        final_slope = sci_im_full_original3
-                        uncert = scbasic.estimate_uncert_single_read(
-                            image_dn=final_slope,
-                            readnoise_map_dn=SIG_map_scaled,
-                            gain=1.0)
+        if chisq is not None:
+            self.action.args.ccddata.chisq = chisq.astype(np.float32)
+        else:
+            self.action.args.ccddata.chisq = None
 
-                        dq_2d = None
+        scales_fits_writer(
+            self.action.args.ccddata,
+            table=self.action.args.table,
+            output_file=self.action.args.name,
+            output_dir=self.config.instrument.output_directory,
+            quality_map=quality_map,
+            chisq=chisq,
+            suffix="L1")
 
-                    elif sci_im_full_original3.ndim == 3:
-
-                        self.logger.info("+++++++++++ linearity correction started +++++++++++")
-
-
-                        print('before linearity corr: ',np.unique(np.isnan(sci_im_full_original3)))
-
-                        corrected_cube, pedestal, sat_mask, applied_mask = (
-                            linearity_correct.apply_brandt_linearity_reference(
-                                input_cube=sci_im_full_original3,
-                                coefficient_file=lin_coeff,
-                                n_pedestal_reads=2,
-                                pedestal_start_read=0,
-                                saturation_fraction=0.95,
-                                saturated_read_behavior="raw",
-                                apply_only_successful=False,
-                                return_aux=True,
-                                )
-                            )
-
-                        print('after linearity corr: ',np.unique(np.isnan(corrected_cube)))
-
-                        self.logger.info("+++++++++++ Flagging nearest neighbors using saturation map +++++++++++")
-                        quality_map, good_read_mask = saturation_correct.make_ramp_quality_mask(
-                            corrected_cube,
-                            sat_map,
-                            bpm=master_bpm,
-                            neighbor_radius=1,
-                            )
-                        
-                        self.logger.info("+++++++++++ ramp fitting started +++++++++++")
-                        final_slope,reset,uncert,chisq = scbasic.ramp_fit(
-                            corrected_cube,
-                            #sci_im_full_original3,
-                            readtime,
-                            SIG_map_scaled,
-                            group_dq = good_read_mask) #keep group_dq=good_read_mask when linearity is on otherwise None
-
-                        dq_2d = quality_map.astype(np.uint32)
-                    self.logger.info("+++++++++++ Bad pixel correction started +++++++++++")
-
-                    #dynamic mask section
-                    #transient_mask, local_med, local_sigma, sig = bpm.detect_transient_bad_pixels(
-                    #    final_slope,
-                    #    master_bpm=master_bpm,
-                    #    kernel_size=5,
-                    #    sigma_thresh=7.0,
-                    #    return_diagnostics=True)
-                    #final_mask = master_bpm | transient_mask
-                    #rmat = bpm.bpm_correction(final_mask)
-
-                    final_ramp1 = rmat1*np.matrix(final_slope.flatten().reshape([np.prod(final_slope.shape),1]))
-                    bpm_slope = np.array(final_ramp1).reshape(final_slope.shape)
-
-                    final_ramp1_uncert = rmat1*np.matrix(uncert.flatten().reshape([np.prod(uncert.shape),1]))
-                    bpm_slope_uncert = np.array(final_ramp1_uncert).reshape(uncert.shape)
-
-                    data_header['HISTORY'] = "Default bad pixel correction applied"
-                    self.logger.info("+++++++++++ Bad pixel correction completed +++++++++++")
-
-                    fits_writer_calib(
-                        data=bpm_slope,
-                        header=data_header,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix='_L1',
-                        overwrite=True,
-                        uncert = bpm_slope_uncert,
-                        dq=dq_2d,
-                        chisq=chisq)
-
-                    scbasic.proctab_update(
-                        header=data_header,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix="_L1",
-                        frame=None,
-                        proctab=self.proctab)
-
-                    group_ramps.append(bpm_slope)
-                    group_uncerts.append(bpm_slope_uncert)
-                    if group_header_for_master is None:
-                        group_header_for_master = data_header.copy()
-
-                    self.logger.info("************** next file **************************")
-
-                if len(group_ramps) == 0:
-                    self.logger.warning(f"No valid frames to build master for group {imtype} {params}.")
-                    continue
-
-                if group_header_for_master is None:
-                    raise RuntimeError(
-                        "Internal error: group_header_for_master is None "
-                        "even though group_ramps is not empty.")
-
-                #expected_keywords = {
-                #    "CAMERA": obsmode,
-                #    "MCLOCK": mclock}
-                #if imtype == "DARK":
-                #    expected_keywords["EXPTIME"] = exptime
-                #elif imtype == "FLATLENS":
-                #    expected_keywords["IFSMODE"] = ifsmode
-
-                #elif imtype == "CALUNIT":
-                #    expected_keywords["MONOWAVE"] = wavelength
-
-                #existing_master, existing_master_hdr = scbasic.load_single_master_file_calib(
-                #    expected_keywords=expected_keywords,
-                #    master_type=imtype)
-
-                #if existing_master is not None:
-                #    self.logger.info(
-                #        f"Matching master already exists for {imtype} {params}. "
-                #        "Skipping master creation.")
-                    #continue
-
-                if True in np.isnan(group_ramps): print('nan in group ramps')
-                if True in np.isnan(group_uncerts): print('nan in group uncs')
-                master, master_unc = scbasic.build_master_from_stack(
-                    group_ramps,
-                    group_uncerts,
-                    method='median',
-                    iterations=0)
-                if True in np.isnan(master):
-                    print('nan in mcalunit')
-                    stop
-
-                hdrm = group_header_for_master.copy()
-                hdrm['HISTORY'] = f"Master {imtype} built from {len(group_ramps)} frames"
-                hdrm['HISTORY'] = f"Group params: CAMERA={obsmode}, IFSMODE={ifsmode},FILTER={filtername}, EXPTIME={exptime}, MCLOCK={mclock}"
-
-                if imtype == 'DARK':
-
-                    hdrm['HISTORY'] = "master detector DARK created"
-                    scbasic.proctab_update(
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix="_mdark",
-                        frame=None,
-                        proctab=self.proctab)
-
-                    fits_writer_calib(
-                        data=master,
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix='_mdark',
-                        overwrite=True,
-                        uncert=master_unc)
-                    self.logger.info("+++++++++++ Creating master dark +++++++++++")
-
-                if imtype == 'BIAS':
-                    hdrm['HISTORY'] = "master detector bias created"
-                    fits_writer_calib(
-                        data=master,
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix='_mbias',
-                        overwrite=True,
-                        uncert=master_unc)
-                    scbasic.proctab_update(
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix="_mbias",
-                        frame=None,
-                        proctab=self.proctab)
-                    self.logger.info("+++++++++++ Creating master bias +++++++++++")
-
-                """
-                if imtype == 'FLATLENS':
-                    hdrm['HISTORY'] = "master lenslet flat created"
-                    fits_writer_calib(
-                        data=master,
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix='_mflatlens',
-                        overwrite=True,
-                        uncert=master_unc)
-                    scbasic.proctab_update(
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix="_mflatlens",
-                        frame=None,
-                        proctab=self.proctab)
-                    self.logger.info("+++++++++++ Creating master lenslet flat +++++++++++")
-                    self.logger.info("+++++++++++ Creating master lenslet flat cube +++++++++++")
-
-                    package = __name__.split('.')[0]
-                    simfile = 'sim_readnoise.fits'
-                    readnoise = fits.getdata(calib_path+simfile)
-                    var_read_vector = (readnoise.flatten().astype(np.float64))**2
-                    GAIN = 1.0#self.action.args.ccddata.header['GAIN']
-
-                    if ifsmode=='LowRes-K':
-                        R_for_extract = load_npz(calib_path+'K_C2_rectmat_lowres.npz')
-                        R_matrix = load_npz(calib_path+'K_QL_rectmat_lowres.npz')
-                        FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='LowRes-L':
-                        R_for_extract = load_npz(calib_path+'L_C2_rectmat_lowres.npz')
-                        R_matrix = load_npz(calib_path+'L_QL_rectmat_lowres.npz')
-                        FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='LowRes-M':
-                        R_for_extract = load_npz(calib_path+'M_C2_rectmat_lowres.npz')
-                        R_matrix = load_npz(calib_path+'M_QL_rectmat_lowres.npz')
-                        FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='LowRes-KLM':
-                        R_for_extract = load_npz(calib_path+'SED_C2_rectmat_lowres.npz')
-                        R_matrix = load_npz(calib_path+'SED_QL_rectmat_lowres.npz')
-                        FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='LowRes-KL':
-                        R_for_extract = load_npz(calib_path+'H2O_C2_rectmat_lowres.npz')
-                        R_matrix = load_npz(calib_path+'H2O_QL_rectmat_lowres.npz')
-                        FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='LowRes-Ls':
-                        R_for_extract = load_npz(calib_path+'PAH_C2_rectmat_lowres.npz')
-                        R_matrix = load_npz(calib_path+'PAH_QL_rectmat_lowres.npz')
-                        FLUX_SHAPE_3D = (56, 103, 110)
-                    elif ifsmode=='MedRes-K':
-                        R_for_extract = load_npz(calib_path+'K_C2_rectmat_medres.npz')
-                        R_matrix = load_npz(calib_path+'K_QL_rectmat_medres.npz')
-                        FLUX_SHAPE_3D = (1900, 103, 110)
-                    elif ifsmode=='MedRes-L':
-                        R_for_extract = load_npz(calib_path+'L_C2_rectmat_medres.npz')
-                        R_matrix = load_npz(calib_path+'L_QL_rectmat_medres.npz')
-                        FLUX_SHAPE_3D = (1900, 103, 110)
-                    elif ifsmode=='MedRes-M':
-                        R_for_extract = load_npz(calib_path+'M_C2_rectmat_medres.npz')
-                        R_matrix = load_npz(calib_path+'M_QL_rectmat_medres.npz')
-                        FLUX_SHAPE_3D = (1900, 103, 110)
-
-                    A_guess_cube,A_guess_cube_err = scbasic.optimal_extract_with_error(
-                        R_matrix,
-                        master_flatlens,
-                        master_flatlen_uncert,
-                        var_read_vector)
-                    A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
-                    A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
-                    fits_writer_calib(
-                        data=A_opt,
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix='_cube_flatlens',
-                        overwrite=True,
-                        uncert=A_opt_err)
-                    scbasic.proctab_update(
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix="_cube_flatlens",
-                        frame=None,
-                        proctab=self.proctab)
-
-                """
-
-
-                if imtype == 'FLATLAMP':
-                    hdrm['HISTORY'] = "master detector flat created"
-                    fits_writer_calib(
-                        data=master,
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix='_mflatlamp',
-                        overwrite=True,
-                        uncert=master_unc)
-                    scbasic.proctab_update(
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix="_mflatlamp",
-                        frame=None,
-                        proctab=self.proctab)
-
-                    self.logger.info("+++++++++++ Creating master detector flat +++++++++++")
-
-                if imtype == 'CALUNIT' and wavelength is not None:
-                    hdrm['HISTORY'] = f"CALUNIT wavelength group: {wavelength}"
-                    wl_val = float(wavelength)
-                    wl_str = f"{wl_val:.3f}".rstrip("0").rstrip(".")
-                    hdrm['IMTYPE'] = 'MCALUNIT'
-                    suffix = f"_{wl_str}_mcalunit"
-                    fits_writer_calib(
-                        data=master,
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix=suffix,
-                        overwrite=True,
-                        uncert=master_unc)
-                    scbasic.proctab_update(
-                        header=hdrm,
-                        output_dir=self.action.args.dirname,
-                        input_filename=filename,
-                        suffix=suffix,
-                        frame=None,
-                        proctab=self.proctab)
-                    self.logger.info("+++++++++++ Creating master monochromator file +++++++++++")
-
-        self.logger.info('+++++++++++++ All available Master calibration files are created ++++++++++++++')
+        scbasic.proctab_update(
+            header=self.action.args.ccddata.header,
+            output_dir=self.config.instrument.output_directory,
+            input_filename=self.action.args.name,
+            suffix="_L1",
+            frame=None,
+            proctab=self.proctab)
 
         log_string = StartCalib.__module__
         self.logger.info(log_string)
+
         return self.action.args
 
 

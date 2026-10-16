@@ -41,18 +41,14 @@ class AcnOnef(BasePrimitive):
             det_config = self.action.args.ccddata.header['MCLOCK']
             package = __name__.split('.')[0]
             det_config = str(det_config).strip()
-
+            plot_dir = self.config.instrument.plot_directory
             input_data = self.action.args.ccddata.data
-
             filename = self.action.args.ccddata.header.get("OFNAME")
-
-
-
+            print('#######################',plot_dir)
             existing_l1_name = scbasic.find_existing_proc_file(
                 input_filename=filename,
                 suffix="_L1",
                 redux_dir=self.config.instrument.output_directory)
-
 
             if existing_l1_name is not None:
                 l1_path = existing_l1_name
@@ -65,11 +61,16 @@ class AcnOnef(BasePrimitive):
                 if os.path.exists(l1_path):
                     self.logger.info(f"Found existing L1 file: {l1_path}")
                     try:
-                        l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
+                        l1_slope, l1_uncert,l1_dq, l1_chisq,l1_header = scbasic.read_existing_l1(l1_path)
                         self.action.args.ccddata.data = l1_slope
                         self.action.args.ccddata.header = l1_header
+                        if l1_uncert is not None:
+                            self.action.args.ccddata.uncertainty = (StdDevUncertainty(l1_uncert.astype(np.float32)))
+                        else:
+                            self.action.args.ccddata.uncertainty = None
 
-                        self.action.args.ccddata.uncertainty = StdDevUncertainty(l1_uncert)
+                        self.action.args.ccddata.dq = l1_dq
+                        self.action.args.ccddata.chisq = l1_chisq
 
                         self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
                         return self.action.args
@@ -160,6 +161,14 @@ class AcnOnef(BasePrimitive):
             self.logger.info(log_string)
 
             self.logger.info("+++++++++++ detector level corrections are completed +++++++++++")
+            plot_path = scbasic.plot_read_correction_comparison(
+                cube_before=input_data,
+                cube_after=sci_im_full_original,
+                output_dir=plot_dir,
+                filename=f"{self.action.args.name}_acn_onef_comp.png",
+                title="SCALES ACN and 1/f Correction",
+                unit="DN",
+                show=False)
         else:
             self.logger.info("+++++++++++ No science files detected to process +++++++++++")
         return self.action.args

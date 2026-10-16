@@ -71,7 +71,8 @@ class SpectralExtractChi(BasePrimitive):
             det_config = str(det_config).strip()
             modslnam = self.action.args.ccddata.header['MODSLNAM']
             dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
-            ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam)
+            filter = self.action.args.ccddata.header['FILTER']
+            ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam,filter)
             filename = self.action.args.ccddata.header.get("OFNAME")
 
             if det_config =='5.0 MHz':  #fast1.0
@@ -87,12 +88,19 @@ class SpectralExtractChi(BasePrimitive):
                 readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
 
             sigma_image = self.action.args.ccddata.uncertainty
-            var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
+            #print(sigma_image.shape)
+            #var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
             GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             data_image = self.action.args.ccddata.data
             data_vector_d = data_image.flatten().astype(np.float64)
 
-            if ifsmode=='LowRes-K':
+            if ifsmode is None:
+                self.logger.info(
+                    "IFSMODE is None (unknown or unsupported configuration). "
+                    "Skipping spectral extraction.")
+                return self.action.args
+
+            elif ifsmode=='LowRes-K': 
                 rmat_opt = self.context.OPT_rmat_LowRes_K
                 rmat_chi = self.context.OPT_rmat_LowRes_K
                 R_for_extract = load_npz(calib_path+rmat_chi)
