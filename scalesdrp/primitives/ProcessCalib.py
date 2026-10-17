@@ -1,7 +1,7 @@
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 
 
-class ProcessBias(BasePrimitive):
+class ProcessCalib(BasePrimitive):
     """
     Preliminary processing of bias images.
     """

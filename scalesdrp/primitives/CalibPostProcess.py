@@ -47,16 +47,8 @@ class CalibPostProcess(BasePrimitive):
         package = __name__.split('.')[0]
         calibfilepath = self.context.calib_file_path
         calib_dir = str(get_resource_path(package, calibfilepath))+'/'    
-        create_linearity = bool(self.config.instrument.create_linearity_coeff)
-        create_sat = bool(self.config.instrument.create_sat_map)
-        create_bpm = bool(self.config.instrument.create_bpm)
-        create_readnoise = bool(self.config.instrument.create_readnoise)
 
-        linearity_groups = []
-        saturation_files = []
-        bpm_groups = []
         l1_groups = []
-        readnoise_grp=[]
 
         proctab_path = os.path.join(output_dir,"scales.proc")
         self.proctab.read_proctab(proctab_path)
