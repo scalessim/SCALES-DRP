@@ -630,7 +630,7 @@ class StartCalibSA(BasePrimitive):
                 output_dir=plot_dir,
                 filename=f"{self.action.args.name}_bpm_comp.png",
                 title="SCALES — Bad-Pixel Correction",
-                unit="e-/s",
+                unit="DN/s",
                 show=False)
         else:
             self.logger.info("+++++++++++ Bad pixel correction is turned off +++++++++++")
