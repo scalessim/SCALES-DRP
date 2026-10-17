@@ -47,7 +47,7 @@ class Scales_Calib_Pipeline(BasePipeline):
 
 
 
-        "calib_process_done":        ("ProcessCalframe2",
+        "calib_process_done":        ("ProcessCalframe",
                                       None,
                                       "calib_post_process"),   
 
