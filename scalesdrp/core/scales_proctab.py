@@ -66,11 +66,13 @@ class Proctab:
         cnames = (
             "CAMERA", "IFSMODE", "ACQMODE", "MCLOCK",
             "IMTYPE", "EXPTIME", "MJD", "TARGNAME",
+            "IMGFW2N", "DSPRSNAM", "MODSLNAM", "MONOWAVE",
             "filename", "SUFF", "STAGE"
         )
         dtypes = (
             "U8", "U32", "U16", "U16",
             "U16", "f8", "f8", "U64",
+            "U32", "U32", "U32", "f8",
             "U256", "U32", "i4"
         )
         meta = {"SCALES DRP PROC TABLE": "new table"}
@@ -92,7 +94,11 @@ class Proctab:
             self.new_proctab()
 
         # Ensure expected columns exist (for backward compatibility)
-        needed = {"CAMERA","IFSMODE","ACQMODE","MCLOCK","IMTYPE","EXPTIME","MJD","TARGNAME","filename","SUFF","STAGE"}
+        needed = {
+            "CAMERA","IFSMODE","ACQMODE","MCLOCK",
+            "IMTYPE","EXPTIME","MJD","TARGNAME",
+            "IMGFW2N", "DSPRSNAM", "MODSLNAM", "MONOWAVE",
+            "filename","SUFF","STAGE"}
         missing = [c for c in needed if c not in self.proctab.colnames]
         if missing:
             self.log.warning("Proctab missing columns %s; recreating a fresh table.", missing)
@@ -169,24 +175,45 @@ class Proctab:
 
         targname = self._as_str(hdr.get("TARGNAME", hdr.get("OBJECT", "NONE")))
         targname = targname.replace(" ", "") if targname != "NONE" else "NONE"
-
+        monowave = self._as_float(hdr.get("MONOWAVE", None),default=float("nan"))
+        
         # rules you requested
         if camera == "IM":
             ifsmode = "NONE"
+            imgfw2n = self._as_str(hdr.get("IMGFW2N", "NONE"))
+            dsprsnam = "NONE"
+            modslnam = "NONE"
+
         elif camera == "IFS":
             ifsmode = self._as_str(ifsmode, default="NONE")
+            imgfw2n = "NONE"
+            dsprsnam = self._as_str(hdr.get("DSPRSNAM", "NONE"))
+            modslnam = self._as_str(hdr.get("MODSLNAM", "NONE"))
         else:
             # unknown camera; still keep something consistent
-            if camera == "NONE":
-                camera = "NONE"
+            camera = "NONE"
             ifsmode = self._as_str(ifsmode, default="NONE")
+            imgfw2n = "NONE"
+            dsprsnam = "NONE"
+            modslnam = "NONE"
 
+        #new_row = [
+        #    camera, ifsmode, acqmode, mclock,
+        #    imtype, exptime, mjd, targname,
+        #    self._as_str(filename), self._as_str(suffix), int(stage)
+        #]
+        
         new_row = [
             camera, ifsmode, acqmode, mclock,
             imtype, exptime, mjd, targname,
-            self._as_str(filename), self._as_str(suffix), int(stage)
-        ]
 
+            # Calibration grouping values
+            imgfw2n, dsprsnam, modslnam, monowave,
+
+            self._as_str(filename),
+            self._as_str(suffix),
+            int(stage)
+        ]
         self.proctab.add_row(new_row)
 
         # de-duplicate

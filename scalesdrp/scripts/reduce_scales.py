@@ -1,5 +1,5 @@
 """
-Reduce SCALES data using the SCALES DRP running on the KeckDRPFramework
+Reduce SCALES science data using the SCALES DRP running on the KeckDRPFramework
 """
 from keckdrpframework.core.framework import Framework
 from keckdrpframework.config.framework_config import ConfigClass
@@ -240,47 +240,53 @@ def main():
     framework.context.clobber = scales_config.clobber
     framework.context.calib_file_path = scales_config.calib_file_path
 
-    framework.context.bpm_ifs_fast0p6 = scales_config.bpm_ifs_fast0p6
-    framework.context.bpmat_ifs_fast0p6 = scales_config.bpmat_ifs_fast0p6
+    framework.context.bpm_ifs = scales_config.bpm_ifs
+    framework.context.bpmat_ifs = scales_config.bpmat_ifs
     framework.context.flat_ifs_fast0p6 = scales_config.flat_ifs_fast0p6
     framework.context.sig_map_ifs_fast0p6 = scales_config.sig_map_ifs_fast0p6
     framework.context.lin_coeff_ifs_fast0p6 = scales_config.lin_coeff_ifs_fast0p6
     framework.context.sat_map_ifs_fast0p6 = scales_config.sat_map_ifs_fast0p6
-    
-    framework.context.bpm_ifs_fast1 = scales_config.bpm_ifs_fast1
-    framework.context.bpmat_ifs_fast1 = scales_config.bpmat_ifs_fast1
+    framework.context.gain_ifs_fast0p6 = scales_config.gain_ifs_fast0p6
+
+    #framework.context.bpm_ifs_fast1 = scales_config.bpm_ifs_fast1
+    #framework.context.bpmat_ifs_fast1 = scales_config.bpmat_ifs_fast1
     framework.context.flat_ifs_fast1 = scales_config.flat_ifs_fast1
     framework.context.sig_map_ifs_fast1 = scales_config.sig_map_ifs_fast1
     framework.context.lin_coeff_ifs_fast1 = scales_config.lin_coeff_ifs_fast1
     framework.context.sat_map_ifs_fast1 = scales_config.sat_map_ifs_fast1
+    framework.context.gain_ifs_fast1 = scales_config.gain_ifs_fast1
 
-    framework.context.bpm_ifs_slow = scales_config.bpm_ifs_slow
-    framework.context.bpmat_ifs_slow = scales_config.bpmat_ifs_slow
+    #framework.context.bpm_ifs_slow = scales_config.bpm_ifs_slow
+    #framework.context.bpmat_ifs_slow = scales_config.bpmat_ifs_slow
     framework.context.flat_ifs_slow = scales_config.flat_ifs_slow
     framework.context.sig_map_ifs_slow = scales_config.sig_map_ifs_slow
     framework.context.lin_coeff_ifs_slow = scales_config.lin_coeff_ifs_slow
     framework.context.sat_map_ifs_slow = scales_config.sat_map_ifs_slow
+    framework.context.gain_ifs_slow = scales_config.gain_ifs_slow
 
-    framework.context.bpm_img_fast0p6 = scales_config.bpm_img_fast0p6
-    framework.context.bpmat_img_fast0p6 = scales_config.bpmat_img_fast0p6
+    #framework.context.bpm_img_fast0p6 = scales_config.bpm_img_fast0p6
+    #framework.context.bpmat_img_fast0p6 = scales_config.bpmat_img_fast0p6
     framework.context.flat_img_fast0p6 = scales_config.flat_img_fast0p6
     framework.context.sig_map_img_fast0p6 = scales_config.sig_map_img_fast0p6
     framework.context.lin_coeff_img_fast0p6 = scales_config.lin_coeff_img_fast0p6
     framework.context.sat_map_img_fast0p6 = scales_config.sat_map_img_fast0p6
+    framework.context.gain_img_fast0p6 = scales_config.gain_img_fast0p6
 
-    framework.context.bpm_img_fast1 = scales_config.bpm_img_fast1
-    framework.context.bpmat_img_fast1 = scales_config.bpmat_img_fast1
+    framework.context.bpm_img = scales_config.bpm_img
+    framework.context.bpmat_img = scales_config.bpmat_img
     framework.context.flat_img_fast1 = scales_config.flat_img_fast1
     framework.context.sig_map_img_fast1 = scales_config.sig_map_img_fast1
     framework.context.lin_coeff_img_fast1 = scales_config.lin_coeff_img_fast1
     framework.context.sat_map_img_fast1 = scales_config.sat_map_img_fast1
+    framework.context.gain_img_fast1 = scales_config.gain_img_fast1
 
-    framework.context.bpm_img_slow = scales_config.bpm_img_slow
-    framework.context.bpmat_img_slow = scales_config.bpmat_img_slow
+    #framework.context.bpm_img_slow = scales_config.bpm_img_slow
+    #framework.context.bpmat_img_slow = scales_config.bpmat_img_slow
     framework.context.flat_img_slow = scales_config.flat_img_slow
     framework.context.sig_map_img_slow = scales_config.sig_map_img_slow
     framework.context.lin_coeff_img_slow = scales_config.lin_coeff_img_slow
     framework.context.sat_map_img_slow = scales_config.sat_map_img_slow
+    framework.context.gain_img_slow = scales_config.gain_img_slow
 
     framework.context.OPT_rmat_LowRes_K = scales_config.OPT_rmat_LowRes_K
     framework.context.C2_rmat_LowRes_K = scales_config.C2_rmat_LowRes_K
@@ -336,8 +342,7 @@ def main():
     framework.context.apply_lens_flat = scales_config.apply_lens_flat
     framework.context.lowres_final_cube = scales_config.lowres_final_cube
     framework.context.medres_final_cube = scales_config.medres_final_cube
-
-
+    framework.context.do_chi2_full = scales_config.do_chi2_full
     # implement the group mode
     if args.group_mode is True:
         data_set = framework.context.data_set
@@ -351,8 +356,7 @@ def main():
         data_set.data_table.drop(ccdclear_frames, inplace=True)
 
         # processing
-        imtypes = ['BIAS', 'DARK', 'FLAT', 'LENSFLAT',
-                   'CALIB', 'OBJECT']
+        imtypes = ['OBJECT']
 
         for imtype in imtypes:
             subset = data_set.data_table[

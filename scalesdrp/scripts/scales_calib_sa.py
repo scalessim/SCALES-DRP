@@ -1,0 +1,417 @@
+"""
+Reduce SCALES science data using the SCALES DRP running on the KeckDRPFramework
+"""
+from keckdrpframework.core.framework import Framework
+from keckdrpframework.config.framework_config import ConfigClass
+from keckdrpframework.models.arguments import Arguments
+from keckdrpframework.utils.drpf_logger import getLogger
+import subprocess
+import time
+import datetime
+import argparse
+import sys
+import traceback
+import os
+import psutil
+import shutil
+from importlib.resources import files
+from pathlib import Path
+
+from scalesdrp.pipelines.scales_calib_pipeline_sa import Scales_Calib_Pipeline_SA
+from scalesdrp.core.scales_proctab import Proctab
+from scalesdrp.core.scales_pkg_resources import get_resource_path
+import logging.config
+
+
+def _parse_arguments(in_args: list) -> argparse.Namespace:
+    description = "SCALES pipeline CLI"
+
+    # this is a simple case where we provide a frame and a configuration file
+    parser = argparse.ArgumentParser(prog=f"{in_args[0]}",
+                                     description=description)
+    parser.add_argument('-c', '--config', dest="SCALES_config_file", type=str,
+                        help="SCALES configuration file", default=None)
+    parser.add_argument('--write_config', dest="write_config",
+                        help="Write out an editable config file in current dir"
+                        " (scales.cfg)", action="store_true", default=False)
+    parser.add_argument('-f', '--frames', nargs='*', type=str,
+                        help='input image files (full path, list ok)',
+                        default=None)
+    parser.add_argument('-l', '--list', dest='file_list',
+                        help='File containing a list of files to be processed',
+                        default=None)
+    parser.add_argument('-g', '--groups', dest='group_mode',
+                        help='Use group mode: separate files by image type and '
+                             'reduce in the correct order',
+                        default=False, action='store_true')
+
+    parser.add_argument('-i', '--infiles', dest="infiles",
+                        help="Input files, or pattern to match", nargs="?")
+    parser.add_argument('-d', '--directory', dest="dirname", type=str,
+                        help="Input directory", nargs='?', default=None)
+    # after ingesting the files,
+    # do we want to continue monitoring the directory?
+    parser.add_argument('-m', '--monitor', dest="monitor",
+                        help='Continue monitoring the directory '
+                             'after the initial ingestion',
+                        action='store_true', default=False)
+
+    # special arguments, ignore
+    parser.add_argument("-I", "--ingest_data_only", dest="ingest_data_only",
+                        action="store_true",
+                        help="Ingest data and terminate")
+    parser.add_argument("-w", "--wait_for_event", dest="wait_for_event",
+                        action="store_true", help="Wait for events")
+    parser.add_argument("-W", "--continue", dest="continuous",
+                        action="store_true",
+                        help="Continue processing, wait for ever")
+    parser.add_argument("-s", "--start_queue_manager_only",
+                        dest="queue_manager_only", action="store_true",
+                        help="Starts queue manager only, no processing",)
+
+    # scales specific parameters
+    parser.add_argument("-p", "--proctab", dest='proctab', help='Proctab file',
+                        default=None)
+
+    out_args = parser.parse_args(in_args[1:])
+    return out_args
+
+
+def check_directory(directory):
+    if not os.path.isdir(directory):
+        os.makedirs(directory)
+        print("Directory %s has been created" % directory)
+
+
+def main():
+
+    # Package
+    pkg = 'scalesdrp'
+
+    # get arguments
+    args = _parse_arguments(sys.argv)
+
+    if args.write_config:
+        dest = os.path.join(os.getcwd(), 'scales_calib_sa.cfg')
+        if os.path.exists(dest):
+            print("Config file scales_calib.cfg already exists in current dir")
+        else:
+            scales_config_file = 'configs/scales_calib_sa.cfg'
+            scales_config_fullpath = get_resource_path(pkg, scales_config_file)
+            shutil.copy(scales_config_fullpath, os.getcwd())
+            print("Copied scales.cfg into current dir.  Edit and use with -c")
+        sys.exit(0)
+
+    # This check can be removed once reduce_scales processes are
+    # siloed against each other
+    plist = []
+    for p in psutil.process_iter():
+        try:
+            if "scales_calib_sa" in p.name():
+                plist.append(p)
+        except psutil.NoSuchProcess:
+            continue
+    # plist = [p for p in psutil.process_iter() if "reduce_scales" in p.name()]
+    if len(plist) > 1:
+        print("DRP already running in another process, exiting")
+        sys.exit(0)
+
+    def process_subset(in_subset):
+        for in_frame in in_subset.index:
+            arguments = Arguments(name=in_frame)
+            framework.append_event('next_file', arguments, recurrent=True)
+
+    def process_list(in_list):
+        for in_frame in in_list:
+            arguments = Arguments(name=in_frame)
+            framework.append_event('next_file', arguments, recurrent=True)
+
+    if args.file_list:
+        if '.fits' in args.file_list:
+            print("\nERROR - trying to read in fits file as file list\n\n"
+                  "Please use -f or --frames for direct input of fits files\n")
+            sys.exit(0)
+
+    # START HANDLING OF CONFIGURATION FILES ##########
+
+    # check for the logs diretory
+    check_directory("logs")
+    # check for the plots directory
+    check_directory("plots")
+
+    framework_config_file = "configs/framework.cfg"
+    framework_config_fullpath = get_resource_path(pkg, framework_config_file)
+    framework_config_fullpath = str(framework_config_fullpath)
+
+    framework_logcfg_file = 'configs/logger.cfg'
+    framework_logcfg_fullpath = get_resource_path(pkg, framework_logcfg_file)
+    framework_logcfg_fullpath = str(framework_logcfg_fullpath)
+
+    # add scales specific config files # make changes here to allow this file
+    # to be loaded from the command line
+    if args.SCALES_config_file is None:
+        scales_config_file = 'configs/scales_calib_sa.cfg'
+        scales_config_fullpath = str(get_resource_path(pkg, scales_config_file))
+        scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
+    else:
+        scales_config_fullpath = os.path.abspath(args.SCALES_config_file)
+        scales_config = ConfigClass(scales_config_fullpath, default_section='SCALES')
+
+    # END HANDLING OF CONFIGURATION FILES ##########
+
+    # Add current working directory to config info
+    scales_config.cwd = os.getcwd()
+
+    # check for the output directory
+    check_directory(scales_config.output_directory)
+
+    try:
+        framework = Framework(Scales_Calib_Pipeline_SA, framework_config_fullpath)
+        # add this line ONLY if you are using a local logging config file
+        logging.config.fileConfig(framework_logcfg_fullpath)
+        framework.config.instrument = scales_config
+    except Exception as e:
+        print("Failed to initialize framework, exiting ...", e)
+        traceback.print_exc()
+        sys.exit(1)
+    framework.context.pipeline_logger = getLogger(framework_logcfg_fullpath,
+                                                  name="SCALES")
+    framework.logger = getLogger(framework_logcfg_fullpath, name="DRPF")
+
+    if args.infiles is not None:
+        framework.config.file_type = args.infiles
+
+    # update proc table argument
+    if args.proctab:
+        framework.context.pipeline_logger.info(
+            "Using proc table file %s" % args.proctab
+        )
+        framework.config.instrument.procfile = args.proctab
+
+
+    # initialize the proctab and read it
+    framework.context.proctab = Proctab()
+    framework.context.proctab.read_proctab(framework.config.instrument.procfile)
+
+    framework.logger.info("Framework initialized")
+
+    # which initiates the processing
+    if args.group_mode is True:
+        # set the default ingestion event to None
+        framework.config.default_ingestion_event = "add_only"
+
+    # start queue manager only (useful for RPC)
+    if args.queue_manager_only:
+        # The queue manager runs forever.
+        framework.logger.info("Starting queue manager only, no processing")
+        framework.start(args.queue_manager_only)
+
+    # single frame processing
+    elif args.frames:
+        frames = []
+        for frame in args.frames:
+            frames.append(frame)
+        framework.ingest_data(None, frames, False)
+
+    # processing of a list of files contained in a file
+    elif args.file_list:
+        frames = []
+        with open(args.file_list) as file_list:
+            for frame in file_list:
+                if "#" not in frame:
+                    frames.append(frame.strip('\n'))
+
+        framework.ingest_data(None, frames, False)
+
+        with open(args.file_list + '_ingest', 'w') as ingest_f:
+            ingest_f.write('Files ingested at: ' +
+                           datetime.datetime.now().isoformat())
+
+    # ingest an entire directory, trigger "next_file" (which is an option
+    # specified in the config file) on each file,
+    # optionally continue to monitor if -m is specified
+    elif args.dirname is not None:
+
+        framework.ingest_data(args.dirname, None, args.monitor)
+
+    framework.context.create_rectmat = scales_config.create_rectmat
+    framework.context.clobber = scales_config.clobber
+    framework.context.calib_file_path = scales_config.calib_file_path
+
+    framework.context.bpm_ifs = scales_config.bpm_ifs
+    framework.context.bpmat_ifs = scales_config.bpmat_ifs
+    framework.context.flat_ifs_fast0p6 = scales_config.flat_ifs_fast0p6
+    framework.context.sig_map_ifs_fast0p6 = scales_config.sig_map_ifs_fast0p6
+    framework.context.lin_coeff_ifs_fast0p6 = scales_config.lin_coeff_ifs_fast0p6
+    framework.context.sat_map_ifs_fast0p6 = scales_config.sat_map_ifs_fast0p6
+    framework.context.gain_ifs_fast0p6 = scales_config.gain_ifs_fast0p6
+
+    #framework.context.bpm_ifs_fast1 = scales_config.bpm_ifs_fast1
+    #framework.context.bpmat_ifs_fast1 = scales_config.bpmat_ifs_fast1
+    framework.context.flat_ifs_fast1 = scales_config.flat_ifs_fast1
+    framework.context.sig_map_ifs_fast1 = scales_config.sig_map_ifs_fast1
+    framework.context.lin_coeff_ifs_fast1 = scales_config.lin_coeff_ifs_fast1
+    framework.context.sat_map_ifs_fast1 = scales_config.sat_map_ifs_fast1
+    framework.context.gain_ifs_fast1 = scales_config.gain_ifs_fast1
+
+    #framework.context.bpm_ifs_slow = scales_config.bpm_ifs_slow
+    #framework.context.bpmat_ifs_slow = scales_config.bpmat_ifs_slow
+    framework.context.flat_ifs_slow = scales_config.flat_ifs_slow
+    framework.context.sig_map_ifs_slow = scales_config.sig_map_ifs_slow
+    framework.context.lin_coeff_ifs_slow = scales_config.lin_coeff_ifs_slow
+    framework.context.sat_map_ifs_slow = scales_config.sat_map_ifs_slow
+    framework.context.gain_ifs_slow = scales_config.gain_ifs_slow
+
+    framework.context.bpm_img = scales_config.bpm_img
+    framework.context.bpmat_img = scales_config.bpmat_img
+    framework.context.flat_img_fast0p6 = scales_config.flat_img_fast0p6
+    framework.context.sig_map_img_fast0p6 = scales_config.sig_map_img_fast0p6
+    framework.context.lin_coeff_img_fast0p6 = scales_config.lin_coeff_img_fast0p6
+    framework.context.sat_map_img_fast0p6 = scales_config.sat_map_img_fast0p6
+    framework.context.gain_img_fast0p6 = scales_config.gain_img_fast0p6
+
+    #framework.context.bpm_img_fast1 = scales_config.bpm_img_fast1
+    #framework.context.bpmat_img_fast1 = scales_config.bpmat_img_fast1
+    framework.context.flat_img_fast1 = scales_config.flat_img_fast1
+    framework.context.sig_map_img_fast1 = scales_config.sig_map_img_fast1
+    framework.context.lin_coeff_img_fast1 = scales_config.lin_coeff_img_fast1
+    framework.context.sat_map_img_fast1 = scales_config.sat_map_img_fast1
+    framework.context.gain_img_fast1 = scales_config.gain_img_fast1
+    
+    #framework.context.bpm_img_slow = scales_config.bpm_img_slow
+    #framework.context.bpmat_img_slow = scales_config.bpmat_img_slow
+    framework.context.flat_img_slow = scales_config.flat_img_slow
+    framework.context.sig_map_img_slow = scales_config.sig_map_img_slow
+    framework.context.lin_coeff_img_slow = scales_config.lin_coeff_img_slow
+    framework.context.sat_map_img_slow = scales_config.sat_map_img_slow
+    framework.context.gain_img_slow = scales_config.gain_img_slow
+
+    framework.context.subtract_row_median = scales_config.subtract_row_median
+    framework.context.do_swap = scales_config.do_swap
+    framework.context.nchans = scales_config.nchans
+    framework.context.altcol = scales_config.altcol
+    framework.context.channelwise = scales_config.channelwise
+    framework.context.amp_mean_func = scales_config.amp_mean_func
+    framework.context.do_acn = scales_config.do_acn
+    framework.context.acn_avg_type = scales_config.acn_avg_type
+    framework.context.acn_mean_func = scales_config.acn_mean_func
+    framework.context.acn_smooth = scales_config.acn_smooth
+    framework.context.acn_savgol = scales_config.acn_savgol
+    framework.context.acn_winsize = scales_config.acn_winsize
+    framework.context.acn_order = scales_config.acn_order
+    framework.context.resid_colsub = scales_config.resid_colsub
+    framework.context.fixcol = scales_config.fixcol
+    framework.context.ref_avg_type = scales_config.ref_avg_type
+    framework.context.ref_mean_func = scales_config.ref_mean_func
+    framework.context.ref_smooth = scales_config.ref_smooth
+    framework.context.ref_savgol = scales_config.ref_savgol
+    framework.context.ref_winsize = scales_config.ref_winsize
+    framework.context.ref_order = scales_config.ref_order
+    framework.context.pickup = scales_config.pickup
+    framework.context.sigma_thresh = scales_config.sigma_thresh
+    framework.context.dilate_iter = scales_config.dilate_iter
+    framework.context.highpass_size = scales_config.highpass_size
+    framework.context.per_amp = scales_config.per_amp
+    framework.context.do_linearity = scales_config.do_linearity
+    framework.context.apply_sat_mask = scales_config.apply_sat_mask
+    framework.context.apply_bpm = scales_config.apply_bpm
+    framework.context.apply_dark = scales_config.apply_dark
+
+    framework.context.create_sat_map = scales_config.create_sat_map
+    framework.context.drop_fraction = scales_config.drop_fraction
+    framework.context.minimum_detected_ramps = scales_config.minimum_detected_ramps
+    framework.context.minimum_saturation_dn  = scales_config.minimum_saturation_dn
+    framework.context.min_sat_reads = scales_config.min_sat_reads
+
+    framework.context.create_linearity_coeff = scales_config.create_linearity_coeff
+    framework.context.min_lin_files = scales_config.min_lin_files
+    framework.context.min_lin_reads = scales_config.min_lin_reads
+
+    framework.context.create_bpm = scales_config.create_bpm
+    framework.context.bpm_min_darks = scales_config.bpm_min_darks
+    framework.context.bpm_min_flats = scales_config.bpm_min_flats
+    framework.context.im_dark_spatial_sigma_thresh = scales_config.im_dark_spatial_sigma_thresh
+    framework.context.im_dark_spatial_kernel_size = scales_config.im_dark_spatial_kernel_size
+    framework.context.im_dark_min_frames_bad_spatial = scales_config.im_dark_min_frames_bad_spatial
+    framework.context.im_dark_row_correction = scales_config.im_dark_row_correction
+    framework.context.im_dark_row_suppression_fraction = scales_config.im_dark_row_suppression_fraction
+    framework.context.im_dark_hot_sigma = scales_config.im_dark_hot_sigma
+    framework.context.im_dark_cold_sigma = scales_config.im_dark_cold_sigma
+    framework.context.im_dark_temporal_sigma_thresh = scales_config.im_dark_temporal_sigma_thresh
+    framework.context.im_flat_temporal_sigma_thresh = scales_config.im_flat_temporal_sigma_thresh
+    framework.context.im_flat_spatial_sigma_thresh = scales_config.im_flat_spatial_sigma_thresh
+    framework.context.im_flat_spatial_kernel_size = scales_config.im_flat_spatial_kernel_size
+    framework.context.im_flat_min_frames_bad_spatial = scales_config.im_flat_min_frames_bad_spatial
+    framework.context.im_normalize_flats = scales_config.im_normalize_flats
+    framework.context.im_flat_norm_kernel_size = scales_config.im_flat_norm_kernel_size
+    framework.context.im_flat_row_correction = scales_config.im_flat_row_correction
+    framework.context.im_flat_row_suppression_fraction = scales_config.im_flat_row_suppression_fraction
+    framework.context.im_flat_low_response_thresh = scales_config.im_flat_low_response_thresh
+    framework.context.im_flat_high_response_thresh = scales_config.im_flat_high_response_thresh
+    framework.context.ifs_dark_spatial_sigma_thresh = scales_config.ifs_dark_spatial_sigma_thresh
+    framework.context.ifs_dark_spatial_kernel_size = scales_config.ifs_dark_spatial_kernel_size
+    framework.context.ifs_dark_min_frames_bad_spatial = scales_config.ifs_dark_min_frames_bad_spatial
+    framework.context.ifs_dark_hot_sigma = scales_config.ifs_dark_hot_sigma
+    framework.context.ifs_dark_cold_sigma = scales_config.ifs_dark_cold_sigma
+    framework.context.ifs_dark_temporal_sigma_thresh = scales_config.ifs_dark_temporal_sigma_thresh
+    framework.context.ifs_flat_temporal_sigma_thresh = scales_config.ifs_flat_temporal_sigma_thresh
+    framework.context.ifs_flat_spatial_sigma_thresh = scales_config.ifs_flat_spatial_sigma_thresh
+    framework.context.ifs_flat_spatial_kernel_size = scales_config.ifs_flat_spatial_kernel_size
+    framework.context.ifs_flat_min_frames_bad_spatial = scales_config.ifs_flat_min_frames_bad_spatial
+    framework.context.ifs_normalize_flats = scales_config.ifs_normalize_flats
+    framework.context.ifs_flat_norm_kernel_size = scales_config.ifs_flat_norm_kernel_size
+    framework.context.ifs_flat_low_response_thresh = scales_config.ifs_flat_low_response_thresh
+    framework.context.ifs_flat_high_response_thresh = scales_config.ifs_flat_high_response_thresh
+    framework.context.master_comb_met = scales_config.master_comb_met
+
+    framework.context.create_readnoise = scales_config.create_readnoise
+    framework.context.min_rn_reads = scales_config.min_rn_reads
+    framework.context.minimum_rn_ramps = scales_config.minimum_rn_ramps
+    framework.context.rn_sub_global = scales_config.rn_sub_global
+    framework.context.rn_sub_amp = scales_config.rn_sub_amp
+    framework.context.rn_sub_row = scales_config.rn_sub_row
+    
+
+    # implement the group mode
+    if args.group_mode is True:
+
+        data_set = framework.context.data_set
+
+        # remove focus images and ccd clearing images from the dataset
+        focus_frames = data_set.data_table[
+            data_set.data_table.OBJECT == "focus"
+        ].index
+
+        ccdclear_frames = data_set.data_table[
+            data_set.data_table.OBJECT == "Clearing ccd"
+        ].index
+
+        data_set.data_table.drop(focus_frames, inplace=True)
+        data_set.data_table.drop(ccdclear_frames, inplace=True)
+
+        # ----------------------------------------------------------
+        # STAGE 1
+        # Queue ALL files for individual StartCalib processing
+        # ----------------------------------------------------------
+
+        imtypes = ['FLATLAMP','DARK','CALUNIT','BIAS']
+
+        #framework.context.n_calib_files = (data_set.data_table.IMTYPE.isin(imtypes).sum())
+        #print("Number of calibration files to process:",framework.context.n_calib_files)
+        
+        for imtype in imtypes: 
+            subset = data_set.data_table[
+                data_set.data_table.IMTYPE == imtype
+            ]
+            process_subset(subset)
+
+
+    framework.config.instrument.wait_for_event = args.wait_for_event
+    framework.config.instrument.continuous = args.continuous
+
+    framework.start(args.queue_manager_only, args.ingest_data_only,
+                    args.wait_for_event, args.continuous)
+
+
+if __name__ == "__main__":
+    main()

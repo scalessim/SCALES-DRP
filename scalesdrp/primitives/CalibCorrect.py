@@ -51,14 +51,13 @@ class CalibCorrect(BasePrimitive):
 
             final_ramp = self.action.args.ccddata.data
             final_uncert = self.action.args.ccddata.uncertainty
-            chisq = self.action.args.ccddata.chisq
-            quality_map = self.action.args.ccddata.dq
+            chisq = getattr(self.action.args.ccddata,"chisq",None)
+            quality_map = getattr(self.action.args.ccddata,"dq",None)
 
             existing_l1_name = scbasic.find_existing_proc_file(
                 input_filename=filename,
                 suffix="_L1",
                 redux_dir=self.config.instrument.output_directory)
-
 
             if existing_l1_name is not None:
                 l1_path = existing_l1_name
@@ -71,11 +70,16 @@ class CalibCorrect(BasePrimitive):
                 if os.path.exists(l1_path):
                     self.logger.info(f"Found existing L1 file: {l1_path}")
                     try:
-                        l1_slope, l1_uncert, l1_header = scbasic.read_existing_l1(l1_path)
+                        l1_slope, l1_uncert,l1_dq, l1_chisq,l1_header = scbasic.read_existing_l1(l1_path)
                         self.action.args.ccddata.data = l1_slope
                         self.action.args.ccddata.header = l1_header
+                        if l1_uncert is not None:
+                            self.action.args.ccddata.uncertainty = (StdDevUncertainty(l1_uncert.astype(np.float32)))
+                        else:
+                            self.action.args.ccddata.uncertainty = None
 
-                        self.action.args.ccddata.uncertainty = StdDevUncertainty(l1_uncert)
+                        self.action.args.ccddata.dq = l1_dq
+                        self.action.args.ccddata.chisq = l1_chisq
 
                         self.logger.info(f"Reusing existing L1 for {filename}. Skipping raw processing.")
                         return self.action.args
