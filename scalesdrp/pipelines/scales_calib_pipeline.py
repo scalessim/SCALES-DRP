@@ -35,7 +35,7 @@ class Scales_Calib_Pipeline(BasePipeline):
         "file_ingested":             ("action_planner", None, None),
 
         #CALIB PROCESSING
-        "process_calib":             ("ProcessCalframe",
+        "process_calib":             ("ProcessObject",
                                       "calib_processing_started",
                                       "calib_start"),
 
@@ -47,7 +47,7 @@ class Scales_Calib_Pipeline(BasePipeline):
 
 
 
-        "calib_process_done":        ("ProcessCalframe",
+        "calib_process_done":        ("ProcessObject",
                                       None,
                                       "calib_post_process"),   
 
