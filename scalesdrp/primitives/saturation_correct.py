@@ -13,6 +13,7 @@ RAMP_DQ = {
     "BPM": np.uint16(1 << 0),
     "SATURATED": np.uint16(1 << 1),
     "SAT_NEIGHBOR": np.uint16(1 << 2),
+    "INVALID_SAT_MAP": np.uint16(1 << 3),
 }
 
 
@@ -213,7 +214,8 @@ def make_ramp_quality_mask(
         saturation_map,
         bpm=bpm,
     )
-
+    invalid_saturation = ~np.isfinite(sat_map) | (sat_map <= 0)
+    
     n_reads, height, width = cube.shape
 
     (
@@ -236,17 +238,19 @@ def make_ramp_quality_mask(
     quality_map[bpm_map] |= RAMP_DQ["BPM"]
     quality_map[directly_saturated] |= RAMP_DQ["SATURATED"]
     quality_map[neighbor_affected] |= RAMP_DQ["SAT_NEIGHBOR"]
-
+    quality_map[invalid_saturation] |= RAMP_DQ["INVALID_SAT_MAP"]
     # ------------------------------------------------------------------
     # 3-D ramp-fitting mask
     # ------------------------------------------------------------------
     # Read r is good only when r is strictly earlier than first_rejected.
     read_index = np.arange(n_reads, dtype=np.int32)[:, None, None]
-    good_read_mask = read_index < first_rejected[None, :, :]
-
+    #good_read_mask = read_index < first_rejected[None, :, :]
+    good_read_mask = ((read_index < first_rejected[None, :, :]) & np.isfinite(cube))
     # Entire ramp is rejected for externally bad pixels.
     #good_read_mask[:, bpm_map] = False
-
+    good_read_mask[:, bpm_map] = False
+    invalid_saturation = ~np.isfinite(sat_map) | (sat_map <= 0)
+    good_read_mask[:, invalid_saturation] = False
     if print_summary:
         affected = first_rejected < n_reads
 

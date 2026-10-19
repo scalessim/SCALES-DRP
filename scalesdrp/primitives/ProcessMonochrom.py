@@ -4,7 +4,8 @@ from scalesdrp.primitives.scales_basic import fits_headers_to_dataframe
 from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import binary_dilation
 #from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
-
+import scalesdrp.primitives.scales_basic as scbasic
+import scalesdrp.primitives.mono_basic as mono_basic
 import pandas as pd
 import numpy as np
 import pickle
@@ -22,7 +23,10 @@ from scipy.ndimage import gaussian_filter
 from scipy.spatial import KDTree
 from astropy.modeling.functional_models import Gaussian2D, Const2D
 from astropy.modeling import fitting
-
+from scalesdrp.core.scales_proctab import Proctab
+import logging
+log = logging.getLogger("SCALES")
+from scalesdrp.core.scales_pkg_resources import get_resource_path
 
 
 class ProcessMonochrom(BasePrimitive):
@@ -35,11 +39,12 @@ class ProcessMonochrom(BasePrimitive):
 
     def __init__(self, action, context):
         BasePrimitive.__init__(self, action, context)
-        self.redux_dir = os.path.join(self.action.args.dirname, "redux")
         self.logger = context.pipeline_logger
-        self.context = context
 
-    def parse_files(self,df,scmode):
+        if not hasattr(self, "proctab") or self.proctab is None:
+            self.proctab = Proctab(logger=self.logger if hasattr(self, "logger") else logging.getLogger("SCALES"))
+
+    def parse_files(self,df,scmode,output_dir):
         """
         """
         df2 = df[df['IFSMODE'] == scmode]
@@ -47,29 +52,15 @@ class ProcessMonochrom(BasePrimitive):
             return [], []
 
         det_config = np.unique(df2['MCLOCK'])[0]
-
-        calibfilepath = self.context.calib_file_path
-        package = __name__.split('.')[0]
-        calib_path = str(get_resource_path(package, calibfilepath))+'/'
-        if det_config =='9.0 MHz': #fast0.6
-            flat = pyfits.getdata(calib_path+self.context.flat_ifs_fast0p6)
-        elif det_config =='5.0 MHz': #fast1.0
-            flat = pyfits.getdata(calib_path+self.context.flat_ifs_fast1)
-        elif det_config =='20.0 MHz': #slow
-            flat = pyfits.getdata(calib_path+self.context.flat_ifs_slow)
-
         lams = df2['MONOWAVE']
         names = df2['filename'][np.argsort(lams)]
 
         lams = np.sort(lams)
         ims = []
         for name in names:
-            image = pyfits.getdata(self.redux_dir+'/'+name,memmap=False)
+            image = pyfits.getdata(output_dir+'/'+name,memmap=False)
             if True in np.isnan(image): print('nan in image')
             ims.append(image)
-            #ims.append(image/flat)
-            #ims.append(pyfits.getdata(self.redux_dir+'/'+name))
-            #ims.append(pyfits.getdata(self.redux_dir+'/'+name)/flat)
         ims = np.array(ims)
         return ims, lams/1000.0
 
@@ -2114,20 +2105,40 @@ class ProcessMonochrom(BasePrimitive):
         lensflat = np.median(lensflatcube,axis=0)
         return np.array(lsfcube),np.array(lensflat)
 
-
-
     def _perform(self):
 
-        self.logger.info("Process Monochromator Images")
-        df = fits_headers_to_dataframe(self.redux_dir,pattern="*mcalunit.fits")
+        
+        output_dir = self.config.instrument.output_directory
+        plot_dir = self.config.instrument.plot_directory
+        package = __name__.split('.')[0]
+        calibfilepath = self.context.calib_file_path
+        calib_dir = str(get_resource_path(package, calibfilepath))+'/'
+        create_rectmat = bool(self.config.instrument.create_rectmat)
 
+        if not create_rectmat:
+            self.logger.info("Skipping rectification matrix generation.")
+            return self.action.args
+        
+        self.logger.info("############ started Processing Monochromator Images #############")
+        df = fits_headers_to_dataframe(output_dir,pattern="*mcalunit.fits")
+        if not df.empty:
+            df["IFSMODE"] = df.apply(
+                lambda row: scbasic.select_ifsmode(
+                    row["MODSLNAM"],
+                    row["DSPRSNAM"],
+                    row["FILTER"]),axis=1)
 
+            self.logger.info(f"Updated IFSMODE values: {df['IFSMODE'].tolist()}")
+        self.logger.info(f"Searching monochromator calibration files in: {output_dir}")
+        self.logger.info(f"Number of matching files: {len(df)}")
+        
         for scmode in ['LowRes-KLM','LowRes-K','LowRes-L',
                        'LowRes-M','LowRes-KL','LowRes-Ls',
                        'MedRes-K','MedRes-L','MedRes-M']:
             self.scmode=scmode
             self.logger.info("Parsing files for "+str(self.scmode))
-            ims, lams = self.parse_files(df,scmode)
+            ims, lams = self.parse_files(df,scmode,output_dir)
+
             if len(ims) > 0:
                 self.set_lamlimits(scmode)
                 ims_cal_tmp = self.monochrom_bksub(ims)
@@ -2135,8 +2146,7 @@ class ProcessMonochrom(BasePrimitive):
                     ims_cal = np.array([self.masked_row_destripe(im)[0] for im in ims_cal_tmp])
                 else:
                     ims_cal = ims_cal_tmp
-                pyfits.writeto(self.redux_dir+'/'+
-                scmode+'_calim_stack.fits',ims_cal,overwrite=True)
+                pyfits.writeto(output_dir+'/'+scmode+'_calim_stack.fits',ims_cal,overwrite=True)
                 self.logger.info("done loading images for "+str(self.scmode))
                 print(ims_cal.shape)
                 if scmode.split('-')[0] == 'LowRes':
@@ -2154,11 +2164,8 @@ class ProcessMonochrom(BasePrimitive):
                     final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
                     fluxcut = self.config.instrument.rectmat_fluxcut
                     posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
-                    pyfits.writeto(self.redux_dir+'/'+
-                                    scmode+'_posarr.fits',np.array(posarr),overwrite=True)
-                    pyfits.writeto(self.redux_dir+'/'+
-                                    scmode+'_cropped_spotpsf_arr.fits',np.array(spots),
-                                    overwrite=True)
+                    pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
+                    pyfits.writeto(output_dir+'/'+scmode+'_cropped_spotpsf_arr.fits',np.array(spots),overwrite=True)
 
 
                 if scmode.split('-')[0] == 'MedRes':
@@ -2173,51 +2180,53 @@ class ProcessMonochrom(BasePrimitive):
                     final_posns = self.get_medres_lensarr_xy(avgs_new,show_plots=False)
                     fluxcut = self.config.instrument.rectmat_fluxcut
                     posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=csize,cut=fluxcut)
-                    pyfits.writeto(self.redux_dir+'/'+
-                                    scmode+'_posarr.fits',np.array(posarr),overwrite=True)
-                    pyfits.writeto(self.redux_dir+'/'+
-                                    scmode+'_cropped_spotpsf_arr.fits',np.array(spots),
-                                    overwrite=True)
+                    pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
+                    pyfits.writeto(output_dir+'/'+scmode+'_cropped_spotpsf_arr.fits',np.array(spots),overwrite=True)
 
 
                 centroids = self.get_centroids(spots)
-                pyfits.writeto(self.redux_dir+'/'+
-                                scmode+'_centroids.fits',np.array(centroids),
-                                overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+scmode+'_lams.fits',
-                                    lams,overwrite=True)
+                pyfits.writeto(output_dir+'/'+scmode+'_centroids.fits',np.array(centroids),overwrite=True)
+                pyfits.writeto(output_dir+'/'+scmode+'_lams.fits',lams,overwrite=True)
                 #stop
-                
+                diagnostic_path = mono_basic.plot_rectmat_centroid_diagnostics(
+                    ims_cal=ims_cal,
+                    posarr=posarr,
+                    centroids=centroids,
+                    lams=lams,
+                    output_dir=plot_dir,
+                    filename=f"{scmode}_centroid_diagnostics.png",
+                    max_traces=100,
+                    show=False)
                 #ank_mods, ank_resids, ank_modims, ank_resims = self.AnK_spot_model(spots, posarr, centroids, self.nx, self.ny, 3, npix=13)
 
                 oversamp=2
                 ank_mods, ank_resids, ank_modims, ank_resims, ank_mods_sym, ank_resids_sym, ank_modims_sym, ank_resims_sym = self.AnK_spot_model_2(spots, centroids, self.ny, self.nx, oversamp, ims_cal, posarr)
 
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_ank_modarr.fits',np.array(ank_mods),
                                 overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_ank_resarr.fits',np.array(ank_resids),
                                 overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_ank_modims.fits',np.array(ank_modims),
                                 overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_ank_resims.fits',np.array(ank_resims),
                                 overwrite=True)
                 #stop
                 self.logger.info("fitting spot PSFs for interpolated rectmats")
                 fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots(ims_cal,posarr,show_plots=False,cropsize=csize,cut=fluxcut)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_gauss_spotpars.fits',np.array(fitarr),overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_gauss_mod_detims.fits',np.array(modims),overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_gauss_res_detims.fits',np.array(resims),overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_cropped_spotgauss_arr.fits',np.array(modim_arr),
                                 overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_cropped_spotgaussres_arr.fits',np.array(resim_arr),
                                 overwrite=True)
 
@@ -2234,7 +2243,7 @@ class ProcessMonochrom(BasePrimitive):
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
 
                 print(len(np.where(np.isnan(interp_arr)==False)[0]))
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_gauss_spotpars_interpd.fits',np.array(interp_arr),
                                 overwrite=True)
                 self.logger.info("making chi2 rectmat")
@@ -2254,51 +2263,52 @@ class ProcessMonochrom(BasePrimitive):
                                                 self.ny,self.nx)
 
 
-                if self.context.rectmat_xshift!=0 or self.context.rectmat_yshift!=0:
+                if self.config.instrument.rectmat_xshift!=0 or self.config.instrument.rectmat_yshift!=0:
                     interp_shift_arr = np.zeros(interp_arr.shape)
                     interp_shift_arr[:,:,:,:] = np.nan
                     interp_shift_arr[:] = interp_arr[:]
-                    interp_shift_arr[:,:,:,1]+=self.context.rectmat_xshift
-                    interp_shift_arr[:,:,:,2]+=self.context.rectmat_yshift
+                    interp_shift_arr[:,:,:,1]+=self.config.instrument.rectmat_xshift
+                    interp_shift_arr[:,:,:,2]+=self.config.instrument.rectmat_yshift
 
                     self.logger.info("making interpolated shifted optimal rectmat")
                     OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=fluxcut,method='optimal')
                     self.logger.info("making interpolated shifted chi2 rectmat")
                     C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=fluxcut)
-                    sparse.save_npz(self.redux_dir+'/'+
-                                    scmode+'_C2_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
-                                    '_dy'+str(self.context.rectmat_yshift)+
+                    sparse.save_npz(output_dir+'/'+
+                                    scmode+'_C2_intp_rectmat_dx'+str(self.config.instrument.rectmat_xshift)+
+                                    '_dy'+str(self.config.instrument.rectmat_yshift)+
                                     '.npz',C2_rmat_interpd_shift)
-                    sparse.save_npz(self.redux_dir+'/'+
-                                    scmode+'_OPT_intp_rectmat_dx'+str(self.context.rectmat_xshift)+
-                                    '_dy'+str(self.context.rectmat_yshift)+
+                    sparse.save_npz(output_dir+'/'+
+                                    scmode+'_OPT_intp_rectmat_dx'+str(self.config.instrument.rectmat_xshift)+
+                                    '_dy'+str(self.config.instrument.rectmat_yshift)+
                                     '.npz',OPT_rmat_interpd_shift)
 
 
                 self.logger.info("writing out rectmats")
-                sparse.save_npz(self.redux_dir+'/'+
+                sparse.save_npz(output_dir+'/'+
                                 scmode+'_OPT_rectmat.npz',OPT_rmat)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_OPT_lsf.fits',OPT_lsf,overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_OPT_lflat.fits',OPT_lflat,overwrite=True)
-                sparse.save_npz(self.redux_dir+'/'+
+                sparse.save_npz(output_dir+'/'+
                                 scmode+'_OPT_intp_rectmat.npz',OPT_rmat_interpd)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_OPT_intp_lsf.fits',OPT_lsf_interpd,
                                 overwrite=True)
-                pyfits.writeto(self.redux_dir+'/'+
+                pyfits.writeto(output_dir+'/'+
                                 scmode+'_OPT_intp_lflat.fits',OPT_lflat_interpd,
                                 overwrite=True)
-                sparse.save_npz(self.redux_dir+'/'+
+                sparse.save_npz(output_dir+'/'+
                                 scmode+'_C2_rectmat.npz',C2_rmat)
-                sparse.save_npz(self.redux_dir+'/'+
+                sparse.save_npz(output_dir+'/'+
                                 scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd)
-                pyfits.writeto(self.redux_dir+'/'+scmode+'_intp_lams.fits',
+                pyfits.writeto(output_dir+'/'+scmode+'_intp_lams.fits',
                     lams_interp,overwrite=True)
-                
-
-
+            
             log_string = ProcessMonochrom.__module__
             self.logger.info(log_string)
+        self.logger.info("+++++++++++++ Succesfully created and saved the rectification matrix")
+        self.logger.info("####################### Calibration files associated with all the input files are created :)")
+        
         return self.action.args

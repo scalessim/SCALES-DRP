@@ -23,6 +23,7 @@ from scalesdrp.core.scales_pkg_resources import get_resource_path
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
+import matplotlib.pyplot as plt
 
 class SpectralExtractOptimal(BasePrimitive):
     """
@@ -48,6 +49,7 @@ class SpectralExtractOptimal(BasePrimitive):
     def _perform(self):
 
         obsmode = self.action.args.ccddata.header['CAMERA']
+        plot_dir = self.config.instrument.plot_directory
 
         if obsmode=='IFS':
             SCALES_CENTER_MAP = {
@@ -70,8 +72,10 @@ class SpectralExtractOptimal(BasePrimitive):
             det_config = str(det_config).strip()
             modslnam = self.action.args.ccddata.header['MODSLNAM']
             dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
-            ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam)
+            filter = self.action.args.ccddata.header['FILTER']
+            ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam,filter)
             filename = self.action.args.ccddata.header.get("OFNAME")
+            #print(ifsmode)
 
             if det_config =='5.0 MHz':  #fast1.0
                 readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
@@ -90,7 +94,13 @@ class SpectralExtractOptimal(BasePrimitive):
             GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             data_image = self.action.args.ccddata.data
 
-            if ifsmode=='LowRes-K':
+            if ifsmode is None:
+                self.logger.info(
+                    "IFSMODE is None (unknown or unsupported configuration). "
+                    "Skipping spectral extraction.")
+                return self.action.args
+
+            elif ifsmode=='LowRes-K':
                 rmat_opt = self.context.OPT_rmat_LowRes_K
                 R_matrix = load_npz(calib_path+rmat_opt)
                 FLUX_SHAPE_3D = self.context.lowres_final_cube
@@ -196,6 +206,20 @@ class SpectralExtractOptimal(BasePrimitive):
                 uncertainty=StdDevUncertainty(A_opt_err),
                 meta=self.action.args.ccddata.header,
                 unit='adu')
+            
+            fig, axes, info = (
+                scbasic.plot_extracted_cube_diagnostic(
+                    cube=A_opt,
+                    output_directory=plot_dir,
+                    wavelength=None,
+                    combine="median",
+                    box_size=5,
+                    detection_sigma=4.0,
+                    min_component_pixels=3,
+                    persistence_fraction=0.15,
+                    dilation_iterations=1,
+                    save_prefix=f"{self.action.args.name}_cube",
+                    show=False))
 
             self.action.args.ccddata.data = A_opt
             self.action.args.ccddata.header.update(final_header)

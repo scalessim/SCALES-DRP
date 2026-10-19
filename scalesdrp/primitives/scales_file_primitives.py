@@ -241,7 +241,7 @@ class ingest_file(BasePrimitive):
                 self.output = output
         return self.output
 
-    def check_if_file_can_be_processed(self, imtype):
+    def check_if_file_can_be_processed1(self, imtype):
         """
         For a given image type, ensure that processing can proceed.
 
@@ -279,6 +279,53 @@ class ingest_file(BasePrimitive):
                 if len(arc_frames) <= 0:
                     self.logger.warn(f"Missing master arc")
                 return False
+
+        return True
+
+    def check_if_file_can_be_processed(self, imtype):
+        """
+        Check whether a file can proceed through processing.
+
+        Calibration files are currently allowed to proceed without
+        requiring pre-existing master calibration products. Master
+        calibration products are created later during calibration
+        post-processing.
+
+        Returns
+        -------
+        bool
+            True if processing may proceed.
+        """
+
+        # ---------------------------------------------------------
+        # Calibration files
+        #
+        # Raw calibration files are processed independently first.
+        # Required master products are created later in
+        # CalibPostProcess.
+        # ---------------------------------------------------------
+
+        calibration_imtypes = [
+            "BIAS",
+            "DARK",
+            "FLATLAMP",
+            "FLATLENS",
+            "CALUNIT",
+        ]
+
+        if imtype in calibration_imtypes:
+            self.logger.debug(
+                f"{imtype}: prerequisite master-calibration "
+                "check skipped."
+            )
+            return True
+
+        # ---------------------------------------------------------
+        # Other image types
+        #
+        # Existing prerequisite checks can be retained here when
+        # needed.
+        # ---------------------------------------------------------
 
         return True
 
@@ -761,7 +808,7 @@ def scales_fits_writer(
 def fits_writer_calib(
     data,                  # 2D or 3D array
     header,                # FITS header (astropy.io.fits.Header)
-    output_dir,            # base output directory
+    redux_dir,            # base output directory
     input_filename,        # original filename (used for naming)
     suffix,                # string appended to filename
     overwrite=True,
@@ -822,10 +869,7 @@ def fits_writer_calib(
     # --------------------------------------------------------------
     # Ensure output directory exists
     # --------------------------------------------------------------
-    redux_dir = os.path.join(
-        output_dir,
-        "redux"
-    )
+    #redux_dir = os.path.join(output_dir)
 
     os.makedirs(
         redux_dir,

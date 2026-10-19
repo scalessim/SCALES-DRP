@@ -35,37 +35,98 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter
 from keckdrpframework.primitives.base_primitive import BasePrimitive
 from keckdrpframework.models.arguments import Arguments
 import scalesdrp.primitives.reference as reference
+from matplotlib.colors import TwoSlopeNorm
+from scipy.ndimage import (binary_dilation, binary_opening, label,median_filter, gaussian_filter)
 ############# functions to check avoid processing again #########################
 def read_existing_l1(l1_path):
 
     with fits.open(l1_path) as hdul:
         slope = hdul[0].data
-        header = hdul[0].header
+        header = hdul[0].header.copy()
 
         if slope is None:
             raise RuntimeError("Primary HDU has no data.")
 
         if slope.ndim != 2:
-            raise RuntimeError(f"Expected 2D slope image, got {slope.ndim}D.")
+            raise RuntimeError(
+                f"Expected 2D slope image, got {slope.ndim}D."
+            )
 
         if not np.any(np.isfinite(slope)):
-            raise RuntimeError("Slope image has no finite values.")
+            raise RuntimeError(
+                "Slope image has no finite values."
+            )
 
+        # -------------------------
+        # UNCERTAINTY
+        # -------------------------
         uncert = None
+
         for hdu in hdul[1:]:
-            if hdu.name.upper() in ["UNCERT", "ERROR", "ERR", "SIGMA"]:
+            if hdu.name.upper() in [
+                "UNCERT", "ERROR", "ERR", "SIGMA"
+            ]:
                 uncert = hdu.data
                 break
 
         if uncert is None:
-            raise RuntimeError("No uncertainty extension found.")
+            raise RuntimeError(
+                "No uncertainty extension found."
+            )
 
         if uncert.shape != slope.shape:
             raise RuntimeError(
-               f"Uncertainty shape {uncert.shape} does not match slope shape {slope.shape}."
+                f"Uncertainty shape {uncert.shape} does not "
+                f"match slope shape {slope.shape}."
             )
 
-    return slope, uncert, header
+        # -------------------------
+        # DQ
+        # -------------------------
+        dq = None
+
+        if "DQ" in hdul:
+            if hdul["DQ"].data is not None:
+                dq = np.asarray(
+                    hdul["DQ"].data,
+                    dtype=np.uint32
+                )
+
+                if dq.shape != slope.shape:
+                    raise RuntimeError(
+                        f"DQ shape {dq.shape} does not "
+                        f"match slope shape {slope.shape}."
+                    )
+
+        # -------------------------
+        # CHISQ
+        # -------------------------
+        chisq = None
+
+        if "CHISQ" in hdul:
+            if hdul["CHISQ"].data is not None:
+                chisq = np.asarray(
+                    hdul["CHISQ"].data,
+                    dtype=np.float32
+                )
+
+                if chisq.shape != slope.shape:
+                    raise RuntimeError(
+                        f"CHISQ shape {chisq.shape} does not "
+                        f"match slope shape {slope.shape}."
+                    )
+
+        slope = np.asarray(
+            slope,
+            dtype=np.float32
+        )
+
+        uncert = np.asarray(
+            uncert,
+            dtype=np.float32
+        )
+
+    return slope, uncert, dq, chisq, header
 
 def read_existing_l2(l2_path):
 
@@ -114,11 +175,41 @@ def get_l2_path_from_raw(input_filename, output_dir):
     stem = _strip_fits_extension(input_filename)
     return os.path.join(output_dir,f"{stem}_opt_L2.fits")
 
-def find_existing_proc_file(input_filename, suffix,redux_dir):
-    #redux_dir = os.path.join(output_dir, "redux")
-    proctab_path = os.path.join(redux_dir, "scales.proc")
+def find_existing_proc_file1(
+    input_filename,
+    redux_dir,
+    suffix=None,
+):
+    """
+    Find an existing processed product for a raw input file.
 
-    if not os.path.exists(proctab_path):
+    Parameters
+    ----------
+    input_filename : str
+        Original raw FITS filename.
+
+    redux_dir : str
+        Directory containing scales.proc and processed products.
+
+    suffix : str or None, optional
+        If specified, search only for this suffix
+        (e.g. '_L1', '_L10', '_L11', '_L12', '_L2').
+
+        If None, search all supported processing levels.
+
+    Returns
+    -------
+    str or None
+        Full path to an existing processed product.
+        None if no matching product exists.
+    """
+
+    proctab_path = os.path.join(
+        redux_dir,
+        "scales.proc"
+    )
+
+    if not os.path.isfile(proctab_path):
         return None
 
     try:
@@ -126,41 +217,370 @@ def find_existing_proc_file(input_filename, suffix,redux_dir):
             proctab_path,
             sep="|",
             engine="python",
-            skipinitialspace=True
+            skipinitialspace=True,
         )
-    except Exception as e:
+
+    except Exception as exc:
         print(
-            f"Could not read proctab {proctab_path}: {e}"
+            f"Could not read proctab "
+            f"{proctab_path}: {exc}"
         )
         return None
 
-    # clean column names
-    proc.columns = [c.strip() for c in proc.columns]
+    # ---------------------------------------------------------
+    # Clean processing table
+    # ---------------------------------------------------------
 
-    # remove empty columns caused by leading/trailing |
-    proc = proc.loc[:, [c for c in proc.columns if c != ""]]
+    proc.columns = [
+        str(c).strip()
+        for c in proc.columns
+    ]
 
-    if "filename" not in proc.columns or "SUFF" not in proc.columns:
-        print(f"Could not search proctab because filename/SUFF columns are missing.")
+    proc = proc.loc[
+        :,
+        [c for c in proc.columns if c != ""]
+    ]
+
+    if (
+        "filename" not in proc.columns
+        or "SUFF" not in proc.columns
+    ):
+        print(
+            "Could not search proctab because "
+            "filename/SUFF columns are missing."
+        )
         return None
 
-    proc["filename"] = proc["filename"].astype(str).str.strip()
-    proc["SUFF"] = proc["SUFF"].astype(str).str.strip()
+    proc["filename"] = (
+        proc["filename"]
+        .astype(str)
+        .str.strip()
+    )
 
-    raw_stem = _strip_fits_extension(input_filename)
+    proc["SUFF"] = (
+        proc["SUFF"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    # ---------------------------------------------------------
+    # Raw filename stem
+    # ---------------------------------------------------------
+
+    raw_stem = _strip_fits_extension(
+        os.path.basename(input_filename)
+    )
+
+    # ---------------------------------------------------------
+    # Select suffix(es) to search
+    # ---------------------------------------------------------
+
+    valid_suffixes = [
+        "_L1",
+        "_L10",
+        "_L11",
+        "_L12",
+        "_L13",
+        "_OPT_L2",
+        "_CHI_L2",
+        "_mcalunit",
+        "_mbias",
+        "_mflatlamp",
+        "_mdark",
+    ]
+
+    if suffix is None:
+
+        suffixes_to_search = valid_suffixes
+
+    else:
+
+        suffix = str(suffix).strip().upper()
+
+        if suffix not in valid_suffixes:
+            raise ValueError(
+                f"Unsupported processing suffix: {suffix}. "
+                f"Expected one of {valid_suffixes}."
+            )
+
+        suffixes_to_search = [suffix]
+
+    # ---------------------------------------------------------
+    # Search proc table
+    # ---------------------------------------------------------
 
     matches = proc[
-        (proc["SUFF"] == suffix)
+        proc["SUFF"].isin(suffixes_to_search)
         &
-        (proc["filename"].str.contains(raw_stem, regex=False))
+        proc["filename"].str.contains(
+            raw_stem,
+            regex=False,
+            na=False,
+        )
     ]
 
     if len(matches) == 0:
         return None
 
-    found_name = matches.iloc[-1]["filename"]
-    return os.path.join(redux_dir, found_name)
+    # ---------------------------------------------------------
+    # Confirm that the actual FITS file exists
+    # ---------------------------------------------------------
 
+    for _, row in matches.iloc[::-1].iterrows():
+
+        found_name = str(
+            row["filename"]
+        ).strip()
+
+        found_path = os.path.join(
+            redux_dir,
+            found_name
+        )
+
+        if os.path.isfile(found_path):
+            return found_path
+
+    return None
+
+
+def find_existing_proc_file(
+    input_filename,
+    redux_dir,
+    suffix=None,
+):
+    """
+    Find an existing processed FITS product using scales.proc.
+
+    Parameters
+    ----------
+    input_filename : str
+        Original raw FITS filename.
+
+    redux_dir : str
+        Directory containing scales.proc and processed FITS files.
+
+    suffix : str, list, tuple, set, or None, optional
+        Processing suffix(es) to search.
+
+        Examples:
+            "_L1"
+            "_mdark"
+            ["_mdark", "_mflatlamp", "_mcalunit"]
+
+        If None, search all supported processing levels.
+
+    Returns
+    -------
+    str or None
+        Full path to the first matching existing FITS product.
+        Returns None if no matching file exists.
+
+    Notes
+    -----
+    - Suffix matching is case-insensitive.
+    - Only files registered in scales.proc are considered.
+    - The actual FITS file must exist on disk.
+    - If multiple files match, the most recently listed
+      matching product in scales.proc is returned.
+    """
+
+    redux_dir = os.path.abspath(os.fspath(redux_dir))
+
+    proctab_path = os.path.join(
+        redux_dir,
+        "scales.proc"
+    )
+
+    if not os.path.isfile(proctab_path):
+        return None
+
+    # ---------------------------------------------------------
+    # Read processing table
+    # ---------------------------------------------------------
+
+    try:
+        proc = pd.read_csv(
+            proctab_path,
+            sep="|",
+            engine="python",
+            skipinitialspace=True,
+        )
+
+    except Exception as exc:
+        print(
+            f"Could not read proctab "
+            f"{proctab_path}: {exc}"
+        )
+        return None
+
+    # ---------------------------------------------------------
+    # Clean processing table
+    # ---------------------------------------------------------
+
+    proc.columns = [
+        str(c).strip()
+        for c in proc.columns
+    ]
+
+    proc = proc.loc[
+        :,
+        [c for c in proc.columns if c != ""]
+    ].copy()
+
+    if (
+        "filename" not in proc.columns
+        or "SUFF" not in proc.columns
+    ):
+        print(
+            "Could not search proctab because "
+            "filename/SUFF columns are missing."
+        )
+        return None
+
+    proc["filename"] = (
+        proc["filename"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    proc["SUFF"] = (
+        proc["SUFF"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    # ---------------------------------------------------------
+    # Supported processing suffixes
+    # ---------------------------------------------------------
+
+    valid_suffixes = [
+        "_L1",
+        "_L10",
+        "_L11",
+        "_L12",
+        "_L13",
+        "_OPT_L2",
+        "_CHI_L2",
+        "_mcalunit",
+        "_mbias",
+        "_mflatlamp",
+        "_mdark",
+    ]
+
+    valid_upper = {
+        s.upper()
+        for s in valid_suffixes
+    }
+
+    # ---------------------------------------------------------
+    # Select suffixes
+    # ---------------------------------------------------------
+
+    if suffix is None:
+
+        suffixes_to_search = list(valid_upper)
+
+    elif isinstance(suffix, (list, tuple, set)):
+
+        suffixes_to_search = [
+            str(s).strip().upper()
+            for s in suffix
+        ]
+
+    else:
+
+        suffixes_to_search = [
+            str(suffix).strip().upper()
+        ]
+
+    invalid_suffixes = [
+        s for s in suffixes_to_search
+        if s not in valid_upper
+    ]
+
+    if invalid_suffixes:
+        raise ValueError(
+            f"Unsupported processing suffix(es): "
+            f"{invalid_suffixes}. "
+            f"Supported suffixes: {valid_suffixes}"
+        )
+
+    if not suffixes_to_search:
+        return None
+
+    # ---------------------------------------------------------
+    # Determine original raw filename stem
+    # ---------------------------------------------------------
+
+    raw_stem = _strip_fits_extension(
+        os.path.basename(
+            os.fspath(input_filename)
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Match filenames and processing suffixes
+    # ---------------------------------------------------------
+
+    # Require the processed filename to begin with the
+    # original raw filename stem followed by a separator.
+    #
+    # Examples:
+    #
+    # raw:
+    #   ss260605_04802.fits
+    #
+    # processed:
+    #   ss260605_04802_L1.fits
+    #   ss260605_04802_L1_2370.25_mcalunit.fits
+
+    proc_names = proc["filename"].map(
+        lambda name: os.path.basename(name)
+    )
+
+    filename_match = (
+        proc_names.str.startswith(raw_stem + "_")
+        | proc_names.eq(raw_stem + ".fits")
+        | proc_names.eq(raw_stem + ".fits.gz")
+    )
+
+    suffix_match = proc["SUFF"].isin(
+        suffixes_to_search
+    )
+
+    matches = proc.loc[
+        filename_match & suffix_match
+    ]
+
+    if matches.empty:
+        return None
+
+    # ---------------------------------------------------------
+    # Confirm FITS file exists
+    # ---------------------------------------------------------
+
+    for _, row in matches.iloc[::-1].iterrows():
+
+        found_name = str(
+            row["filename"]
+        ).strip()
+
+        if os.path.isabs(found_name):
+            found_path = found_name
+        else:
+            found_path = os.path.join(
+                redux_dir,
+                found_name
+            )
+
+        if os.path.isfile(found_path):
+            return found_path
+
+    return None
 ##############################################################################
 
 def load_single_master_file_calib(expected_keywords, master_type):
@@ -171,11 +591,11 @@ def load_single_master_file_calib(expected_keywords, master_type):
     master_type = master_type.upper()
 
     tail_map = {
-        "DARK": "_mdark.fits",
-        "BIAS": "_mbias.fits",
-        "FLATLAMP": "_mflatlamp.fits",
-        "FLATLENS": "_mflatlens.fits",
-        "CALUNIT": "_mcalunit.fits",
+        "DARK": "_L1_mdark.fits",
+        "BIAS": "_L1_mbias.fits",
+        "FLATLAMP": "_L1_mflatlamp.fits",
+        "FLATLENS": "_L1_mflatlens.fits",
+        "CALUNIT": "_L1_mcalunit.fits",
     }
 
     tail = tail_map.get(master_type)
@@ -759,175 +1179,759 @@ def proctab_update(
 
 def build_master_from_stack(
     data_stack,                 # (N,H,W) or list of (H,W)
-    sigma_stack=None,           # None or (N,H,W) or list of (H,W)
+    sigma_stack=None,           # None or (N,H,W)
+    chisq_stack=None,           # None or (N,H,W)
+    quality_stack=None,         # None or (N,H,W), uint16 DQ maps
     *,
-    method="ivw",               # 'ivw' (inverse-variance mean), 'mean', or 'median'
+    method="ivw",               # 'ivw', 'mean', or 'median'
     clip_sigma=5.0,             # sigma threshold for iterative clipping
-    iterations=3,               # max clipping iterations
-    min_valid=2,                # minimum frames per pixel to keep result
-    frame_scales=None,          # optional length-N array of multiplicative scales per frame
-    return_mask=False           # optionally return the final inlier mask (N,H,W)
+    iterations=3,               # maximum clipping iterations
+    min_valid=2,                # minimum surviving frames per pixel
+    frame_scales=None,          # optional multiplicative scale per frame
+    return_mask=False,          # optionally return final combination mask
 ):
     """
-    Combine a stack of frames into a master calibration frame with uncertainty.
+    Combine a stack of L1 calibration products into a master calibration.
+
+    Each L1 product may contain:
+
+        DATA    : calibrated 2-D image
+        UNCERT  : 1-sigma uncertainty
+        CHISQ   : ramp-fit chi-square diagnostic
+        DQ      : uint16 detector quality map
+
+    The DATA stack is combined using inverse-variance weighting, mean,
+    or median after iterative sigma clipping.
+
+    UNCERT is propagated according to the selected combination method.
+
+    CHISQ is treated as a diagnostic quantity and is propagated using
+    the median of the CHISQ values corresponding to samples that survive
+    the DATA sigma-clipping.
+
+    DQ is also diagnostic at this stage and does NOT reject samples from
+    the master combination. The master DQ is constructed using a bitwise
+    OR across the input L1 DQ maps, preserving any detector-quality flag
+    that occurred in any contributing exposure.
 
     Parameters
     ----------
     data_stack : array-like
-        Stack of input frames, shape (N,H,W) or list of (H,W).
+        Stack of input frames with shape (N,H,W), or a single (H,W)
+        frame.
+
     sigma_stack : array-like or None
-    Matching stack of 1σ uncertainties; if None, equal-variance is assumed.
-    method : {'ivw','mean','median'}
-        ivw   = inverse-variance weighted mean (requires sigma_stack)
-        mean  = unweighted mean
-        median= unweighted median with robust uncertainty estimate
+        Stack of 1-sigma uncertainties with the same shape as data_stack.
+        Required when method='ivw'.
+
+    chisq_stack : array-like or None
+        Stack of CHISQ images with the same shape as data_stack.
+
+    quality_stack : array-like or None
+        Stack of uint16 DQ maps with the same shape as data_stack.
+
+        Current DQ definition:
+
+            bit 0 : BPM
+            bit 1 : pixel directly saturated during the ramp
+            bit 2 : saturated neighbor forced earlier ramp cutoff
+
+        Bits may be combined.
+
+        DQ does not participate in the numerical master combination.
+        The output master DQ is the bitwise OR of the input DQ maps.
+
+    method : {'ivw', 'mean', 'median'}
+        Combination method.
+
+        ivw
+            Inverse-variance weighted mean.
+
+        mean
+            Unweighted mean.
+
+        median
+            Unweighted median.
+
     clip_sigma : float
-        Sigma threshold for iterative outlier rejection (applied along the N axis).
+        Sigma threshold for iterative outlier rejection along the
+        frame axis. Set <= 0 or non-finite to disable clipping.
+
     iterations : int
         Maximum number of clipping iterations.
+
     min_valid : int
-        Minimum number of surviving frames per pixel; otherwise result is NaN.
+        Minimum number of surviving numerical samples required to
+        produce a valid master pixel.
+
     frame_scales : array-like or None
-        Optional length-N multiplicative scales applied per frame (e.g. normalize by exposure).
+        Optional length-N multiplicative scale applied to DATA.
+        UNCERT is scaled by the corresponding absolute scale.
+        CHISQ and DQ are not scaled.
+
     return_mask : bool
-        If True, also return the final boolean inlier mask of shape (N,H,W).
+        If True, also return the final per-frame combination mask
+        with shape (N,H,W).
+
     Returns
     -------
-    master : (H,W) float32
-        Combined master frame.
-    master_uncert : (H,W) float32
-        Propagated 1σ uncertainty of the master.
-    mask (optional) : (N,H,W) bool
-        Final inlier mask after clipping (only if return_mask=True).
+    master : ndarray, float32
+        Master DATA image, shape (H,W).
+
+    master_uncert : ndarray, float32
+        Propagated 1-sigma uncertainty, shape (H,W).
+
+    master_chisq : ndarray or None, float32
+        Median CHISQ of samples surviving the DATA clipping.
+
+    master_dq : ndarray or None, uint16
+        Bitwise OR of the input L1 DQ maps.
+
+    final_mask : ndarray, bool, optional
+        Returned only when return_mask=True.
+        True indicates that the corresponding L1 DATA sample
+        contributed to the final master calculation.
     """
-    # --- normalize inputs to arrays ---
-    data = np.asarray(data_stack)
-    if True in np.isnan(data_stack): print('nan in data trying to stack')
-    if True in np.isnan(sigma_stack): print('nan in sigma trying to stack')
+
+    # ============================================================
+    # DATA
+    # ============================================================
+
+    data = np.asarray(data_stack, dtype=np.float64)
+
     if data.ndim == 2:
-        return data
+        data = data[None, :, :]
 
-    if data.ndim == 3:
-        N, H, W = data.shape
-    elif isinstance(data_stack, (list, tuple)) and np.asarray(data_stack[0]).ndim == 2:
-        data = np.stack([np.asarray(f) for f in data_stack], axis=0)
-        N, H, W = data.shape
-    else:
-        raise ValueError("data_stack must be (N,H,W) or list of (H,W).")
+    if data.ndim != 3:
+        raise ValueError(
+            "data_stack must have shape (N,H,W) "
+            "or be a single (H,W) frame."
+        )
+
+    N, H, W = data.shape
+
+    if np.isnan(data).any():
+        print("NaN in DATA stack while creating master.")
+
+
+    # ============================================================
+    # UNCERTAINTY
+    # ============================================================
+
     if sigma_stack is None:
+
         sigma = None
+
+        if method == "ivw":
+            raise ValueError(
+                "method='ivw' requires sigma_stack."
+            )
+
     else:
-        sigma = np.asarray(sigma_stack)
+
+        sigma = np.asarray(
+            sigma_stack,
+            dtype=np.float64
+        )
+
+        if sigma.ndim == 2:
+            sigma = sigma[None, :, :]
+
         if sigma.shape != data.shape:
-            # allow list input
-            if isinstance(sigma_stack, (list, tuple)) and len(sigma_stack) == N:
-                sigma = np.stack([np.asarray(s) for s in sigma_stack], axis=0)
-            else:
-                raise ValueError(f"sigma_stack shape {np.asarray(sigma_stack).shape} must match data {data.shape}.")
-    # --- optional per-frame scaling ---
+            raise ValueError(
+                f"sigma_stack shape {sigma.shape} "
+                f"must match data_stack shape {data.shape}."
+            )
+
+        if np.isnan(sigma).any():
+            print("NaN in UNCERTAINTY stack while creating master.")
+
+
+    # ============================================================
+    # CHISQ
+    # ============================================================
+
+    if chisq_stack is None:
+
+        chisq = None
+
+    else:
+
+        chisq = np.asarray(
+            chisq_stack,
+            dtype=np.float64
+        )
+
+        if chisq.ndim == 2:
+            chisq = chisq[None, :, :]
+
+        if chisq.shape != data.shape:
+            raise ValueError(
+                f"chisq_stack shape {chisq.shape} "
+                f"must match data_stack shape {data.shape}."
+            )
+
+
+    # ============================================================
+    # DQ / QUALITY MAP
+    # ============================================================
+
+    if quality_stack is None:
+
+        quality = None
+        master_dq = None
+
+    else:
+
+        quality = np.asarray(
+            quality_stack,
+            dtype=np.uint16
+        )
+
+        if quality.ndim == 2:
+            quality = quality[None, :, :]
+
+        if quality.shape != data.shape:
+            raise ValueError(
+                f"quality_stack shape {quality.shape} "
+                f"must match data_stack shape {data.shape}."
+            )
+
+        # Preserve every DQ condition encountered in the L1 stack.
+        #
+        # Example:
+        #     frame 1 : 000
+        #     frame 2 : 010  SATURATED
+        #     frame 3 : 100  SAT_NEIGHBOR
+        #
+        #     master  : 110
+        #
+        master_dq = np.bitwise_or.reduce(
+            quality,
+            axis=0
+        ).astype(np.uint16)
+
+
+    # ============================================================
+    # OPTIONAL PER-FRAME SCALING
+    # ============================================================
+
     if frame_scales is not None:
-        scales = np.asarray(frame_scales, dtype=float)
+
+        scales = np.asarray(
+            frame_scales,
+            dtype=np.float64
+        )
+
         if scales.shape != (N,):
-            raise ValueError(f"frame_scales must have shape ({N},).")
-        data = data * scales[:, None, None]
+            raise ValueError(
+                f"frame_scales must have shape ({N},)."
+            )
+
+        data = (
+            data *
+            scales[:, None, None]
+        )
+
         if sigma is not None:
-            sigma = sigma * np.abs(scales[:, None, None])
+            sigma = (
+                sigma *
+                np.abs(scales[:, None, None])
+            )
 
-    # --- initial mask: finite data (and finite sigma if provided & > 0) ---
+        # CHISQ is diagnostic and is not scaled.
+        # DQ is a bitmask and is not scaled.
+
+
+    # ============================================================
+    # INITIAL NUMERICAL VALIDITY MASK
+    # ============================================================
+
+    # IMPORTANT:
+    # DQ is intentionally NOT included in this mask.
+    #
+    # At the L1 stage detector corrections have already been
+    # performed. The DQ map is retained as observer-facing
+    # information rather than being used to reject corrected
+    # pixels from master construction.
+
     mask = np.isfinite(data)
+
     if sigma is not None:
-        mask &= np.isfinite(sigma) & (sigma > 0)
+        mask &= (
+            np.isfinite(sigma)
+            & (sigma > 0)
+        )
 
-    # --- iterative clipping along the stack axis ---
+    # Working mask for iterative clipping.
     m = mask.copy()
+
+
+    # ============================================================
+    # ITERATIVE SIGMA CLIPPING
+    # ============================================================
+
     for _ in range(max(0, int(iterations))):
-        # center estimate by method
-        if method == "ivw" and sigma is not None:
-            w = np.where(m, 1.0 / np.maximum(sigma, 1e-30)**2, 0.0)
-            Wsum = np.sum(w, axis=0)
-            center = np.where(Wsum > 0, np.sum(w * data, axis=0) / Wsum, np.nan)
-            # weighted residual "sigma": use weighted std
-            resid = (data - center[None, :, :])
-            var = np.where(Wsum > 0, np.sum(w * resid**2, axis=0) / np.maximum(Wsum, 1e-30), np.nan)
-            s = np.sqrt(var)
+
+        old_m = m.copy()
+
+        # --------------------------------------------------------
+        # IVW
+        # --------------------------------------------------------
+
+        if method == "ivw":
+
+            if sigma is None:
+                raise ValueError(
+                    "method='ivw' requires sigma_stack."
+                )
+
+            w = np.where(
+                m,
+                1.0 / np.maximum(
+                    sigma,
+                    1e-30
+                )**2,
+                0.0
+            )
+
+            wsum = np.sum(
+                w,
+                axis=0
+            )
+
+            numerator = np.sum(
+                np.where(
+                    m,
+                    w * data,
+                    0.0
+                ),
+                axis=0
+            )
+
+            center = np.divide(
+                numerator,
+                wsum,
+                out=np.full(
+                    (H, W),
+                    np.nan,
+                    dtype=np.float64
+                ),
+                where=wsum > 0
+            )
+
+            residual = (
+                data -
+                center[None, :, :]
+            )
+
+            var_numerator = np.sum(
+                np.where(
+                    m,
+                    w * residual**2,
+                    0.0
+                ),
+                axis=0
+            )
+
+            variance = np.divide(
+                var_numerator,
+                wsum,
+                out=np.full(
+                    (H, W),
+                    np.nan,
+                    dtype=np.float64
+                ),
+                where=wsum > 0
+            )
+
+            scatter = np.sqrt(
+                variance
+            )
+
+
+        # --------------------------------------------------------
+        # MEAN
+        # --------------------------------------------------------
+
         elif method == "mean":
-            valid = np.where(m, data, np.nan)
-            center = np.nanmean(valid, axis=0)
-            s = np.nanstd(valid, axis=0)
+
+            valid = np.where(
+                m,
+                data,
+                np.nan
+            )
+
+            center = np.nanmean(
+                valid,
+                axis=0
+            )
+
+            scatter = np.nanstd(
+                valid,
+                axis=0
+            )
+
+
+        # --------------------------------------------------------
+        # MEDIAN
+        # --------------------------------------------------------
+
         elif method == "median":
-            valid = np.where(m, data, np.nan)
-            center = np.nanmedian(valid, axis=0)
-            # robust scale via MAD
-            mad = np.nanmedian(np.abs(valid - center[None, :, :]), axis=0)
-            s = 1.4826 * mad  # MAD→σ
+
+            valid = np.where(
+                m,
+                data,
+                np.nan
+            )
+
+            center = np.nanmedian(
+                valid,
+                axis=0
+            )
+
+            mad = np.nanmedian(
+                np.abs(
+                    valid -
+                    center[None, :, :]
+                ),
+                axis=0
+            )
+
+            scatter = (
+                1.4826 * mad
+            )
+
+
         else:
-            raise ValueError("method must be 'ivw', 'mean', or 'median'.")
 
-        if not np.isfinite(clip_sigma) or clip_sigma <= 0:
+            raise ValueError(
+                "method must be 'ivw', 'mean', or 'median'."
+            )
+
+
+        # --------------------------------------------------------
+        # CLIPPING DISABLED
+        # --------------------------------------------------------
+
+        if (
+            not np.isfinite(clip_sigma)
+            or clip_sigma <= 0
+        ):
             break
 
-        # update mask: keep |resid| <= clip_sigma * s
-        # compute residuals
-        resid = np.abs(data - center[None, :, :])
-        thresh = clip_sigma * np.where(np.isfinite(s), s, np.nan)
-        keep = resid <= thresh[None, :, :]
-        # always keep currently invalid pixels as False
-        m = m & keep
 
-        # stop early if nothing changes
-        if np.array_equal(m, keep & mask):
+        # --------------------------------------------------------
+        # UPDATE CLIPPING MASK
+        # --------------------------------------------------------
+
+        residual = np.abs(
+            data -
+            center[None, :, :]
+        )
+
+        threshold = (
+            clip_sigma *
+            scatter
+        )
+
+        keep = (
+            residual <=
+            threshold[None, :, :]
+        )
+
+        # A sample must have been numerically valid initially
+        # and must pass the clipping criterion.
+        m &= keep
+
+
+        # --------------------------------------------------------
+        # STOP WHEN NOTHING CHANGES
+        # --------------------------------------------------------
+
+        if np.array_equal(
+            m,
+            old_m
+        ):
             break
 
-    # --- final combine with remaining mask m ---
-    n_eff = np.sum(m, axis=0)
 
-    master = np.full((H, W), np.nan, dtype=np.float64)
-    master_unc = np.full((H, W), np.nan, dtype=np.float64)
+    # ============================================================
+    # NUMBER OF SURVIVING SAMPLES
+    # ============================================================
 
-    good_pix = n_eff >= max(1, int(min_valid))
+    n_eff = np.sum(
+        m,
+        axis=0
+    )
 
-    if method == "ivw" and sigma is not None:
-        w = np.where(m, 1.0 / np.maximum(sigma, 1e-30)**2, 0.0)
-        Wsum = np.sum(w, axis=0)
-        # master = sum(w*x)/sum(w)
-        val = np.where(Wsum > 0, np.sum(w * data, axis=0) / Wsum, np.nan)
-        unc = np.where(Wsum > 0, 1.0 / np.sqrt(Wsum), np.nan)
-        master[good_pix] = val[good_pix]
-        master_unc[good_pix] = unc[good_pix]
+    good_pix = (
+        n_eff >= max(
+            1,
+            int(min_valid)
+        )
+    )
+
+
+    # ============================================================
+    # INITIALIZE OUTPUT ARRAYS
+    # ============================================================
+
+    master = np.full(
+        (H, W),
+        np.nan,
+        dtype=np.float64
+    )
+
+    master_unc = np.full(
+        (H, W),
+        np.nan,
+        dtype=np.float64
+    )
+
+
+    # ============================================================
+    # FINAL IVW COMBINATION
+    # ============================================================
+
+    if method == "ivw":
+
+        w = np.where(
+            m,
+            1.0 / np.maximum(
+                sigma,
+                1e-30
+            )**2,
+            0.0
+        )
+
+        wsum = np.sum(
+            w,
+            axis=0
+        )
+
+        numerator = np.sum(
+            np.where(
+                m,
+                w * data,
+                0.0
+            ),
+            axis=0
+        )
+
+        value = np.divide(
+            numerator,
+            wsum,
+            out=np.full(
+                (H, W),
+                np.nan,
+                dtype=np.float64
+            ),
+            where=wsum > 0
+        )
+
+        uncertainty = np.divide(
+            1.0,
+            np.sqrt(wsum),
+            out=np.full(
+                (H, W),
+                np.nan,
+                dtype=np.float64
+            ),
+            where=wsum > 0
+        )
+
+        master[good_pix] = (
+            value[good_pix]
+        )
+
+        master_unc[good_pix] = (
+            uncertainty[good_pix]
+        )
+
+
+    # ============================================================
+    # FINAL MEAN COMBINATION
+    # ============================================================
 
     elif method == "mean":
-        valid = np.where(m, data, np.nan)
-        val = np.nanmean(valid, axis=0)
-        s = np.nanstd(valid, axis=0)
-        unc = np.where(n_eff > 0, s / np.sqrt(np.maximum(n_eff, 1)), np.nan)
-        master[good_pix] = val[good_pix]
-        master_unc[good_pix] = unc[good_pix]
+
+        valid = np.where(
+            m,
+            data,
+            np.nan
+        )
+
+        value = np.nanmean(
+            valid,
+            axis=0
+        )
+
+        scatter = np.nanstd(
+            valid,
+            axis=0
+        )
+
+        uncertainty = np.divide(
+            scatter,
+            np.sqrt(n_eff),
+            out=np.full(
+                (H, W),
+                np.nan,
+                dtype=np.float64
+            ),
+            where=n_eff > 0
+        )
+
+        master[good_pix] = (
+            value[good_pix]
+        )
+
+        master_unc[good_pix] = (
+            uncertainty[good_pix]
+        )
+
+
+    # ============================================================
+    # FINAL MEDIAN COMBINATION
+    # ============================================================
 
     elif method == "median":
-        valid = np.where(m, data, np.nan)
-        val = np.nanmedian(valid, axis=0)
-        # robust per-pixel spread via MAD
-        mad = np.nanmedian(np.abs(valid - val[None, :, :]), axis=0)
-        sigma_robust = 1.4826 * mad
-        unc = np.where(
-            n_eff > 0,
-            1.2533 * sigma_robust / np.sqrt(np.maximum(n_eff, 1)),
-            np.nan)
-        master[good_pix] = val[good_pix]
-        master_unc[good_pix] = unc[good_pix]
+
+        valid = np.where(
+            m,
+            data,
+            np.nan
+        )
+
+        value = np.nanmedian(
+            valid,
+            axis=0
+        )
+
+        mad = np.nanmedian(
+            np.abs(
+                valid -
+                value[None, :, :]
+            ),
+            axis=0
+        )
+
+        sigma_robust = (
+            1.4826 * mad
+        )
+
+        uncertainty = np.divide(
+            1.2533 * sigma_robust,
+            np.sqrt(n_eff),
+            out=np.full(
+                (H, W),
+                np.nan,
+                dtype=np.float64
+            ),
+            where=n_eff > 0
+        )
+
+        master[good_pix] = (
+            value[good_pix]
+        )
+
+        master_unc[good_pix] = (
+            uncertainty[good_pix]
+        )
 
 
+    # ============================================================
+    # PROPAGATE CHISQ
+    # ============================================================
 
-    # enforce min_valid
-    #master[~good_pix] = np.nan
-    #master_unc[~good_pix] = np.nan
+    if chisq is not None:
+
+        # Use the same frame-selection mask that was determined
+        # from the DATA combination.
+        #
+        # CHISQ itself does not control clipping.
+
+        valid_chisq = np.where(
+            m & np.isfinite(chisq),
+            chisq,
+            np.nan
+        )
+
+        master_chisq = np.nanmedian(
+            valid_chisq,
+            axis=0
+        )
+
+        # No valid master DATA -> no meaningful master CHISQ.
+        master_chisq[
+            ~good_pix
+        ] = np.nan
+
+        master_chisq = (
+            master_chisq.astype(
+                np.float32
+            )
+        )
+
+    else:
+
+        master_chisq = None
+
+
+    # ============================================================
+    # ENFORCE min_valid
+    # ============================================================
+
+    master[
+        ~good_pix
+    ] = np.nan
+
+    master_unc[
+        ~good_pix
+    ] = np.nan
+
+
+    # ============================================================
+    # OUTPUT TYPES
+    # ============================================================
+
+    master = master.astype(
+        np.float32
+    )
+
+    master_unc = master_unc.astype(
+        np.float32
+    )
+
+    if master_dq is not None:
+        master_dq = master_dq.astype(
+            np.uint16
+        )
+
+
+    # ============================================================
+    # RETURN
+    # ============================================================
 
     if return_mask:
-        return master.astype(np.float32), master_unc.astype(np.float32), m
-    return master.astype(np.float32), master_unc.astype(np.float32)
 
+        return (
+            master,
+            master_unc,
+            master_chisq,
+            master_dq,
+            m,
+        )
+
+    return (
+        master,
+        master_unc,
+        master_chisq,
+        master_dq,
+    )
 ########################### ramp fitting #####################################################
-def _ols_row_and_uncert(row_reads,valid_reads_mask,t,sig_row):
+def _ols_row_and_uncert1(row_reads,valid_reads_mask,t,sig_row):
 
     #if True in np.isnan(sig_row):
     #    print('input sigmas have nans')
@@ -956,275 +1960,7 @@ def _ols_row_and_uncert(row_reads,valid_reads_mask,t,sig_row):
     #    print('S0 mask made nans')
     return slope_row, slope_unc_row
 
-
-def ramp_fit1(input_read, total_exptime, SIG_map_scaled, *,
-    return_pedestal=True,
-    reset_prior_strength=3.0, # prior σ = k * SIG per pixel
-    use_sigma_clip=False,  # optional; physics mask usually suffices
-    sigma_clip=3.0, max_iter=3,
-    min_reads=5, tile=(128, 128),
-    JUMP_THRESH_ONEOMIT=20.25,
-    JUMP_THRESH_TWOOMIT=23.8,
-    group_dq=None):
-    """
-    produce two images—slope (countrate) and pedestal (reset) using fitramp everywhere it’s well-posed,
-    and fall back to a robust OLS only where fitramp can’t run. Optionally clean reads,
-    mask physically impossible read pairs, and (optionally) detect jumps.
-
-    Prefer fitramp (pedestal=True) for any number of reads; OLS only as per-pixel fallback.
-    - Saturation/rollover handled via Δread > 0 mask.
-    - Jump detection layered on top.
-    - Finite reset prior from first valid read.
-    """
-    N, H, W = input_read.shape
-    dt = float(total_exptime) / N
-    t  = (np.arange(N, dtype=float) + 0.5) * dt
-    t1=time.time()
-    # (optional) σ-clip (off by default)
-    def _sigma_clip_reads(cube):
-        from tqdm import tqdm
-        keep = np.ones_like(cube, dtype=bool)
-        Ty, Tx = tile
-        for y0 in tqdm(range(0, H, Ty), desc="σ-clip tiles"):
-            y1 = min(H, y0+Ty)
-            for x0 in range(0, W, Tx):
-                x1 = min(W, x0+Tx)
-                sub = cube[:, y0:y1, x0:x1]
-                n, ty, tx = sub.shape
-                k = ty*tx
-                Y = sub.reshape(n, k)
-                mask = np.isfinite(Y)
-                time_idx = np.arange(n, dtype=np.float32)
-                for _ in range(max_iter):
-                    cnt = mask.sum(0)
-                    if not np.any(cnt >= min_reads): break
-                    S0  = cnt
-                    St  = time_idx @ mask
-                    Stt = (time_idx**2) @ mask
-                    Wy  = Y * mask
-                    Sy  = Wy.sum(0)
-                    Sty = time_idx @ Wy
-                    Var_t = Stt - (St*St)/np.maximum(S0, 1)
-                    Cov_ty = Sty - (St*Sy)/np.maximum(S0, 1)
-                    b = np.zeros(k, np.float32)
-                    ok = Var_t > 0
-                    b[ok] = Cov_ty[ok] / Var_t[ok]
-                    a = (Sy - b*St) / np.maximum(S0, 1)
-                    Yhat = a + np.outer(time_idx, b)
-                    resid = Y - Yhat
-                    resid[~mask] = np.nan
-                    s = np.nanstd(resid, 0)
-                    new_mask = (np.abs(resid) < sigma_clip*s) & np.isfinite(Y)
-                    if np.array_equal(new_mask, mask): break
-                    mask = new_mask
-                keep[:, y0:y1, x0:x1] = mask.reshape(n, ty, tx)
-        return keep
-
-    base_valid_nomask = np.isfinite(input_read)
-    if use_sigma_clip:
-        base_valid &= _sigma_clip_reads(input_read)
-
-    diffs = input_read[1:] - input_read[:-1]
-    #1/f correction on the read difference
-    #diffs = reference.ref_filter_orig(
-    #        diffs1,nchans=4, in_place=False,
-    #        avg_type='row_wise',
-    #        left_ref=True, right_ref=True,
-    #        nleft=4, nright=4,
-    #        mean_func=np.nanmedian, smooth=False,
-    #        savgol=False, winsize=31, order=3,
-    #    )
-
-    n_fallback = 0
-    if group_dq is not None:
-        group_dq = np.asarray(group_dq, dtype=bool)
-        if group_dq.shape != input_read.shape:
-            raise ValueError(
-                f"group_dq shape {group_dq.shape} "
-                f"!= input_read shape {input_read.shape}")
-
-        masked_valid = base_valid_nomask & group_dq
-        masked_pair = (masked_valid[1:]& masked_valid[:-1]& (diffs > 0))
-
-        can_apply_mask = np.any(masked_pair, axis=0)
-
-        dq_changes_pixel = np.any(base_valid_nomask & ~group_dq,axis=0)
-
-        fallback_pixels = (dq_changes_pixel& ~can_apply_mask)
-
-        n_fallback = np.count_nonzero(fallback_pixels)
-
-        base_valid = np.where(can_apply_mask[None, :, :],masked_valid,base_valid_nomask)
-    else:
-        base_valid = base_valid_nomask
-    
-    ## both reads valid & Δread must be positive
-    pair_mask = (base_valid[1:] & base_valid[:-1]) & (diffs > 0)
-
-    if n_fallback > 0:
-        print(
-            f"Dynamic saturation mask ignored for "
-            f"{n_fallback:,} pixels because it would "
-            f"remove all valid read differences.")
-
-    # ---------- Reset prior: first valid read; else no prior (σ=∞) ----------
-    #If the first resultant is valid, use it as the prior mean on the pedestal.
-    #Prior uncertainty is reset_prior_strength × SIG (finite). If first read is bad, set σ=∞ (flat prior).
-    #With few usable differences, a finite reset prior makes the joint
-    #(pedestal+slope) fit solvable and better conditioned.
-
-    first_read = input_read[0]
-    first_ok = base_valid[0] & np.isfinite(first_read)
-    resetval_map = np.where(first_ok, first_read, 0.0)
-    resetsig_map = np.where(first_ok, reset_prior_strength * SIG_map_scaled, np.inf)
-
-    C_no  = fitramp.Covar(t, pedestal=False)
-    C_ped = fitramp.Covar(t, pedestal=True)
-
-    slope  = np.full((H, W), np.nan, float)
-    ped    = np.full((H, W), np.nan, float)
-    uncert = np.full((H, W), np.nan, float)
-    chisq = np.full((H, W), np.nan, float)
-    
-    for i in range(H):
-        if i % 128 == 0:
-            print(f"Fitting row {i}/{H}...")
-
-        sig_row   = SIG_map_scaled[i, :]
-        d_row     = diffs[:, i, :]
-        m_row     = pair_mask[:, i, :]
-        resetval  = resetval_map[i, :]
-        resetsig  = resetsig_map[i, :]
-
-        Wrow = d_row.shape[1]
-        row_slope  = np.full(Wrow, np.nan, float)
-        row_ped    = np.full(Wrow, np.nan, float)
-        row_uncert = np.full(Wrow, np.nan, float)
-        row_chisq  = np.full(Wrow, np.nan, float)
-
-        # 0) Usable diffs BEFORE jump detection
-        usable0 = m_row.sum(axis=0)
-
-        #If a pixel has ≥2 usable diffs, we can get a fitramp-based seed for its slope.
-        #Otherwise, seed comes from the robust OLS fallback.
-        # 1) Initial seed via fitramp only where well-posed (≥2 diffs). Else OLS seed.
-        #The final (pedestal=True) optimization benefits from a decent slope initial guess.
-        seed = np.full(Wrow, np.nan, float)
-        idx_seed_fit = (usable0 >= 2)
-        idx_seed_ols = ~idx_seed_fit
-
-        #Use pedestal=False for speed/robustness; countrateguess=None lets fitramp infer it from the data.
-        #If something throws, we switch those pixels to OLS seeding.
-        if np.any(idx_seed_fit):
-            try:
-                d_sub   = d_row[:, idx_seed_fit]
-                m_sub   = m_row[:, idx_seed_fit]
-                sig_sub = sig_row[idx_seed_fit]
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=RuntimeWarning)
-                    init_res = fitramp.fit_ramps(d_sub, C_no, sig_sub,
-                        diffs2use=m_sub,
-                        countrateguess=None,
-                        rescale=True)
-                seed[idx_seed_fit] = init_res.countrate
-            except Exception:
-                idx_seed_ols |= idx_seed_fit
-
-        if np.any(idx_seed_ols):
-            # compute OLS for the whole row once and slice
-            ols_row, _ = _ols_row_and_uncert(input_read[:, i, :],  # (N,W)
-                base_valid[:, i, :],
-                t, sig_row)
-            seed[idx_seed_ols] = ols_row[idx_seed_ols]
-
-        # fill non-finite seeds with OLS
-        bad = ~np.isfinite(seed)
-        if np.any(bad):
-            ols_row, _ = _ols_row_and_uncert(input_read[:, i, :],
-                base_valid[:, i, :],
-                t, sig_row)
-            seed[bad] = ols_row[bad]
-
-        # 2) Jump detection (only where we have ≥1 diff)
-        #Likelihood-based cosmic-ray/jump search; returns a binary mask for diffs to keep.
-        #Drop diffs that substantially improve χ² when omitted (thresholds ≈ 4.5σ false-positive equivalent).
-        m_row2 = m_row.copy()
-        idx_jump = (usable0 >= 1)
-        if np.any(idx_jump):
-            try:
-                d_sub   = d_row[:, idx_jump]
-                m_sub   = m_row[:, idx_jump]
-                sig_sub = sig_row[idx_jump]
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=RuntimeWarning)
-                    m2_sub, _ = fitramp.mask_jumps(d_sub, C_no, sig_sub,
-                        threshold_oneomit=JUMP_THRESH_ONEOMIT,
-                        threshold_twoomit=JUMP_THRESH_TWOOMIT,
-                        diffs2use=m_sub)
-                m_row2[:, idx_jump] = m2_sub
-            except Exception:
-                pass
-
-        usable_final = m_row2.sum(axis=0)
-
-        # 3) Final fit with pedestal=True
-        # Solvable if:
-        #   - usable_final >= 1 AND prior finite, OR
-        #   - usable_final >= 2 (solvable even without a prior)
-        #This is the high-fidelity fit that jointly estimates pedestal and slope using the full covariance model.
-        idx_final_fit = (usable_final >= 1) & (np.isfinite(resetsig) | (usable_final >= 2))
-        if np.any(idx_final_fit):
-            try:
-                d_sub    = d_row[:, idx_final_fit]
-                m_sub    = m_row2[:, idx_final_fit]
-                sig_sub  = sig_row[idx_final_fit]
-                seed_sub = seed[idx_final_fit]
-                r0_sub   = resetval[idx_final_fit]
-                s0_sub   = resetsig[idx_final_fit]
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=RuntimeWarning)
-                    final_res = fitramp.fit_ramps(d_sub, C_ped, sig_sub,
-                        diffs2use=m_sub,
-                        countrateguess=seed_sub,
-                        resetval=r0_sub, resetsig=s0_sub,
-                        rescale=True)
-                row_slope[idx_final_fit]  = final_res.countrate
-                row_ped[idx_final_fit]    = final_res.pedestal
-                row_uncert[idx_final_fit] = final_res.uncert     # <-- from fitramp
-                row_chisq[idx_final_fit]  = final_res.chisq
-            except Exception:
-                pass
-
-        # 4) Per-pixel fallback: unsolved, zero usable diffs, or excluded by gating
-        #If final fit is missing, use OLS slope and the prior mean for pedestal.
-        need_fallback = (~np.isfinite(row_slope)) | (usable_final == 0) | (~idx_final_fit)
-        if np.any(need_fallback):
-            ols_row, ols_unc = _ols_row_and_uncert(input_read[:, i, :],
-                base_valid[:, i, :],
-                t, sig_row)
-            row_slope[need_fallback]  = ols_row[need_fallback]
-            row_uncert[need_fallback] = ols_unc[need_fallback]
-            row_ped[need_fallback]    = resetval[need_fallback]  # prior mean
-
-        # 5) Final sanitation: any remaining non-finite → seed; then OLS
-        bad_final = ~np.isfinite(row_slope)
-        if np.any(bad_final):
-            ols_row, ols_unc = _ols_row_and_uncert(input_read[:, i, :],
-                base_valid[:, i, :],
-                t, sig_row)
-            row_slope[bad_final]  = ols_row[bad_final]
-            row_uncert[bad_final] = ols_unc[bad_final]
-            row_ped[bad_final]    = resetval[bad_final]
-
-        slope[i, :]  = row_slope
-        ped[i,   :]  = row_ped
-        uncert[i, :] = row_uncert
-        chisq[i, :] = row_chisq
-    t2=time.time()
-    print(f"Ramp fitting completed in {t2 - t1:.3f} seconds.")
-    return (slope, ped, uncert, chisq) if return_pedestal else (slope, uncert)
 ##################################################################################
-
 def ramp_fit(
     input_read,
     total_exptime,
@@ -2263,6 +2999,945 @@ def ramp_fit(
         uncert,
         chisq
     )
+##################################################################################
+
+import time
+import warnings
+import numpy as np
+
+FIT_DQ = {
+    'NO_USABLE_PAIR': np.uint16(1 << 0),
+    'OLS_USED': np.uint16(1 << 1),
+    'FIT_FAILED': np.uint16(1 << 2),
+    'INVALID_NOISE': np.uint16(1 << 3),
+    'JUMP_REJECTION': np.uint16(1 << 4),
+    'PLACEHOLDER': np.uint16(1 << 5),
+    'JUMP_CHECK_FAILED': np.uint16(1 << 6),
+}
+# Pixels with these bits must be excluded from science extraction.
+FIT_REJECT_BITS = int(FIT_DQ['NO_USABLE_PAIR'] | FIT_DQ['FIT_FAILED']
+                      | FIT_DQ['INVALID_NOISE'] | FIT_DQ['PLACEHOLDER'])
+
+
+def _ols_row_and_uncert(reads, valid, t, sig):
+    """OLS on accepted reads; known independent per-read noise sets uncertainty.
+
+    Returns NaN internally where fewer than two reads/time leverage remain.
+    The public fitter converts those failures to flagged finite placeholders.
+    """
+    mask = np.asarray(valid, bool) & np.isfinite(reads)
+    count = mask.sum(axis=0)
+    safe_y = np.where(mask, reads, 0.)
+    den = np.maximum(count, 1)
+    tmean = np.sum(np.where(mask, t[:, None], 0.), axis=0) / den
+    ymean = safe_y.sum(axis=0) / den
+    tc = t[:, None] - tmean
+    yc = np.where(mask, reads - ymean, 0.)
+    leverage = np.sum(np.where(mask, tc * tc, 0.), axis=0)
+    good = (count >= 2) & (leverage > 0) & np.isfinite(sig) & (sig > 0)
+    slope = np.full(reads.shape[1], np.nan)
+    uncertainty = slope.copy()
+    slope[good] = np.sum(np.where(mask, tc * yc, 0.), axis=0)[good] / leverage[good]
+    uncertainty[good] = sig[good] / np.sqrt(leverage[good])
+    return slope, uncertainty
+
+
+def ramp_fit2(
+    input_read,
+    total_exptime,
+    SIG_map_scaled,
+    *,
+    return_pedestal=True,
+    reset_prior_strength=3.0,
+    use_sigma_clip=False,
+    sigma_clip=3.0,
+    max_iter=3,
+    min_reads=5,
+    tile=(128, 128),
+    JUMP_THRESH_ONEOMIT=20.25,
+    JUMP_THRESH_TWOOMIT=23.8,
+    group_dq=None,
+    return_dq=True,
+    invalid_uncertainty=1.0e30,
+):
+    """Fit ramps without restoring saturation- or jump-rejected samples.
+
+    input_read: (reads, rows, columns); group_dq: same shape, True=use.
+    Timing retains your original convention dt=total_exptime/N.
+    Verify that convention against detector read timestamps.
+
+    All returned arrays are finite. Failed pixels have slope=0, pedestal=0,
+    uncertainty=invalid_uncertainty, chisq=-1; these are placeholders, not
+    measurements. FIT_REJECT_BITS must be excluded from downstream extraction.
+    A successful two-read OLS fit remains allowed when a usable pair exists.
+    Negative/zero finite differences are allowed to avoid positive-noise bias.
+    OLS does not run if jump detection has removed any additional differences.
+
+    With return_dq=True (default), append fit_dq to the original return tuple:
+    slope, pedestal, uncertainty, chisq, fit_dq (return_pedestal=True), or
+    slope, uncertainty, chisq, fit_dq otherwise. False retains the old tuple
+    shape but omits essential information about failed/placeholder pixels.
+    fit_dq is separate from the saturation quality_map; their bit meanings
+    differ and must be translated before combining into the pipeline's DQ.
+    """
+    input_read = np.asarray(input_read, dtype=float)
+    SIG_map_scaled = np.asarray(SIG_map_scaled, dtype=float)
+    if input_read.ndim != 3 or input_read.shape[0] < 2:
+        raise ValueError('input_read requires at least two reads and three dimensions.')
+    if SIG_map_scaled.shape != input_read.shape[1:]:
+        raise ValueError('SIG_map_scaled must match the detector shape.')
+    if not np.isfinite(total_exptime) or total_exptime <= 0:
+        raise ValueError('total_exptime must be finite and positive.')
+    if not np.isfinite(invalid_uncertainty) or invalid_uncertainty <= 0:
+        raise ValueError('invalid_uncertainty must be finite and positive.')
+    if not np.isfinite(reset_prior_strength) or reset_prior_strength <= 0:
+        raise ValueError('reset_prior_strength must be finite and positive.')
+    if group_dq is not None:
+        group_dq = np.asarray(group_dq, dtype=bool)
+        if group_dq.shape != input_read.shape:
+            raise ValueError('group_dq must match input_read shape.')
+
+    N, H, W = input_read.shape
+
+    dt = float(total_exptime) / N
+
+    t = (
+        np.arange(N, dtype=float) + 0.5
+    ) * dt
+
+    t1 = time.time()
+
+    # ================================================================
+    # Helper: sigma clipping
+    # ================================================================
+
+    def _sigma_clip_reads(cube):
+
+        try:
+            from tqdm import tqdm
+        except ImportError:
+            def tqdm(iterable, **kwargs):
+                return iterable
+
+        keep = np.ones_like(
+            cube,
+            dtype=bool
+        )
+
+        Ty, Tx = tile
+
+        for y0 in tqdm(
+            range(0, H, Ty),
+            desc="σ-clip tiles"
+        ):
+
+            y1 = min(
+                H,
+                y0 + Ty
+            )
+
+            for x0 in range(0, W, Tx):
+
+                x1 = min(
+                    W,
+                    x0 + Tx
+                )
+
+                sub = cube[
+                    :,
+                    y0:y1,
+                    x0:x1
+                ]
+
+                n, ty, tx = sub.shape
+
+                k = ty * tx
+
+                Y = sub.reshape(
+                    n,
+                    k
+                )
+
+                mask = np.isfinite(Y)
+
+                time_idx = np.arange(
+                    n,
+                    dtype=np.float32
+                )
+
+                for _ in range(max_iter):
+
+                    cnt = mask.sum(axis=0)
+
+                    if not np.any(
+                        cnt >= min_reads
+                    ):
+                        break
+
+                    S0 = cnt
+
+                    St = (
+                        time_idx @ mask
+                    )
+
+                    Stt = (
+                        (time_idx ** 2) @ mask
+                    )
+
+                    Wy = np.where(mask, Y, 0.0)
+
+                    Sy = Wy.sum(axis=0)
+
+                    Sty = (
+                        time_idx @ Wy
+                    )
+
+                    Var_t = (
+                        Stt
+                        - (St * St)
+                        / np.maximum(S0, 1)
+                    )
+
+                    Cov_ty = (
+                        Sty
+                        - (St * Sy)
+                        / np.maximum(S0, 1)
+                    )
+
+                    b = np.zeros(
+                        k,
+                        dtype=np.float32
+                    )
+
+                    ok = Var_t > 0
+
+                    b[ok] = (
+                        Cov_ty[ok]
+                        / Var_t[ok]
+                    )
+
+                    a = (
+                        Sy - b * St
+                    ) / np.maximum(S0, 1)
+
+                    Yhat = (
+                        a
+                        + np.outer(
+                            time_idx,
+                            b
+                        )
+                    )
+
+                    resid = Y - Yhat
+
+                    resid[~mask] = np.nan
+
+                    s = np.nanstd(
+                        resid,
+                        axis=0
+                    )
+
+                    candidate = mask & (np.abs(resid) <= sigma_clip * s)
+                    # Preserve zero-scatter ramps and avoid clipping below min_reads.
+                    update = (cnt >= min_reads) & np.isfinite(s) & (s > 0)
+                    update &= candidate.sum(axis=0) >= min_reads
+                    new_mask = np.where(update[None, :], candidate, mask)
+
+                    if np.array_equal(
+                        new_mask,
+                        mask
+                    ):
+                        break
+
+                    mask = new_mask
+
+                keep[
+                    :,
+                    y0:y1,
+                    x0:x1
+                ] = mask.reshape(
+                    n,
+                    ty,
+                    tx
+                )
+
+        return keep
+
+    # ================================================================
+    # Helper: OLS chi-square
+    # ================================================================
+    
+    def _ols_chisq_row(
+        reads_row,
+        valid_row,
+        t,
+        slope_row,
+        sig_row,
+    ):
+        """
+        Vectorized OLS chi-square for one detector row.
+
+        Parameters
+        ----------
+        reads_row : ndarray, shape (N, W)
+        valid_row : ndarray, bool, shape (N, W)
+        t : ndarray, shape (N,)
+        slope_row : ndarray, shape (W,)
+        sig_row : ndarray, shape (W,)
+
+        Returns
+        -------
+        chisq_row : ndarray, shape (W,)
+        """
+
+        # Valid points
+        mask = (
+            valid_row
+            & np.isfinite(reads_row)
+        )
+
+        nvalid = mask.sum(axis=0)
+
+        # --------------------------------------------------------------
+        # OLS intercept corresponding to supplied slope
+        #
+        # intercept = mean(y - slope*t)
+        # over valid reads
+        # --------------------------------------------------------------
+
+        model_without_intercept = (
+            t[:, None] * slope_row[None, :]
+        )
+
+        residual0 = (
+            reads_row
+            - model_without_intercept
+        )
+
+        # Ignore invalid reads
+        residual0_masked = np.where(
+            mask,
+            residual0,
+            0.0
+        )
+
+        intercept = np.full(
+            reads_row.shape[1],
+            np.nan,
+            dtype=float
+        )
+
+        good_count = nvalid > 0
+
+        intercept[good_count] = (
+            residual0_masked[:, good_count].sum(axis=0)
+            / nvalid[good_count]
+        )
+
+        # --------------------------------------------------------------
+        # Full model and residual
+        # --------------------------------------------------------------
+
+        model = (
+            intercept[None, :]
+            + model_without_intercept
+        )
+
+        residual = (
+            reads_row - model
+        )
+
+        # --------------------------------------------------------------
+        # Chi-square
+        # --------------------------------------------------------------
+
+        valid_sigma = (
+            np.isfinite(sig_row)
+            & (sig_row > 0)
+        )
+
+        good = (
+            (nvalid >= 2)
+            & np.isfinite(slope_row)
+            & np.isfinite(intercept)
+            & valid_sigma
+        )
+
+        chisq_row = np.full(
+            reads_row.shape[1],
+            np.nan,
+            dtype=float
+        )
+
+        normalized_resid2 = (
+            residual
+            / sig_row[None, :]
+        ) ** 2
+
+        normalized_resid2 = np.where(
+            mask,
+            normalized_resid2,
+            0.0
+        )
+
+        chisq_all = np.sum(
+            normalized_resid2,
+            axis=0
+        )
+
+        chisq_row[good] = (
+            chisq_all[good]
+        )
+
+        return chisq_row
+
+    # ================================================================
+    # Initial read-validity mask
+    # ================================================================
+
+    base_valid_nomask = np.isfinite(input_read)
+
+    if use_sigma_clip:
+        clip_cube = input_read if group_dq is None else np.where(group_dq, input_read, np.nan)
+        base_valid_nomask &= _sigma_clip_reads(clip_cube)
+
+    # ================================================================
+    # Read differences
+    # ================================================================
+
+    diffs = (input_read[1:] - input_read[:-1])
+
+    # ================================================================
+    # Dynamic saturation / group DQ mask
+    # ================================================================
+    base_valid = base_valid_nomask.copy()
+
+
+    if group_dq is not None:
+        group_dq = np.asarray(group_dq,dtype=bool)
+        if (group_dq.shape != input_read.shape):
+            raise ValueError(
+                f"group_dq shape "
+                f"{group_dq.shape} "
+                f"!= input_read shape "
+                f"{input_read.shape}")
+
+        # Apply the dynamic mask
+        base_valid &= group_dq
+
+    pair_mask = (
+        base_valid[1:]
+        & base_valid[:-1]
+        & np.isfinite(diffs)
+        )
+
+    no_usable_pair = ~np.any(pair_mask, axis=0)
+    n_no_usable_pair = np.count_nonzero(no_usable_pair)
+    if n_no_usable_pair > 0:
+        print(
+            f"{n_no_usable_pair:,} pixels have no usable "
+            "read differences after masking."
+        )
+
+    fit_dq = np.zeros((H, W), dtype=np.uint16)
+    fit_dq[no_usable_pair] |= FIT_DQ['NO_USABLE_PAIR']
+    noise_ok = np.isfinite(SIG_map_scaled) & (SIG_map_scaled > 0)
+    fit_dq[~noise_ok] |= FIT_DQ['INVALID_NOISE']
+
+    # ================================================================
+    # Reset prior
+    # ================================================================
+
+    first_read = input_read[0]
+
+    first_ok = (
+        base_valid[0]
+        & np.isfinite(first_read)
+    )
+
+    resetval_map = np.where(
+        first_ok,
+        first_read,
+        0.0
+    )
+
+    resetsig_map = np.where(
+        first_ok,
+        reset_prior_strength
+        * SIG_map_scaled,
+        np.inf
+    )
+
+    # ================================================================
+    # fitramp covariance objects
+    # ================================================================
+
+    C_no = fitramp.Covar(
+        t,
+        pedestal=False
+    )
+
+    C_ped = fitramp.Covar(
+        t,
+        pedestal=True
+    )
+
+    # ================================================================
+    # Output arrays
+    # ================================================================
+
+    slope = np.full(
+        (H, W),
+        np.nan,
+        dtype=float
+    )
+
+    ped = np.full(
+        (H, W),
+        np.nan,
+        dtype=float
+    )
+
+    uncert = np.full(
+        (H, W),
+        np.nan,
+        dtype=float
+    )
+
+    chisq = np.full(
+        (H, W),
+        np.nan,
+        dtype=float
+    )
+
+    # ================================================================
+    # Ramp fit row-by-row
+    # ================================================================
+
+    for i in range(H):
+
+        if i % 128 == 0:
+            print(
+                f"Fitting row {i}/{H}..."
+            )
+
+        sig_row = (
+            SIG_map_scaled[i, :]
+        )
+
+        # Supply neutral zeros for excluded differences; NaN*False is NaN.
+        d_row = np.where(pair_mask[:, i, :], diffs[:, i, :], 0.)
+
+        m_row = (
+            pair_mask[:, i, :]
+        )
+
+        resetval = (
+            resetval_map[i, :]
+        )
+
+        resetsig = (
+            resetsig_map[i, :]
+        )
+
+        Wrow = d_row.shape[1]
+
+        row_slope = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        row_ped = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        row_uncert = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        row_chisq = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        # ------------------------------------------------------------
+        # 0) Number of usable differences before jump detection
+        # ------------------------------------------------------------
+
+        usable0 = m_row.sum(
+            axis=0
+        )
+
+        # ------------------------------------------------------------
+        # 1) Initial slope seed
+        # ------------------------------------------------------------
+
+        seed = np.full(
+            Wrow,
+            np.nan,
+            dtype=float
+        )
+
+        idx_seed_fit = (usable0 >= 2) & noise_ok[i]
+
+        idx_seed_ols = (
+            ~idx_seed_fit
+        )
+
+        # ------------------------------------------------------------
+        # fitramp seed
+        # ------------------------------------------------------------
+
+        if np.any(idx_seed_fit):
+
+            try:
+
+                d_sub = d_row[
+                    :,
+                    idx_seed_fit
+                ]
+
+                m_sub = m_row[
+                    :,
+                    idx_seed_fit
+                ]
+
+                sig_sub = sig_row[
+                    idx_seed_fit
+                ]
+
+                with warnings.catch_warnings():
+
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=RuntimeWarning
+                    )
+
+                    init_res = fitramp.fit_ramps(
+                        d_sub,
+                        C_no,
+                        sig_sub,
+                        diffs2use=m_sub,
+                        countrateguess=None,
+                        rescale=True
+                    )
+
+                seed[
+                    idx_seed_fit
+                ] = init_res.countrate
+
+            except Exception:
+
+                idx_seed_ols |= (
+                    idx_seed_fit
+                )
+
+        # ------------------------------------------------------------
+        # OLS seed
+        # ------------------------------------------------------------
+
+        if np.any(idx_seed_ols):
+
+            ols_row, _ = (
+                _ols_row_and_uncert(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    sig_row
+                )
+            )
+
+            seed[
+                idx_seed_ols
+            ] = ols_row[
+                idx_seed_ols
+            ]
+
+        # ------------------------------------------------------------
+        # Fill failed fitramp seeds with OLS
+        # ------------------------------------------------------------
+
+        bad_seed = (
+            ~np.isfinite(seed)
+        )
+
+        if np.any(bad_seed):
+
+            ols_row, _ = (
+                _ols_row_and_uncert(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    sig_row
+                )
+            )
+
+            seed[
+                bad_seed
+            ] = ols_row[
+                bad_seed
+            ]
+
+        # ------------------------------------------------------------
+        # 2) Jump detection
+        # ------------------------------------------------------------
+
+        m_row2 = m_row.copy()
+
+        idx_jump = (usable0 >= 2) & noise_ok[i]
+
+        if np.any(idx_jump):
+
+            try:
+
+                d_sub = d_row[
+                    :,
+                    idx_jump
+                ]
+
+                m_sub = m_row[
+                    :,
+                    idx_jump
+                ]
+
+                sig_sub = sig_row[
+                    idx_jump
+                ]
+
+                with warnings.catch_warnings():
+
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=RuntimeWarning
+                    )
+
+                    m2_sub, _ = (
+                        fitramp.mask_jumps(
+                            d_sub,
+                            C_no,
+                            sig_sub,
+                            threshold_oneomit=(
+                                JUMP_THRESH_ONEOMIT
+                            ),
+                            threshold_twoomit=(
+                                JUMP_THRESH_TWOOMIT
+                            ),
+                            diffs2use=m_sub
+                        )
+                    )
+
+                m_row2[
+                    :,
+                    idx_jump
+                ] = np.asarray(m2_sub, dtype=bool) & m_sub
+
+            except Exception:
+                fit_dq[i, idx_jump] |= FIT_DQ['JUMP_CHECK_FAILED']
+
+        # No later step may restore an excluded read difference.
+        m_row2 &= m_row
+        jump_removed = np.any(m_row & ~m_row2, axis=0)
+        fit_dq[i, jump_removed] |= FIT_DQ['JUMP_REJECTION']
+        usable_final = (
+            m_row2.sum(
+                axis=0
+            )
+        )
+
+        # ------------------------------------------------------------
+        # 3) Final fitramp fit with pedestal
+        # ------------------------------------------------------------
+
+        idx_final_fit = (
+            (usable_final >= 1)
+            & noise_ok[i]
+            & np.isfinite(seed)
+            &
+            (
+                np.isfinite(resetsig)
+                |
+                (usable_final >= 2)
+            )
+        )
+
+        if np.any(idx_final_fit):
+
+            try:
+
+                d_sub = d_row[
+                    :,
+                    idx_final_fit
+                ]
+
+                m_sub = m_row2[
+                    :,
+                    idx_final_fit
+                ]
+
+                sig_sub = sig_row[
+                    idx_final_fit
+                ]
+
+                seed_sub = seed[
+                    idx_final_fit
+                ]
+
+                r0_sub = resetval[
+                    idx_final_fit
+                ]
+
+                s0_sub = resetsig[
+                    idx_final_fit
+                ]
+
+                with warnings.catch_warnings():
+
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=RuntimeWarning
+                    )
+
+                    final_res = fitramp.fit_ramps(
+                        d_sub,
+                        C_ped,
+                        sig_sub,
+                        diffs2use=m_sub,
+                        countrateguess=seed_sub,
+                        resetval=r0_sub,
+                        resetsig=s0_sub,
+                        rescale=True
+                    )
+
+                row_slope[
+                    idx_final_fit
+                ] = final_res.countrate
+
+                row_ped[
+                    idx_final_fit
+                ] = final_res.pedestal
+
+                row_uncert[
+                    idx_final_fit
+                ] = final_res.uncert
+
+                row_chisq[
+                    idx_final_fit
+                ] = final_res.chisq
+
+            except Exception:
+                pass
+
+        # ------------------------------------------------------------
+        # 4) OLS fallback
+        # ------------------------------------------------------------
+
+        final_ok = (np.isfinite(row_slope) & np.isfinite(row_ped)
+                    & np.isfinite(row_uncert) & (row_uncert > 0)
+                    & np.isfinite(row_chisq) & (row_chisq >= 0))
+        need_fallback = (~final_ok & (usable_final >= 1)
+                         & noise_ok[i] & ~jump_removed)
+
+        if np.any(need_fallback):
+
+            ols_row, ols_unc = (
+                _ols_row_and_uncert(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    sig_row
+                )
+            )
+
+            ols_chisq = (
+                _ols_chisq_row(
+                    input_read[:, i, :],
+                    base_valid[:, i, :],
+                    t,
+                    ols_row,
+                    sig_row
+                )
+            )
+
+            row_slope[
+                need_fallback
+            ] = ols_row[
+                need_fallback
+            ]
+
+            row_uncert[
+                need_fallback
+            ] = ols_unc[
+                need_fallback
+            ]
+
+            ols_mask = base_valid[:, i, :]
+            ols_intercept = np.sum(np.where(
+                ols_mask, input_read[:, i, :] - t[:, None] * ols_row[None, :], 0.),
+                axis=0) / np.maximum(ols_mask.sum(axis=0), 1)
+            row_ped[need_fallback] = ols_intercept[need_fallback]
+            fit_dq[i, need_fallback] |= FIT_DQ['OLS_USED']
+
+            row_chisq[
+                need_fallback
+            ] = ols_chisq[
+                need_fallback
+            ]
+
+        # ------------------------------------------------------------
+        # 5) Final sanitation
+        # ------------------------------------------------------------
+
+        bad_final = (
+            ~np.isfinite(row_slope) | ~np.isfinite(row_ped)
+            | ~np.isfinite(row_uncert) | (row_uncert <= 0)
+            | ~np.isfinite(row_chisq) | (row_chisq < 0)
+            | (usable_final == 0) | ~noise_ok[i]
+        )
+        fit_dq[i, bad_final] |= FIT_DQ['FIT_FAILED'] | FIT_DQ['PLACEHOLDER']
+        row_slope[bad_final] = 0.0
+        row_ped[bad_final] = 0.0
+        row_uncert[bad_final] = invalid_uncertainty
+        row_chisq[bad_final] = -1.0
+
+        # ------------------------------------------------------------
+        # Save row
+        # ------------------------------------------------------------
+
+        slope[i, :] = (
+            row_slope
+        )
+
+        ped[i, :] = (
+            row_ped
+        )
+
+        uncert[i, :] = (
+            row_uncert
+        )
+
+        chisq[i, :] = (
+            row_chisq
+        )
+
+    # ================================================================
+    # Finished
+    # ================================================================
+
+    t2 = time.time()
+
+    print(
+        f"Ramp fitting completed in "
+        f"{t2 - t1:.3f} seconds."
+    )
+
+    values = (slope, ped, uncert, chisq) if return_pedestal else (slope, uncert, chisq)
+    return values
 
 ######################################################################################
 def estimate_uncert_single_read(
@@ -2542,41 +4217,57 @@ def load_single_master_file(expected_keywords, master_type):
             return (data, uncert)
     return (None, None)
 #################################################################################
-def select_ifsmode(modslnam, dsprsnam):
+
+def select_ifsmode(modslnam, dsprsnam, filtername=None):
     """
-    Determine the SCALES IFS mode from MODSLNAM and DSPRSNAM.
+    Determine SCALES IFSMODE from MODSLNAM and DSPRSNAM.
+    FILTER is used only for pol-prism configurations.
 
     Returns
     -------
-    str
-        Examples:
-        'MedRes-K'
-        'LowRes-K'
-        'N/A' for non-IFS or unrecognized modes.
+    str or None
+        IFS mode, or None for unknown/unsupported configurations.
     """
+
+    ifsmode_map = {
+        # Medium-resolution modes
+        ("MedRes", "K-grating"): "MedRes-K",
+        ("MedRes", "L-grating"): "MedRes-L",
+        ("MedRes", "M-grating"): "MedRes-M",
+
+        # Low-resolution modes
+        ("LowRes", "K-prism"):   "LowRes-K",
+        ("LowRes", "KL-prism"):  "LowRes-KL",
+        ("LowRes", "KLM-prism"): "LowRes-KLM",
+        ("LowRes", "Ls-prism"):  "LowRes-Ls",
+        ("LowRes", "L-prism"):   "LowRes-L",
+        ("LowRes", "M-prism"):   "LowRes-M",
+    }
 
     modslnam = str(modslnam).strip()
     dsprsnam = str(dsprsnam).strip()
 
-    if modslnam == "MedRes":
-        grating = dsprsnam.split("-")[0]
+    # Check only MODSLNAM and DSPRSNAM
+    if modslnam.upper() == "UNKNOWN" or dsprsnam.upper() == "UNKNOWN":
+        return None
 
-        if not grating or grating == "N/A":
-            return "N/A"
+    # FILTER is relevant only for polarimetric mode
+    if dsprsnam == "pol-prism":
+        if modslnam != "LowRes":
+            return None
 
-        band = grating[0]
-        return f"{modslnam}-{band}"
+        filtername = str(filtername).strip()
 
-    elif modslnam == "LowRes":
-        grating = dsprsnam.split("-")[0]
+        if filtername == "KL":
+            return "LowRes-KL"
+        elif filtername == "M":
+            return "LowRes-M"
 
-        if not grating or grating == "N/A":
-            return "N/A"
+        return None
 
-        band = grating
-        return f"{modslnam}-{band}"
+    # All other modes ignore FILTER
+    return ifsmode_map.get((modslnam, dsprsnam), None)
 
-    return "N/A"
 ############## lenslet flat may change #####################################################
 def load_and_normalize_lenslet_flat(
     ifsmode,
@@ -3074,68 +4765,269 @@ def wcs_header_update(
 ################### GROUPING files for calib input ################################################
 def group_files_by_header(dt):
     """
-    Groups files in the data table based on CAMERA and key header values.
+    Group L1 calibration products based on detector/instrument
+    configuration.
 
-    Rules:
-    - CAMERA == 'Im'  : group by (CAMERA, IM-FW-1, IMTYPE, EXPTIME, MCLOCK)
-    - CAMERA == 'IFS' : group by (CAMERA, IFSMODE, IMTYPE, EXPTIME, MCLOCK)
-    - Additionally, if IMTYPE == 'CALUNIT', include WAVELENGTH in grouping.
+    Grouping rules
+    --------------
+    Imager:
+        CAMERA, IMGFW2N, IMTYPE, EXPTIME, MCLOCK
+
+    IFS:
+        CAMERA, DSPRSNAM, MODSLNAM, IMTYPE, EXPTIME, MCLOCK
+
+    CALUNIT:
+        MONOWAVE is additionally included in the grouping.
+
+    Parameters
+    ----------
+    dt : pandas.DataFrame
+        Processing-table subset containing L1 products.
+
+    Returns
+    -------
+    file_groups : list of dict
+        Each group has the form:
+
+        {
+            'params': {
+                grouping keyword: value,
+                ...
+            },
+            'filenames': [...]
+        }
     """
-    # Base required columns
-    required_cols = ['CAMERA', 'MODSLNAM', 'DSPRSNAM', 'IMTYPE', 'EXPTIME', 'MCLOCK']
-    missing = [c for c in required_cols if c not in dt.columns]
+
+    # ---------------------------------------------------------
+    # Columns required for every file
+    # ---------------------------------------------------------
+
+    required_cols = [
+        'filename',
+        'CAMERA',
+        'IMTYPE',
+        'EXPTIME',
+        'MCLOCK'
+    ]
+
+    missing = [
+        col for col in required_cols
+        if col not in dt.columns
+    ]
+
     if missing:
-        print(f"Missing required columns: {missing}")
+        print(
+            f"Missing required columns: {missing}"
+        )
         return []
 
-    # Only require WAVELENGTH if there are CALUNIT rows
-    has_calunit = dt['IMTYPE'].astype(str).str.upper().eq('CALUNIT').any()
+    # ---------------------------------------------------------
+    # CALUNIT requires MONOWAVE
+    # ---------------------------------------------------------
+
+    imtype_upper = (
+        dt['IMTYPE']
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    has_calunit = imtype_upper.eq('CALUNIT').any()
+
     if has_calunit and 'MONOWAVE' not in dt.columns:
-        print("Missing required column: ['MONOWAVE'] (needed for CALUNIT grouping)")
+        print(
+            "Missing required column: ['MONOWAVE'] "
+            "(needed for CALUNIT grouping)"
+        )
         return []
 
     file_groups = []
 
-    # --- Split by camera first
-    for cam, cam_df in dt.groupby('CAMERA'):
-        cam_u = str(cam) #.upper()
+    # ---------------------------------------------------------
+    # Split by camera
+    # ---------------------------------------------------------
 
-        if cam_u == 'Im':
-            base_keys = ['CAMERA', 'IMGFW2N', 'IMTYPE', 'EXPTIME', 'MCLOCK']
-            print(f"Grouping Imager data by {base_keys}")
-        elif cam_u == 'IFS':
-            base_keys = ['CAMERA', 'DSPRSNAM','MODSLNAM', 'IMTYPE', 'EXPTIME', 'MCLOCK']
-            print(f"Grouping IFS data by {base_keys}")
+    for cam, cam_df in dt.groupby(
+        'CAMERA',
+        dropna=False
+    ):
+
+        cam_name = str(cam).strip()
+        cam_upper = cam_name.upper()
+
+        # -----------------------------------------------------
+        # Imager
+        # -----------------------------------------------------
+
+        if cam_upper == 'IM':
+
+            camera_required = ['IMGFW2N']
+
+            missing = [
+                col for col in camera_required
+                if col not in cam_df.columns
+            ]
+
+            if missing:
+                print(
+                    f"Missing Imager grouping columns: {missing}"
+                )
+                continue
+
+            base_keys = [
+                'CAMERA',
+                'IMGFW2N',
+                'IMTYPE',
+                'EXPTIME',
+                'MCLOCK'
+            ]
+
+            print(
+                f"Grouping Imager data by {base_keys}"
+            )
+
+        # -----------------------------------------------------
+        # IFS
+        # -----------------------------------------------------
+
+        elif cam_upper == 'IFS':
+
+            camera_required = [
+                'DSPRSNAM',
+                'MODSLNAM'
+            ]
+
+            missing = [
+                col for col in camera_required
+                if col not in cam_df.columns
+            ]
+
+            if missing:
+                print(
+                    f"Missing IFS grouping columns: {missing}"
+                )
+                continue
+
+            base_keys = [
+                'CAMERA',
+                'DSPRSNAM',
+                'MODSLNAM',
+                'IMTYPE',
+                'EXPTIME',
+                'MCLOCK'
+            ]
+
+            print(
+                f"Grouping IFS data by {base_keys}"
+            )
+
         else:
-            print(f"Unknown CAMERA '{cam}' skipping.")
+
+            print(
+                f"Unknown CAMERA '{cam_name}', skipping."
+            )
             continue
-        # Split into CALUNIT vs non-CALUNIT so we can add WAVELENGTH only for CALUNIT
-        imtype_u = cam_df['IMTYPE'].astype(str).str.upper()
-        df_cal = cam_df[imtype_u.eq('CALUNIT')]
-        df_non = cam_df[~imtype_u.eq('CALUNIT')]
 
-        # Non-CALUNIT groups
+        # -----------------------------------------------------
+        # Separate CALUNIT from other calibration types
+        # -----------------------------------------------------
+
+        imtype_upper = (
+            cam_df['IMTYPE']
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+        df_cal = cam_df[
+            imtype_upper.eq('CALUNIT')
+        ]
+
+        df_non = cam_df[
+            ~imtype_upper.eq('CALUNIT')
+        ]
+
+        # -----------------------------------------------------
+        # DARK / FLATLAMP / BIAS etc.
+        # -----------------------------------------------------
+
         if len(df_non) > 0:
-            for group_params, sub_df in df_non.groupby(base_keys):
+
+            for group_params, sub_df in df_non.groupby(
+                base_keys,
+                dropna=False
+            ):
+
+                filenames = (
+                    sub_df['filename']
+                    .astype(str)
+                    .str.strip()
+                    .tolist()
+                )
+
                 file_groups.append({
-                    'params': {k.lower(): v for k, v in zip(base_keys, group_params)},
-                    'filenames': sub_df.index.tolist()
+                    'params': {
+                        key.lower(): value
+                        for key, value in zip(
+                            base_keys,
+                            group_params
+                        )
+                    },
+                    'filenames': filenames
                 })
 
-        # CALUNIT groups (add WAVELENGTH)
+        # -----------------------------------------------------
+        # CALUNIT
+        # -----------------------------------------------------
+
         if len(df_cal) > 0:
+
             cal_keys = base_keys + ['MONOWAVE']
-            print(f"Grouping CALUNIT data by {cal_keys}")
-            for group_params, sub_df in df_cal.groupby(cal_keys):
+
+            print(
+                f"Grouping CALUNIT data by {cal_keys}"
+            )
+
+            for group_params, sub_df in df_cal.groupby(
+                cal_keys,
+                dropna=False
+            ):
+
+                filenames = (
+                    sub_df['filename']
+                    .astype(str)
+                    .str.strip()
+                    .tolist()
+                )
+
                 file_groups.append({
-                    'params': {k.lower(): v for k, v in zip(cal_keys, group_params)},
-                    'filenames': sub_df.index.tolist()
+                    'params': {
+                        key.lower(): value
+                        for key, value in zip(
+                            cal_keys,
+                            group_params
+                        )
+                    },
+                    'filenames': filenames
                 })
+
+    # ---------------------------------------------------------
+    # Final result
+    # ---------------------------------------------------------
 
     if not file_groups:
-        print("No file groups were created.")
+
+        print(
+            "No file groups were created."
+        )
+
     else:
-        print(f"Created {len(file_groups)} groups from data table.")
+
+        print(
+            f"Created {len(file_groups)} groups "
+            "from data table."
+        )
+
     return file_groups
 
 def resolve_mean_func(name):
@@ -3169,3 +5061,3025 @@ def resolve_mean_func(name):
             f"Unknown mean function: {name}. "
             f"Valid choices are: {list(funcs.keys())}"
         )
+
+
+def get_proc_entries(proctab, suffix, imtype=None):
+    """
+    Select entries from the processing table by suffix
+    and optionally by IMTYPE.
+    """
+
+    required_cols = ["SUFF", "IMTYPE", "filename"]
+
+    missing = [
+        col for col in required_cols
+        if col not in proctab.columns
+    ]
+
+    if missing:
+        raise ValueError(
+            f"Processing table is missing required columns: {missing}"
+        )
+
+    # Normalize requested suffix
+    suffix = str(suffix).strip().upper()
+
+    # Normalize proc-table suffix
+    suff = (
+        proctab["SUFF"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    print("Requested suffix:", repr(suffix))
+    print("Available SUFF values:", suff.unique())
+
+    mask = suff == suffix
+
+    if imtype is not None:
+
+        imtype = str(imtype).strip().upper()
+
+        imtypes = (
+            proctab["IMTYPE"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+        mask &= imtypes == imtype
+
+    result = proctab.loc[mask].copy()
+
+    print(
+        f"Found {len(result)} processing-table entries "
+        f"for suffix={suffix}"
+        + (
+            f", IMTYPE={imtype}"
+            if imtype is not None
+            else ""
+        )
+    )
+
+    return result
+
+
+def validate_linearity_inputs(
+    proctab,
+    output_dir,
+    min_files=5,
+    min_reads=30,
+    suffix="_L10",
+):
+    """
+    Validate input files for creating detector linearity coefficients.
+
+    Requirements
+    ------------
+    - IMTYPE must be FLATLAMP.
+    - Processing suffix must be L10.
+    - FITS data must be a 3-D ramp cube.
+    - Each cube must contain at least `min_reads` reads.
+    - Files must have matching:
+          CAMERA
+          MCLOCK
+          EXPTIME
+    - At least `min_files` valid cubes must exist within a matching group.
+
+    Parameters
+    ----------
+    proctab : pandas.DataFrame
+        SCALES processing table.
+
+    output_dir : str
+        Directory containing the processed FITS files.
+
+    min_files : int, optional
+        Minimum number of matching ramp cubes required.
+        Default is 5.
+
+    min_reads : int, optional
+        Minimum number of reads required in each ramp cube.
+        Default is 30.
+
+    suffix : str, optional
+        Processing suffix for linearity inputs.
+        Default is '_L10'.
+
+    Returns
+    -------
+    valid_groups : list of dict
+        Each dictionary contains:
+
+            {
+                'params': {
+                    'camera': ...,
+                    'mclock': ...,
+                    'exptime': ...
+                },
+                'filenames': [...],
+                'paths': [...]
+            }
+
+        Only groups satisfying all requirements are returned.
+
+    Raises
+    ------
+    RuntimeError
+        If no valid group satisfies the requirements.
+    """
+
+    dt = get_proc_entries(
+        proctab,
+        suffix=suffix,
+        imtype="FLATLAMP",
+    )
+
+    if len(dt) == 0:
+        raise RuntimeError(
+            f"Cannot create linearity coefficients: "
+            f"no FLATLAMP {suffix} entries were found."
+        )
+
+    required_cols = [
+        "CAMERA",
+        "MCLOCK",
+        "EXPTIME",
+    ]
+
+    missing = [col for col in required_cols if col not in dt.columns]
+
+    if missing:
+        raise ValueError(
+            f"Processing table is missing columns required "
+            f"for linearity grouping: {missing}"
+        )
+
+    valid_rows = []
+
+    for idx, row in dt.iterrows():
+
+        filename = str(row["filename"]).strip()
+        path = os.path.join(output_dir, filename)
+
+        if not os.path.isfile(path):
+            print(
+                f"WARNING: skipping linearity input; "
+                f"file does not exist: {path}"
+            )
+            continue
+
+        try:
+            with fits.open(path, memmap=True) as hdul:
+
+                data = hdul[0].data
+
+                if data is None:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        "FITS data is empty."
+                    )
+                    continue
+
+                if data.ndim != 3:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        f"expected 3-D cube, got shape={data.shape}."
+                    )
+                    continue
+
+                nreads = data.shape[0]
+
+                if nreads < min_reads:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        f"{nreads} reads found, "
+                        f"minimum required is {min_reads}."
+                    )
+                    continue
+
+        except Exception as exc:
+            print(
+                f"WARNING: could not validate {filename}: {exc}"
+            )
+            continue
+
+        valid_rows.append(idx)
+
+    if not valid_rows:
+        raise RuntimeError(
+            "Cannot create linearity coefficients: "
+            "no valid 3-D FLATLAMP ramp cubes were found."
+        )
+
+    valid_dt = dt.loc[valid_rows].copy()
+
+    group_keys = [
+        "CAMERA",
+        "MCLOCK",
+        "EXPTIME",
+    ]
+
+    valid_groups = []
+
+    for group_params, sub_df in valid_dt.groupby(
+        group_keys,
+        dropna=False,
+    ):
+
+        nfiles = len(sub_df)
+
+        if nfiles < min_files:
+            print(
+                f"WARNING: skipping linearity group "
+                f"{group_params}: {nfiles} valid cubes found; "
+                f"minimum required is {min_files}."
+            )
+            continue
+
+        filenames = (
+            sub_df["filename"]
+            .astype(str)
+            .str.strip()
+            .tolist()
+        )
+
+        paths = [
+            os.path.join(output_dir, filename)
+            for filename in filenames
+        ]
+
+        valid_groups.append(
+            {
+                "params": {
+                    key.lower(): value
+                    for key, value in zip(
+                        group_keys,
+                        group_params,
+                    )
+                },
+                "filenames": filenames,
+                "paths": paths,
+            }
+        )
+
+    if not valid_groups:
+        raise RuntimeError(
+            "Cannot create linearity coefficients. "
+            "No CAMERA/MCLOCK/EXPTIME group contains "
+            f"at least {min_files} valid FLATLAMP "
+            f"{suffix} cubes with at least "
+            f"{min_reads} reads each."
+        )
+
+    return valid_groups
+
+
+def validate_saturation_inputs(
+    proctab,
+    output_dir,
+    min_files=5,
+    min_reads=30,
+    suffix="_L11",
+):
+    """
+    Validate and group input files for creating saturation maps.
+
+    Requirements
+    ------------
+    - IMTYPE must be FLATLAMP.
+    - Processing suffix must be L11.
+    - FITS data must be a 3-D ramp cube.
+    - Each cube must contain at least `min_reads` reads.
+    - Valid cubes are grouped by exact:
+          CAMERA, MCLOCK, EXPTIME
+    - Each group must contain at least `min_files` valid cubes.
+
+    Parameters
+    ----------
+    proctab : pandas.DataFrame
+        SCALES processing table.
+
+    output_dir : str
+        Directory containing the processed FITS files.
+
+    min_files : int, optional
+        Minimum number of valid ramp cubes required per group.
+        Default is 5.
+
+    min_reads : int, optional
+        Minimum number of reads required in each ramp cube.
+        Default is 30.
+
+    suffix : str, optional
+        Processing suffix.
+        Default is '_L11'.
+
+    Returns
+    -------
+    valid_groups : list of dict
+        Valid saturation-map groups:
+
+            [
+                {
+                    "params": {
+                        "camera": ...,
+                        "mclock": ...,
+                        "exptime": ...
+                    },
+                    "filenames": [...],
+                    "paths": [...]
+                },
+                ...
+            ]
+
+    Raises
+    ------
+    RuntimeError
+        If no valid saturation-map group exists.
+    """
+
+    # ---------------------------------------------------------
+    # Find FLATLAMP L11 products
+    # ---------------------------------------------------------
+
+    dt = get_proc_entries(
+        proctab,
+        suffix=suffix,
+        imtype="FLATLAMP",
+    )
+
+    if len(dt) == 0:
+        raise RuntimeError(
+            f"Cannot create saturation map: "
+            f"no FLATLAMP {suffix} entries were found."
+        )
+
+    # ---------------------------------------------------------
+    # Check required grouping columns
+    # ---------------------------------------------------------
+
+    group_keys = [
+        "CAMERA",
+        "MCLOCK",
+        "EXPTIME",
+    ]
+
+    missing = [
+        col for col in group_keys
+        if col not in dt.columns
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "Cannot create saturation map: "
+            f"processing table is missing required "
+            f"grouping columns: {missing}"
+        )
+
+    # ---------------------------------------------------------
+    # Validate individual L11 ramp cubes
+    # ---------------------------------------------------------
+
+    valid_indices = []
+
+    for idx, row in dt.iterrows():
+
+        filename = str(
+            row["filename"]
+        ).strip()
+
+        path = os.path.join(
+            output_dir,
+            filename
+        )
+
+        if not os.path.isfile(path):
+            print(
+                f"WARNING: skipping saturation input; "
+                f"file does not exist: {path}"
+            )
+            continue
+
+        try:
+
+            with fits.open(
+                path,
+                memmap=True
+            ) as hdul:
+
+                data = hdul[0].data
+
+                if data is None:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        "FITS data is empty."
+                    )
+                    continue
+
+                if data.ndim != 3:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        f"expected 3-D cube, "
+                        f"got shape={data.shape}."
+                    )
+                    continue
+
+                nreads = data.shape[0]
+
+                if nreads < min_reads:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        f"{nreads} reads found, "
+                        f"minimum required is "
+                        f"{min_reads}."
+                    )
+                    continue
+
+        except Exception as exc:
+
+            print(
+                f"WARNING: could not validate "
+                f"{filename}: {exc}"
+            )
+            continue
+
+        # File passed validation
+        valid_indices.append(idx)
+
+    # ---------------------------------------------------------
+    # Make table containing only valid L11 cubes
+    # ---------------------------------------------------------
+
+    if not valid_indices:
+        raise RuntimeError(
+            "Cannot create saturation map. "
+            f"No valid FLATLAMP {suffix} 3-D cubes "
+            f"with at least {min_reads} reads were found."
+        )
+
+    valid_dt = dt.loc[
+        valid_indices
+    ].copy()
+
+    # ---------------------------------------------------------
+    # Group by CAMERA + MCLOCK + EXPTIME
+    # ---------------------------------------------------------
+
+    valid_groups = []
+
+    for group_params, sub_df in valid_dt.groupby(
+        group_keys,
+        dropna=False
+    ):
+
+        camera, mclock, exptime = group_params
+
+        nfiles = len(sub_df)
+
+        # -----------------------------------------------------
+        # Require enough ramps in this configuration
+        # -----------------------------------------------------
+
+        if nfiles < min_files:
+
+            print(
+                "WARNING: skipping saturation-map group "
+                f"CAMERA={camera}, "
+                f"MCLOCK={mclock}, "
+                f"EXPTIME={exptime}; "
+                f"found {nfiles} valid ramps, "
+                f"minimum required is {min_files}."
+            )
+
+            continue
+
+        filenames = (
+            sub_df["filename"]
+            .astype(str)
+            .str.strip()
+            .tolist()
+        )
+
+        paths = [
+            os.path.join(
+                output_dir,
+                filename
+            )
+            for filename in filenames
+        ]
+
+        valid_groups.append(
+            {
+                "params": {
+                    "camera": camera,
+                    "mclock": mclock,
+                    "exptime": exptime,
+                },
+                "filenames": filenames,
+                "paths": paths,
+            }
+        )
+
+    # ---------------------------------------------------------
+    # Make sure at least one valid group exists
+    # ---------------------------------------------------------
+
+    if not valid_groups:
+        raise RuntimeError(
+            "Cannot create saturation map. "
+            "No valid CAMERA/MCLOCK/EXPTIME group "
+            f"contains at least {min_files} FLATLAMP "
+            f"{suffix} ramp cubes with at least "
+            f"{min_reads} reads each."
+        )
+
+    return valid_groups
+
+
+def validate_bpm_inputs(
+    proctab,
+    output_dir,
+    min_darks=5,
+    min_flats=5,
+    suffix="_L12",
+):
+    """
+    Validate slope images for creating a bad-pixel map (BPM).
+
+    Requirements
+    ------------
+    - Processing suffix must be L12.
+    - Only DARK and FLATLAMP inputs are used.
+    - Each FITS input must contain a 2-D slope image.
+    - CAMERA and MCLOCK must match.
+    - Each valid group must contain at least:
+          `min_darks` DARK slopes
+          `min_flats` FLATLAMP slopes
+
+    Parameters
+    ----------
+    proctab : pandas.DataFrame
+        SCALES processing table.
+
+    output_dir : str
+        Directory containing processed FITS files.
+
+    min_darks : int, optional
+        Minimum DARK slopes required per CAMERA/MCLOCK group.
+        Default is 5.
+
+    min_flats : int, optional
+        Minimum FLATLAMP slopes required per CAMERA/MCLOCK group.
+        Default is 5.
+
+    suffix : str, optional
+        Processing suffix.
+        Default is '_L12'.
+
+    Returns
+    -------
+    valid_groups : list of dict
+        Each valid group has the form:
+
+            {
+                'params': {
+                    'camera': ...,
+                    'mclock': ...
+                },
+
+                'dark_files': [...],
+                'dark_paths': [...],
+
+                'flat_files': [...],
+                'flat_paths': [...]
+            }
+
+    Raises
+    ------
+    RuntimeError
+        If no CAMERA/MCLOCK group contains enough valid
+        DARK and FLATLAMP slopes.
+    """
+
+    dt = get_proc_entries(
+        proctab,
+        suffix=suffix,
+    )
+
+    if len(dt) == 0:
+        raise RuntimeError(
+            f"Cannot create BPM: "
+            f"no {suffix} entries were found."
+        )
+
+    required_cols = [
+        "CAMERA",
+        "MCLOCK",
+        "IMTYPE",
+        "filename",
+    ]
+    missing = [col for col in required_cols if col not in dt.columns]
+
+    if missing:
+        raise ValueError(
+            f"Processing table is missing columns required "
+            f"for BPM grouping: {missing}"
+        )
+
+    # Keep only DARK and FLATLAMP
+    imtype_upper = (
+        dt["IMTYPE"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    dt = dt[
+        imtype_upper.isin(
+            ["DARK", "FLATLAMP"]
+        )
+    ].copy()
+
+    if len(dt) == 0:
+        raise RuntimeError(
+            "Cannot create BPM: no DARK or FLATLAMP "
+            f"{suffix} entries were found."
+        )
+
+    valid_rows = []
+
+    for idx, row in dt.iterrows():
+
+        filename = str(row["filename"]).strip()
+        path = os.path.join(output_dir, filename)
+
+        if not os.path.isfile(path):
+            print(
+                f"WARNING: skipping BPM input; "
+                f"file does not exist: {path}"
+            )
+            continue
+
+        valid_rows.append(idx)
+
+    if not valid_rows:
+        raise RuntimeError(
+            "Cannot create BPM: no valid 2-D "
+            "DARK/FLATLAMP slopes were found."
+        )
+
+    valid_dt = dt.loc[valid_rows].copy()
+
+    group_keys = [
+        "CAMERA",
+        "MCLOCK",
+    ]
+
+    valid_groups = []
+
+    for group_params, sub_df in valid_dt.groupby(
+        group_keys,
+        dropna=False,
+    ):
+
+        imtype_upper = (
+            sub_df["IMTYPE"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+        dark_df = sub_df[
+            imtype_upper == "DARK"
+        ]
+
+        flat_df = sub_df[
+            imtype_upper == "FLATLAMP"
+        ]
+
+        n_dark = len(dark_df)
+        n_flat = len(flat_df)
+
+        if n_dark < min_darks or n_flat < min_flats:
+
+            print(
+                f"WARNING: skipping BPM group {group_params}: "
+                f"{n_dark} DARK and {n_flat} FLATLAMP "
+                f"slopes found; require at least "
+                f"{min_darks} DARK and {min_flats} FLATLAMP."
+            )
+
+            continue
+
+        dark_files = (
+            dark_df["filename"]
+            .astype(str)
+            .str.strip()
+            .tolist()
+        )
+
+        flat_files = (
+            flat_df["filename"]
+            .astype(str)
+            .str.strip()
+            .tolist()
+        )
+
+        valid_groups.append(
+            {
+                "params": {
+                    key.lower(): value
+                    for key, value in zip(
+                        group_keys,
+                        group_params,
+                    )
+                },
+
+                "dark_files": dark_files,
+
+                "dark_paths": [
+                    os.path.join(output_dir, filename)
+                    for filename in dark_files
+                ],
+
+                "flat_files": flat_files,
+
+                "flat_paths": [
+                    os.path.join(output_dir, filename)
+                    for filename in flat_files
+                ],
+            }
+        )
+
+    if not valid_groups:
+        raise RuntimeError(
+            "Cannot create BPM. "
+            "No CAMERA/MCLOCK group contains at least "
+            f"{min_darks} valid DARK {suffix} slopes and "
+            f"{min_flats} valid FLATLAMP {suffix} slopes."
+        )
+
+    return valid_groups
+
+def validate_rn_inputs(
+    proctab,
+    output_dir,
+    min_files=5,
+    min_reads=2,
+    suffix="_L13",
+):
+    """
+    Validate and group input files for creating readnoise maps.
+
+    Requirements
+    ------------
+    - IMTYPE must be DARK.
+    - Processing suffix must be L13.
+    - FITS data must be a 3-D ramp cube.
+    - Each cube must contain at least `min_reads` reads.
+    - Valid cubes are grouped by exact:
+          CAMERA, MCLOCK, EXPTIME
+    - Each group must contain at least `min_files` valid cubes.
+
+    Parameters
+    ----------
+    proctab : pandas.DataFrame
+        SCALES processing table.
+
+    output_dir : str
+        Directory containing the processed FITS files.
+
+    min_files : int, optional
+        Minimum number of valid ramp cubes required per group.
+        Default is 2.
+
+    min_reads : int, optional
+        Minimum number of reads required in each ramp cube.
+        Default is 30.
+
+    suffix : str, optional
+        Processing suffix.
+        Default is '_L11'.
+
+    Returns
+    -------
+    valid_groups : list of dict
+        Valid saturation-map groups:
+
+            [
+                {
+                    "params": {
+                        "camera": ...,
+                        "mclock": ...,
+                        "exptime": ...
+                    },
+                    "filenames": [...],
+                    "paths": [...]
+                },
+                ...
+            ]
+
+    Raises
+    ------
+    RuntimeError
+        If no valid saturation-map group exists.
+    """
+
+    # ---------------------------------------------------------
+    # Find FLATLAMP L11 products
+    # ---------------------------------------------------------
+
+    dt = get_proc_entries(
+        proctab,
+        suffix=suffix,
+        imtype="DARK",
+    )
+
+    if len(dt) == 0:
+        raise RuntimeError(
+            f"Cannot create saturation map: "
+            f"no DARK {suffix} entries were found."
+        )
+
+    # ---------------------------------------------------------
+    # Check required grouping columns
+    # ---------------------------------------------------------
+
+    group_keys = [
+        "CAMERA",
+        "MCLOCK",
+        "EXPTIME",
+    ]
+
+    missing = [
+        col for col in group_keys
+        if col not in dt.columns
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "Cannot create saturation map: "
+            f"processing table is missing required "
+            f"grouping columns: {missing}"
+        )
+
+    # ---------------------------------------------------------
+    # Validate individual L11 ramp cubes
+    # ---------------------------------------------------------
+
+    valid_indices = []
+
+    for idx, row in dt.iterrows():
+
+        filename = str(
+            row["filename"]
+        ).strip()
+
+        path = os.path.join(
+            output_dir,
+            filename
+        )
+
+        if not os.path.isfile(path):
+            print(
+                f"WARNING: skipping saturation input; "
+                f"file does not exist: {path}"
+            )
+            continue
+
+        try:
+
+            with fits.open(
+                path,
+                memmap=True
+            ) as hdul:
+
+                data = hdul[0].data
+
+                if data is None:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        "FITS data is empty."
+                    )
+                    continue
+
+                if data.ndim != 3:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        f"expected 3-D cube, "
+                        f"got shape={data.shape}."
+                    )
+                    continue
+
+                nreads = data.shape[0]
+
+                if nreads < min_reads:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        f"{nreads} reads found, "
+                        f"minimum required is "
+                        f"{min_reads}."
+                    )
+                    continue
+
+        except Exception as exc:
+
+            print(
+                f"WARNING: could not validate "
+                f"{filename}: {exc}"
+            )
+            continue
+
+        # File passed validation
+        valid_indices.append(idx)
+
+    # ---------------------------------------------------------
+    # Make table containing only valid L11 cubes
+    # ---------------------------------------------------------
+
+    if not valid_indices:
+        raise RuntimeError(
+            "Cannot create saturation map. "
+            f"No valid FLATLAMP {suffix} 3-D cubes "
+            f"with at least {min_reads} reads were found."
+        )
+
+    valid_dt = dt.loc[
+        valid_indices
+    ].copy()
+
+    # ---------------------------------------------------------
+    # Group by CAMERA + MCLOCK + EXPTIME
+    # ---------------------------------------------------------
+
+    valid_groups = []
+
+    for group_params, sub_df in valid_dt.groupby(
+        group_keys,
+        dropna=False
+    ):
+
+        camera, mclock, exptime = group_params
+
+        nfiles = len(sub_df)
+
+        # -----------------------------------------------------
+        # Require enough ramps in this configuration
+        # -----------------------------------------------------
+
+        if nfiles < min_files:
+
+            print(
+                "WARNING: skipping rn-map group "
+                f"CAMERA={camera}, "
+                f"MCLOCK={mclock}, "
+                f"EXPTIME={exptime}; "
+                f"found {nfiles} valid ramps, "
+                f"minimum required is {min_files}."
+            )
+
+            continue
+
+        filenames = (
+            sub_df["filename"]
+            .astype(str)
+            .str.strip()
+            .tolist()
+        )
+
+        paths = [
+            os.path.join(
+                output_dir,
+                filename
+            )
+            for filename in filenames
+        ]
+
+        valid_groups.append(
+            {
+                "params": {
+                    "camera": camera,
+                    "mclock": mclock,
+                    "exptime": exptime,
+                },
+                "filenames": filenames,
+                "paths": paths,
+            }
+        )
+    # ---------------------------------------------------------
+    # Make sure at least one valid group exists
+    # ---------------------------------------------------------
+
+    if not valid_groups:
+        raise RuntimeError(
+            "Cannot create readnoise map. "
+            "No valid CAMERA/MCLOCK/EXPTIME group "
+            f"contains at least {min_files} DARK "
+            f"{suffix} ramp cubes with at least "
+            f"{min_reads} reads each."
+        )
+
+    return valid_groups
+
+def find_existing_master_for_l1_group(
+    l1_filenames,
+    redux_dir,
+    master_type=None,
+    check_ncombine=True,
+):
+    """
+    Find an existing master calibration corresponding to a group
+    of L1 calibration files.
+
+    Parameters
+    ----------
+    l1_filenames : list of str
+        L1 filenames belonging to one calibration group.
+
+    redux_dir : str or Path
+        Directory containing scales.proc and calibration products.
+
+    master_type : str or None
+        One of 'DARK', 'FLATLAMP', 'CALUNIT', or 'BIAS'.
+        If None, determine from the L1 entries' IMTYPE.
+
+    check_ncombine : bool
+        If True, compare the master's NCOMBINE keyword with
+        the number of L1 files, when that keyword exists.
+
+    Returns
+    -------
+    str or None
+        Existing master calibration FITS path, or None.
+
+    Notes
+    -----
+    Matches by calibration type, detector configuration,
+    exposure time, and relevant instrument settings.
+
+    For CALUNIT, also matches MONOWAVE.
+
+    This checks calibration-group compatibility. Exact input-file
+    provenance requires storing the contributing L1 filenames
+    in the master product.
+    """
+
+    redux_dir = Path(redux_dir)
+    proctab_path = redux_dir / "scales.proc"
+
+    if not proctab_path.is_file():
+        return None
+
+    if not l1_filenames:
+        return None
+
+    # ---------------------------------------------------------
+    # Read processing table
+    # ---------------------------------------------------------
+
+    try:
+        proc = pd.read_csv(
+            proctab_path,
+            sep="|",
+            engine="python",
+            skipinitialspace=True,
+        )
+    except Exception as exc:
+        print(f"Could not read {proctab_path}: {exc}")
+        return None
+
+    proc.columns = proc.columns.astype(str).str.strip()
+
+    proc = proc.loc[
+        :,
+        ~proc.columns.str.startswith("Unnamed:")
+    ].copy()
+
+    required = {
+        "filename",
+        "SUFF",
+        "IMTYPE",
+        "CAMERA",
+        "MCLOCK",
+        "EXPTIME",
+    }
+
+    if not required.issubset(proc.columns):
+        raise ValueError(
+            f"Missing proctab columns: "
+            f"{sorted(required - set(proc.columns))}"
+        )
+
+    proc["filename"] = (
+        proc["filename"].fillna("").astype(str).str.strip()
+    )
+
+    proc["SUFF"] = (
+        proc["SUFF"].fillna("").astype(str).str.strip()
+    )
+
+    proc["IMTYPE"] = (
+        proc["IMTYPE"].fillna("").astype(str).str.strip().str.upper()
+    )
+
+    # ---------------------------------------------------------
+    # Identify the requested L1 files
+    # ---------------------------------------------------------
+
+    l1_names = {
+        Path(name).name
+        for name in l1_filenames
+    }
+
+    l1_rows = proc.loc[
+        proc["filename"].map(
+            lambda name: Path(name).name in l1_names
+        )
+        & proc["SUFF"].str.upper().eq("_L1")
+    ].copy()
+
+    found_names = set(l1_rows["filename"].map(
+        lambda name: Path(name).name
+    ))
+
+    if found_names != l1_names:
+        missing = sorted(l1_names - found_names)
+        print(f"L1 files missing from proctab: {missing}")
+        return None
+
+    # ---------------------------------------------------------
+    # Determine master type
+    # ---------------------------------------------------------
+
+    imtypes = l1_rows["IMTYPE"].unique()
+
+    if len(imtypes) != 1:
+        raise ValueError(
+            f"Mixed IMTYPE values in L1 group: {imtypes}"
+        )
+
+    imtype = imtypes[0]
+
+    if master_type is None:
+        master_type = imtype
+    else:
+        master_type = str(master_type).strip().upper()
+
+    if master_type != imtype:
+        raise ValueError(
+            f"Requested {master_type} master for "
+            f"{imtype} L1 files."
+        )
+
+    suffix_map = {
+        "DARK": "_mdark",
+        "FLATLAMP": "_mflatlamp",
+        "CALUNIT": "_mcalunit",
+        "BIAS": "_mbias",
+    }
+
+    if master_type not in suffix_map:
+        raise ValueError(
+            f"Unsupported master type: {master_type}"
+        )
+
+    master_suffix = suffix_map[master_type]
+
+    # ---------------------------------------------------------
+    # Determine calibration matching keys
+    # ---------------------------------------------------------
+
+    # Required detector configuration
+    group_keys = [
+        "CAMERA",
+        "MCLOCK",
+        "EXPTIME",
+    ]
+
+    # Include instrument configuration for illuminated products.
+    if master_type in ("FLATLAMP", "CALUNIT"):
+        group_keys.extend([
+            "MODSLNAM",
+            "DSPRSNAM",
+        ])
+
+    # Each CALUNIT wavelength requires its own master.
+    if master_type == "CALUNIT":
+        group_keys.append("MONOWAVE")
+
+    # Verify columns exist
+    missing_keys = [
+        key for key in group_keys
+        if key not in proc.columns
+    ]
+
+    if missing_keys:
+        raise ValueError(
+            f"Missing calibration keys: {missing_keys}"
+        )
+
+    # Verify all input L1 files have the same configuration
+    for key in group_keys:
+
+        values = l1_rows[key]
+
+        if values.isna().any():
+            print(f"Missing {key} in L1 group.")
+            return None
+
+        if key in ("EXPTIME", "MONOWAVE"):
+            numeric = pd.to_numeric(values, errors="coerce")
+
+            if (
+                numeric.isna().any()
+                or not np.allclose(
+                    numeric,
+                    numeric.iloc[0],
+                    rtol=0,
+                    atol=1e-5,
+                )
+            ):
+                raise ValueError(
+                    f"Inconsistent {key} in L1 group."
+                )
+
+        else:
+            normalized = values.astype(str).str.strip()
+
+            if normalized.nunique() != 1:
+                raise ValueError(
+                    f"Inconsistent {key} in L1 group: "
+                    f"{normalized.unique().tolist()}"
+                )
+
+    # ---------------------------------------------------------
+    # Select existing master entries
+    # ---------------------------------------------------------
+
+    # Accept both:
+    #    _mdark
+    #    _2370.25_mcalunit
+    #
+    # Avoid confusing L1 files with master products.
+
+    master_rows = proc.loc[
+        proc["IMTYPE"].eq(master_type)
+        & proc["SUFF"].str.lower().str.endswith(master_suffix)
+    ].copy()
+
+    if master_rows.empty:
+        return None
+
+    # ---------------------------------------------------------
+    # Match configuration
+    # ---------------------------------------------------------
+
+    for key in group_keys:
+
+        expected = l1_rows[key].iloc[0]
+
+        if key in ("EXPTIME", "MONOWAVE"):
+
+            values = pd.to_numeric(
+                master_rows[key],
+                errors="coerce",
+            )
+
+            mask = np.isclose(
+                values.to_numpy(dtype=float),
+                float(expected),
+                rtol=0,
+                atol=1e-5,
+            )
+
+        else:
+
+            mask = (
+                master_rows[key]
+                .astype(str)
+                .str.strip()
+                .eq(str(expected).strip())
+            )
+
+        master_rows = master_rows.loc[mask]
+
+        if master_rows.empty:
+            return None
+
+    # ---------------------------------------------------------
+    # Verify the actual master FITS file
+    # ---------------------------------------------------------
+
+    for _, row in master_rows.iloc[::-1].iterrows():
+
+        filename = str(row["filename"]).strip()
+        path = Path(filename)
+
+        if not path.is_absolute():
+            path = redux_dir / path
+
+        if not path.is_file():
+            continue
+
+        if check_ncombine:
+
+            try:
+                with fits.open(path, memmap=False) as hdul:
+                    ncombine = hdul[0].header.get(
+                        "NCOMBINE"
+                    )
+
+                if (
+                    ncombine is not None
+                    and int(ncombine) != len(l1_names)
+                ):
+                    continue
+
+            except Exception as exc:
+                print(
+                    f"Could not validate master {path}: {exc}"
+                )
+                continue
+
+        return str(path)
+
+    return None
+
+def validate_master_inputs(
+    proctab,
+    output_dir,
+    imtype=None,
+    min_files=1,
+    suffix="_L1",
+):
+    """
+    Validate and group L1 calibration products for master creation.
+
+    Parameters
+    ----------
+    proctab : pandas.DataFrame
+        SCALES processing table.
+
+    output_dir : str
+        Directory containing L1 FITS files.
+
+    imtype : str or None, optional
+        Calibration type to select, e.g. 'DARK', 'FLATLAMP',
+        'CALUNIT', or 'BIAS'.
+
+        If None, include all IMTYPE values, grouped separately.
+
+    min_files : int, optional
+        Minimum number of valid L1 files per group.
+
+    suffix : str, optional
+        Processing suffix. Default is '_L1'.
+
+    Returns
+    -------
+    valid_groups : list of dict
+        Each group contains:
+
+        {
+            "params": {
+                "imtype": ...,
+                "camera": ...,
+                "mclock": ...,
+                "exptime": ...,
+                ...
+            },
+            "filenames": [...],
+            "paths": [...]
+        }
+
+    Notes
+    -----
+    - Only existing 2D FITS images are accepted.
+    - Groups are separated by IMTYPE, CAMERA, MCLOCK,
+      and EXPTIME.
+    - FLATLAMP and CALUNIT are additionally grouped by
+      MODSLNAM, DSPRSNAM, and FILTER.
+    - CALUNIT is additionally grouped by MONOWAVE.
+    """
+
+    # ---------------------------------------------------------
+    # Select L1 processing entries
+    # ---------------------------------------------------------
+
+    dt = get_proc_entries(
+        proctab,
+        suffix=suffix,
+        imtype=imtype,
+    )
+
+    if len(dt) == 0:
+        raise RuntimeError(
+            f"No {imtype or 'any IMTYPE'} {suffix} "
+            "processing entries were found."
+        )
+
+    dt = dt.copy()
+
+    dt["IMTYPE"] = (
+        dt["IMTYPE"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    # ---------------------------------------------------------
+    # Required columns
+    # ---------------------------------------------------------
+
+    required_columns = [
+        "filename",
+        "IMTYPE",
+        "CAMERA",
+        "MCLOCK",
+        "EXPTIME",
+    ]
+
+    missing = [
+        col for col in required_columns
+        if col not in dt.columns
+    ]
+
+    if missing:
+        raise RuntimeError(
+            f"Missing required proctab columns: {missing}"
+        )
+
+    # ---------------------------------------------------------
+    # Validate individual L1 images
+    # ---------------------------------------------------------
+
+    valid_indices = []
+
+    for idx, row in dt.iterrows():
+
+        filename = str(row["filename"]).strip()
+
+        path = os.path.join(
+            output_dir,
+            filename
+        )
+
+        if not os.path.isfile(path):
+            print(
+                f"WARNING: L1 file does not exist: {path}"
+            )
+            continue
+
+        try:
+            with fits.open(path, memmap=True) as hdul:
+
+                data = hdul[0].data
+
+                if data is None:
+                    print(
+                        f"WARNING: empty L1 file: {filename}"
+                    )
+                    continue
+
+                if data.ndim != 2:
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        f"expected 2D L1 image, "
+                        f"got shape={data.shape}"
+                    )
+                    continue
+
+                if not np.any(np.isfinite(data)):
+                    print(
+                        f"WARNING: skipping {filename}; "
+                        "no finite pixels."
+                    )
+                    continue
+
+        except Exception as exc:
+            print(
+                f"WARNING: cannot validate "
+                f"{filename}: {exc}"
+            )
+            continue
+
+        valid_indices.append(idx)
+
+    if not valid_indices:
+        raise RuntimeError(
+            f"No valid 2D {suffix} images found."
+        )
+
+    valid_dt = dt.loc[valid_indices].copy()
+
+    # ---------------------------------------------------------
+    # Group by IMTYPE and configuration
+    # ---------------------------------------------------------
+
+    valid_groups = []
+
+    for current_imtype, type_df in valid_dt.groupby(
+        "IMTYPE",
+        dropna=False,
+    ):
+
+        group_keys = [
+            "CAMERA",
+            "MCLOCK",
+            "EXPTIME",
+        ]
+
+        if current_imtype in ("FLATLAMP", "CALUNIT"):
+            group_keys.extend([
+                "MODSLNAM",
+                "DSPRSNAM",
+                "FILTER",
+            ])
+
+        if current_imtype == "CALUNIT":
+            group_keys.append("MONOWAVE")
+
+        missing_keys = [
+            key for key in group_keys
+            if key not in type_df.columns
+        ]
+
+        if missing_keys:
+            raise RuntimeError(
+                f"Missing grouping columns for "
+                f"{current_imtype}: {missing_keys}"
+            )
+
+        # -----------------------------------------------------
+        # Create groups
+        # -----------------------------------------------------
+
+        for group_values, sub_df in type_df.groupby(
+            group_keys,
+            dropna=False,
+            sort=False,
+        ):
+
+            if not isinstance(group_values, tuple):
+                group_values = (group_values,)
+
+            nfiles = len(sub_df)
+
+            if nfiles < min_files:
+                print(
+                    f"WARNING: skipping {current_imtype} "
+                    f"group {group_values}; "
+                    f"found {nfiles} L1 files, "
+                    f"minimum required is {min_files}."
+                )
+                continue
+
+            filenames = (
+                sub_df["filename"]
+                .astype(str)
+                .str.strip()
+                .tolist()
+            )
+
+            paths = [
+                os.path.join(output_dir, name)
+                for name in filenames
+            ]
+
+            params = {
+                "imtype": current_imtype,
+            }
+
+            for key, value in zip(
+                group_keys,
+                group_values,
+            ):
+                params[key.lower()] = value
+
+            valid_groups.append(
+                {
+                    "params": params,
+                    "filenames": filenames,
+                    "paths": paths,
+                }
+            )
+
+    # ---------------------------------------------------------
+    # Ensure valid groups exist
+    # ---------------------------------------------------------
+
+    if not valid_groups:
+        raise RuntimeError(
+            f"No valid {suffix} calibration groups "
+            f"with at least {min_files} files."
+        )
+
+    return valid_groups
+################plotting###########################################################
+def plot_master_calib(
+    master,
+    output_dir,
+    *,
+    master_dq=None,
+    filename="master_calibration.png",
+    title="Master Calibration",
+    unit="DN/s",
+    exclude_bad=True,
+    percentile_range=(1, 99),
+    bins=100,
+    dpi=200,
+    show=False,
+):
+    """
+    Plot a master calibration image and its pixel-value distribution.
+
+    Parameters
+    ----------
+    master : ndarray
+        2D master calibration image.
+
+    output_dir : str or Path
+        Directory where the figure will be saved.
+
+    master_dq : ndarray, optional
+        2D data-quality mask.
+        Pixels with nonzero DQ are excluded from statistics
+        when exclude_bad=True.
+
+    filename : str
+        Output PNG filename.
+
+    title : str
+        Figure title.
+
+    unit : str
+        Physical unit of the master calibration image.
+
+    exclude_bad : bool
+        Exclude DQ-flagged pixels from the histogram and
+        percentile calculations.
+
+    percentile_range : tuple
+        Percentiles used for image color scaling.
+
+    bins : int
+        Number of histogram bins.
+
+    dpi : int
+        Figure resolution.
+
+    show : bool
+        Display the figure interactively.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the saved diagnostic figure.
+    """
+
+    master = np.asarray(master, dtype=np.float64)
+
+    if master.ndim != 2:
+        raise ValueError(
+            f"master must be a 2D image. Got {master.shape}."
+        )
+
+    # ---------------------------------------------------------
+    # Construct valid-pixel mask
+    # ---------------------------------------------------------
+
+    valid = np.isfinite(master)
+
+    if master_dq is not None:
+
+        master_dq = np.asarray(master_dq)
+
+        if master_dq.shape != master.shape:
+            raise ValueError(
+                "master_dq must have the same shape as master."
+            )
+
+        if exclude_bad:
+            valid &= (master_dq == 0)
+
+    if not np.any(valid):
+        raise ValueError(
+            "No valid pixels available for plotting."
+        )
+
+    values = master[valid]
+
+    # ---------------------------------------------------------
+    # Compute statistics
+    # ---------------------------------------------------------
+
+    median = float(np.median(values))
+    mean = float(np.mean(values))
+    std = float(np.std(values))
+
+    p5, p95 = np.percentile(values, [5, 95])
+
+    vmin, vmax = np.percentile(
+        values, percentile_range
+    )
+
+    if vmax <= vmin:
+        delta = max(abs(vmin) * 0.01, 1e-6)
+        vmin -= delta
+        vmax += delta
+
+    # ---------------------------------------------------------
+    # Create figure
+    # ---------------------------------------------------------
+
+    fig, axes = plt.subplots(
+        1, 2,
+        figsize=(14, 5.5),
+        constrained_layout=True,
+    )
+
+    fig.suptitle(
+        title,
+        fontsize=15,
+        fontweight="bold",
+    )
+
+    # ---------------------------------------------------------
+    # Panel 1: Master calibration map
+    # ---------------------------------------------------------
+
+    ax = axes[0]
+
+    im = ax.imshow(
+        master,
+        origin="lower",
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+    )
+
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        fraction=0.046,
+        pad=0.04,
+    )
+
+    cbar.set_label(unit)
+
+    ax.set_title("Master Calibration Map")
+    ax.set_xlabel("Detector X (pixel)")
+    ax.set_ylabel("Detector Y (pixel)")
+
+    # ---------------------------------------------------------
+    # Panel 2: Histogram
+    # ---------------------------------------------------------
+
+    ax = axes[1]
+
+    ax.hist(
+        values,
+        bins=bins,
+        range=(vmin, vmax),
+        color="steelblue",
+        alpha=0.75,
+        edgecolor="none",
+    )
+
+    ax.axvline(
+        median,
+        color="red",
+        linestyle="--",
+        linewidth=1.8,
+        label=f"Median = {median:.3g} {unit}",
+    )
+
+    ax.axvline(
+        p5,
+        color="black",
+        linestyle=":",
+        linewidth=1.3,
+        label=f"P5 = {p5:.3g}",
+    )
+
+    ax.axvline(
+        p95,
+        color="black",
+        linestyle=":",
+        linewidth=1.3,
+        label=f"P95 = {p95:.3g}",
+    )
+
+    ax.set_title("Pixel-Value Distribution")
+    ax.set_xlabel(f"Pixel value ({unit})")
+    ax.set_ylabel("Number of pixels")
+
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.2)
+
+    ax.text(
+        0.98, 0.97,
+        f"Mean = {mean:.3g}\n"
+        f"Std = {std:.3g}\n"
+        f"Valid = {np.count_nonzero(valid):,}",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=9,
+        bbox=dict(
+            facecolor="white",
+            alpha=0.85,
+            edgecolor="lightgray",
+        ),
+    )
+
+    # ---------------------------------------------------------
+    # Save figure
+    # ---------------------------------------------------------
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    savepath = output_dir / filename
+
+    fig.savefig(
+        savepath,
+        dpi=dpi,
+        bbox_inches="tight",
+    )
+
+    if show:
+        plt.show()
+
+    plt.close(fig)
+
+    return savepath
+
+def plot_bad_pixel_correction_comparison(
+    slope_before,
+    slope_after,
+    output_dir,
+    *,
+    filename="bad_pixel_correction_comparison.png",
+    title="SCALES Bad-Pixel Correction",
+    unit="DN/s",
+    percentile_range=(1, 99),
+    dpi=200,
+    show=False,
+):
+    """
+    Compare 2D slope images before and after bad-pixel correction.
+
+    Parameters
+    ----------
+    slope_before : ndarray
+        2D slope image before bad-pixel correction.
+
+    slope_after : ndarray
+        2D slope image after bad-pixel correction.
+
+    output_dir : str or Path
+        Directory where the diagnostic figure is saved.
+
+    filename : str
+        Output PNG filename.
+
+    title : str
+        Figure title.
+
+    unit : str
+        Slope image unit, normally DN/s.
+
+    percentile_range : tuple
+        Percentiles used to determine the common color limits.
+
+    dpi : int
+        Output figure resolution.
+
+    show : bool
+        Display the figure interactively.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the saved figure.
+    """
+
+    # ---------------------------------------------------------
+    # 1. Validate input images
+    # ---------------------------------------------------------
+
+    slope_before = np.asarray(
+        slope_before, dtype=np.float64
+    )
+
+    slope_after = np.asarray(
+        slope_after, dtype=np.float64
+    )
+
+    if slope_before.ndim != 2 or slope_after.ndim != 2:
+        raise ValueError(
+            "Both slope images must be 2D."
+        )
+
+    if slope_before.shape != slope_after.shape:
+        raise ValueError(
+            "Slope image shapes do not match: "
+            f"{slope_before.shape} vs {slope_after.shape}"
+        )
+
+    p_low, p_high = percentile_range
+
+    if not (0 <= p_low < p_high <= 100):
+        raise ValueError(
+            "Invalid percentile_range."
+        )
+
+    # ---------------------------------------------------------
+    # 2. Determine common display limits
+    # ---------------------------------------------------------
+
+    valid_before = slope_before[
+        np.isfinite(slope_before)
+    ]
+
+    valid_after = slope_after[
+        np.isfinite(slope_after)
+    ]
+
+    if valid_before.size == 0 or valid_after.size == 0:
+        raise ValueError(
+            "Both slope images must contain finite pixels."
+        )
+
+    combined = np.concatenate(
+        [valid_before, valid_after]
+    )
+
+    vmin, vmax = np.percentile(
+        combined, [p_low, p_high]
+    )
+
+    if vmax <= vmin:
+        delta = max(abs(vmin) * 0.01, 1e-6)
+        vmin -= delta
+        vmax += delta
+
+    # ---------------------------------------------------------
+    # 3. Create two-panel figure
+    # ---------------------------------------------------------
+
+    fig, axes = plt.subplots(
+        1, 2,
+        figsize=(14, 6),
+        constrained_layout=True,
+    )
+
+    fig.suptitle(
+        title,
+        fontsize=15,
+        fontweight="bold",
+    )
+
+    # ---------------------------------------------------------
+    # Panel 1: Before bad-pixel correction
+    # ---------------------------------------------------------
+
+    im0 = axes[0].imshow(
+        slope_before,
+        origin="lower",
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+    )
+
+    axes[0].set_title(
+        "Before Bad-Pixel Correction"
+    )
+
+    axes[0].set_xlabel("Detector X (pixel)")
+    axes[0].set_ylabel("Detector Y (pixel)")
+
+    # ---------------------------------------------------------
+    # Panel 2: After bad-pixel correction
+    # ---------------------------------------------------------
+
+    im1 = axes[1].imshow(
+        slope_after,
+        origin="lower",
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+    )
+
+    axes[1].set_title(
+        "After Bad-Pixel Correction"
+    )
+
+    axes[1].set_xlabel("Detector X (pixel)")
+    axes[1].set_ylabel("Detector Y (pixel)")
+
+    # ---------------------------------------------------------
+    # 4. Shared colorbar
+    # ---------------------------------------------------------
+
+    cbar = fig.colorbar(
+        im1,
+        ax=axes,
+        fraction=0.035,
+        pad=0.02,
+        shrink=0.85,
+    )
+
+    cbar.set_label(unit)
+
+    # ---------------------------------------------------------
+    # 5. Save figure
+    # ---------------------------------------------------------
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    savepath = output_dir / filename
+
+    fig.savefig(
+        savepath,
+        dpi=dpi,
+        bbox_inches="tight",
+    )
+
+    if show:
+        plt.show()
+
+    plt.close(fig)
+
+    return savepath
+
+
+
+def plot_read_correction_comparison(
+    cube_before,
+    cube_after,
+    output_dir,
+    *,
+    filename="read_correction_comparison.png",
+    title="SCALES Detector Noise Correction",
+    unit="DN",
+    percentile_range=(1, 99),
+    difference_percentile=99,
+    dpi=200,
+    show=False,
+):
+    """
+    Compare detector reads before and after ACN / 1/f correction.
+
+    Parameters
+    ----------
+    cube_before : ndarray
+        Raw read cube with shape (n_reads, ny, nx).
+
+    cube_after : ndarray
+        Corrected read cube with the same shape.
+
+    output_dir : str or Path
+        Directory where the diagnostic figure is saved.
+
+    filename : str
+        Output figure filename.
+
+    title : str
+        Figure title.
+
+    unit : str
+        Detector signal unit, normally DN.
+
+    percentile_range : tuple
+        Percentiles used to determine the common color limits
+        for before and after images in each row.
+
+    difference_percentile : float
+        Percentile of absolute differences used for symmetric
+        difference-image color limits.
+
+    dpi : int
+        Output figure resolution.
+
+    show : bool
+        Display figure interactively.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the saved figure.
+
+    Notes
+    -----
+    The difference is defined as:
+
+        difference = before - after
+
+    This represents the signal removed by the correction.
+
+    The function does not modify either input cube.
+    """
+
+    # ---------------------------------------------------------
+    # 1. Validate input cubes
+    # ---------------------------------------------------------
+
+    cube_before = np.asarray(cube_before)
+    cube_after = np.asarray(cube_after)
+
+    if cube_before.ndim != 3 or cube_after.ndim != 3:
+        raise ValueError(
+            "Both inputs must be 3D cubes with shape "
+            "(n_reads, ny, nx)."
+        )
+
+    if cube_before.shape != cube_after.shape:
+        raise ValueError(
+            "Input cube shapes do not match: "
+            f"{cube_before.shape} vs {cube_after.shape}"
+        )
+
+    n_reads, ny, nx = cube_before.shape
+
+    if n_reads < 2:
+        raise ValueError(
+            "At least two reads are required."
+        )
+
+    p_low, p_high = percentile_range
+
+    if not (0 <= p_low < p_high <= 100):
+        raise ValueError(
+            "Invalid percentile_range."
+        )
+
+    if not (0 < difference_percentile <= 100):
+        raise ValueError(
+            "difference_percentile must be in (0, 100]."
+        )
+
+    # ---------------------------------------------------------
+    # 2. Select first and last reads
+    # ---------------------------------------------------------
+
+    read_indices = [0, n_reads - 1]
+    read_labels = [
+        "First Read",
+        "Last Read",
+    ]
+
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(18, 11),
+        constrained_layout=True,
+    )
+
+    fig.suptitle(
+        title,
+        fontsize=16,
+        fontweight="bold",
+    )
+
+    # ---------------------------------------------------------
+    # 3. Plot each selected read
+    # ---------------------------------------------------------
+
+    for row, (read_idx, read_label) in enumerate(
+        zip(read_indices, read_labels)
+    ):
+
+        before = np.asarray(
+            cube_before[read_idx],
+            dtype=np.float64,
+        )
+
+        after = np.asarray(
+            cube_after[read_idx],
+            dtype=np.float64,
+        )
+
+        difference = before - after
+
+        # -----------------------------------------------------
+        # Common display scale for before and after
+        # -----------------------------------------------------
+
+        combined = np.concatenate([
+            before[np.isfinite(before)],
+            after[np.isfinite(after)],
+        ])
+
+        if combined.size == 0:
+            raise ValueError(
+                f"No finite values in read {read_idx}."
+            )
+
+        vmin, vmax = np.percentile(
+            combined,
+            [p_low, p_high],
+        )
+
+        if vmax <= vmin:
+            delta = max(abs(vmin) * 0.01, 1e-6)
+            vmin -= delta
+            vmax += delta
+
+        # -----------------------------------------------------
+        # Symmetric difference scale centered at zero
+        # -----------------------------------------------------
+
+        finite_diff = difference[
+            np.isfinite(difference)
+        ]
+
+        if finite_diff.size == 0:
+            raise ValueError(
+                f"No finite difference values "
+                f"in read {read_idx}."
+            )
+
+        diff_limit = np.percentile(
+            np.abs(finite_diff),
+            difference_percentile,
+        )
+
+        if not np.isfinite(diff_limit) or diff_limit <= 0:
+            diff_limit = 1e-6
+
+        diff_norm = TwoSlopeNorm(
+            vmin=-diff_limit,
+            vcenter=0,
+            vmax=diff_limit,
+        )
+
+        # -----------------------------------------------------
+        # Panel 1: Before correction
+        # -----------------------------------------------------
+
+        ax = axes[row, 0]
+
+        im = ax.imshow(
+            before,
+            origin="lower",
+            cmap="viridis",
+            vmin=vmin,
+            vmax=vmax,
+            interpolation="nearest",
+        )
+
+        ax.set_title(
+            f"{read_label} (Read {read_idx}) — Before"
+        )
+
+        fig.colorbar(
+            im,
+            ax=ax,
+            label=unit,
+            fraction=0.046,
+            pad=0.04,
+        )
+
+        # -----------------------------------------------------
+        # Panel 2: After correction
+        # -----------------------------------------------------
+
+        ax = axes[row, 1]
+
+        im = ax.imshow(
+            after,
+            origin="lower",
+            cmap="viridis",
+            vmin=vmin,
+            vmax=vmax,
+            interpolation="nearest",
+        )
+
+        ax.set_title(
+            f"{read_label} (Read {read_idx}) — After"
+        )
+
+        fig.colorbar(
+            im,
+            ax=ax,
+            label=unit,
+            fraction=0.046,
+            pad=0.04,
+        )
+
+        # -----------------------------------------------------
+        # Panel 3: Difference image
+        # -----------------------------------------------------
+
+        ax = axes[row, 2]
+
+        im = ax.imshow(
+            difference,
+            origin="lower",
+            cmap="RdBu_r",
+            norm=diff_norm,
+            interpolation="nearest",
+        )
+
+        ax.set_title(
+            f"{read_label} — Before − After"
+        )
+
+        fig.colorbar(
+            im,
+            ax=ax,
+            label=unit,
+            fraction=0.046,
+            pad=0.04,
+        )
+
+        # -----------------------------------------------------
+        # Axis labels
+        # -----------------------------------------------------
+
+        for ax in axes[row]:
+
+            ax.set_xlabel("Detector X (pixel)")
+            ax.set_ylabel("Detector Y (pixel)")
+
+            ax.set_xlim(0, nx - 1)
+            ax.set_ylim(0, ny - 1)
+
+    # ---------------------------------------------------------
+    # 4. Save figure
+    # ---------------------------------------------------------
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    savepath = output_dir / filename
+
+    fig.savefig(
+        savepath,
+        dpi=dpi,
+        bbox_inches="tight",
+    )
+
+    if show:
+        plt.show()
+
+    plt.close(fig)
+
+    return savepath
+
+
+def plot_linearity_saturation_diagnostics(
+    raw_cube, corrected_cube, saturation_mask, applied_mask, good_read_mask,
+    *, output_dir="linearity_plots", save_prefix="linearity_diagnostic",
+    skip_initial_reads=2, minimum_signal_dn=0.0, dpi=180, show=False,
+):
+    """Plot 2x2 detector maps of correction and ramp-fitting read availability.
+
+    Inputs are the arrays returned by apply_brandt_linearity_reference(...,
+    return_aux=True) and make_ramp_quality_mask(...). Shapes are (N,H,W)
+    for cubes/read masks and (H,W) for applied_mask.
+
+    Fractional correction uses 100*(corrected-raw)/(raw-pedestal), only on
+    pre-saturation reads with abs(signal)>=minimum_signal_dn, where the
+    pedestal is estimated from the first two reads (matching the shown call).
+    Saturated/raw-preserved reads are excluded from correction statistics.
+
+    Read availability comes from good_read_mask, which includes BPM,
+    saturation, neighbor rejection, and nonfinite read exclusions. The lost
+    read count is measured relative to finite raw reads, after the initial
+    excluded reads; it is not exclusively attributable to saturation.
+    """
+    raw = np.asarray(raw_cube)
+    corrected = np.asarray(corrected_cube)
+    sat = np.asarray(saturation_mask, dtype=bool)
+    applied = np.asarray(applied_mask, dtype=bool)
+    good = np.asarray(good_read_mask, dtype=bool)
+    if raw.ndim != 3 or corrected.shape != raw.shape or sat.shape != raw.shape or good.shape != raw.shape:
+        raise ValueError("raw_cube, corrected_cube, saturation_mask and good_read_mask must all have shape (Nreads,H,W)")
+    nreads, h, w = raw.shape
+    if applied.shape != (h, w):
+        raise ValueError("applied_mask must have shape (H,W)")
+    if not (0 <= skip_initial_reads < nreads):
+        raise ValueError("skip_initial_reads must be in [0, nreads)")
+    if minimum_signal_dn < 0:
+        raise ValueError("minimum_signal_dn must be non-negative")
+
+    # Pedestal convention matches n_pedestal_reads=2, pedestal_start_read=0.
+    with np.errstate(invalid="ignore"):
+        pedestal = np.nanmedian(raw[:2].astype(np.float64), axis=0)
+
+    # Streaming accumulators avoid constructing a full float64 difference cube.
+    frac_sum = np.zeros((h, w), dtype=np.float64)
+    frac_count = np.zeros((h, w), dtype=np.int32)
+    max_abs_dn = np.full((h, w), np.nan, dtype=np.float32)
+    n_finite = np.zeros((h, w), dtype=np.int32)
+    n_good = np.zeros((h, w), dtype=np.int32)
+
+    for i in range(skip_initial_reads, nreads):
+        r = raw[i].astype(np.float64)
+        c = corrected[i].astype(np.float64)
+        finite = np.isfinite(r)
+        n_finite += finite
+        n_good += good[i] & finite & np.isfinite(c)
+        signal = r - pedestal
+        eligible = (applied & ~sat[i] & finite & np.isfinite(c)
+                    & np.isfinite(signal) & (np.abs(signal) >= minimum_signal_dn))
+        if not np.any(eligible):
+            continue
+        delta = c - r
+        frac = np.zeros((h, w), dtype=np.float64)
+        np.divide(100.0 * delta, signal, out=frac, where=eligible)
+        frac_sum[eligible] += frac[eligible]
+        frac_count[eligible] += 1
+        abs_delta = np.abs(delta[eligible]).astype(np.float32)
+        existing = max_abs_dn[eligible]
+        max_abs_dn[eligible] = np.where(np.isfinite(existing), np.maximum(existing, abs_delta), abs_delta)
+
+    median_label = "Mean fractional correction [%]"
+    mean_frac = np.full((h, w), np.nan, dtype=np.float32)
+    np.divide(frac_sum, frac_count, out=mean_frac, where=frac_count > 0)
+    # Lost reads include BPM, nonfinite reads, and neighbor-induced masking.
+    n_lost = np.maximum(n_finite - n_good, 0)
+    n_good = n_good.astype(np.float32)
+    n_lost = n_lost.astype(np.float32)
+    n_good[~np.any(np.isfinite(raw[skip_initial_reads:]), axis=0)] = np.nan
+
+    print(f"Linearity diagnostics: applied pixels={np.count_nonzero(applied):,}/{h*w:,}, "
+          f"pixels with eligible reads={np.count_nonzero(frac_count):,}, "
+          f"nonzero corrections={np.count_nonzero(np.isfinite(max_abs_dn) & (max_abs_dn > 0)):,}")
+
+    fig, axes = plt.subplots(2, 2, figsize=(15, 11), constrained_layout=True)
+
+    def display(ax, data, title, label, *, cmap="viridis", center_zero=False, vmax=None):
+        finite = np.asarray(data)[np.isfinite(data)]
+        kw = {}
+        if center_zero and finite.size:
+            limit = float(np.percentile(np.abs(finite), 99))
+            if limit > 0:
+                kw["norm"] = TwoSlopeNorm(vmin=-limit, vcenter=0, vmax=limit)
+        elif vmax is not None:
+            kw.update(vmin=0, vmax=vmax)
+        elif finite.size and np.nanmin(finite) >= 0:
+            hi = float(np.percentile(finite, 99.5))
+            kw.update(vmin=0, vmax=hi if hi > 0 else 1.0)
+        elif finite.size:
+            lo, hi = np.percentile(finite, [1, 99])
+            if hi > lo:
+                kw.update(vmin=float(lo), vmax=float(hi))
+        if not finite.size:
+            im = ax.imshow(np.zeros_like(data), origin="lower", interpolation="nearest", cmap="Greys", vmin=0, vmax=1)
+            ax.text(0.5, 0.5, "NO ELIGIBLE DATA\nCheck applied_mask, saturation_mask,\nand minimum_signal_dn", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=11, bbox=dict(facecolor="white", alpha=.9))
+        else:
+            im = ax.imshow(np.ma.masked_invalid(data), origin="lower", interpolation="nearest", cmap=cmap, **kw)
+            fig.colorbar(im, ax=ax, label=label, shrink=0.82)
+        ax.set(title=title, xlabel="Column", ylabel="Row")
+
+    display(axes[0, 0], mean_frac, median_label, "%", cmap="coolwarm", center_zero=True)
+    display(axes[0, 1], max_abs_dn, "Maximum |corrected - raw| (pre-saturation)", "DN", cmap="magma")
+    display(axes[1, 0], n_good, "Usable reads for ramp fitting", "Number of reads", vmax=nreads-skip_initial_reads)
+    display(axes[1, 1], n_lost, "Finite reads rejected by ramp-quality mask", "Number of reads", vmax=nreads-skip_initial_reads)
+    fig.suptitle(f"Linearity correction and ramp-quality diagnostics ({nreads} reads)", fontsize=15)
+
+    if save_prefix is not None:
+        destination = Path(output_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        prefix = Path(str(save_prefix)).stem
+        path = destination / f"{prefix}_linearity_saturation_maps.png"
+        fig.savefig(path, dpi=dpi, bbox_inches="tight")
+        print(f"Saved diagnostic: {path}")
+    if show:
+        plt.show()
+    return fig, axes
+
+
+def plot_linearity_correction_diagnostics(
+    raw_cube,
+    corrected_cube,
+    saturation_mask,
+    applied_mask,
+    output_dir="plots",
+    save_prefix="linearity",
+    skip_initial_reads=2,
+    minimum_signal_dn=0.0,
+    show=False,
+):
+    """
+    Three-panel diagnostic for applied linearity correction.
+
+    Panels
+    ------
+    1. Mean fractional correction [%]
+    2. Maximum absolute correction [DN]
+    3. Number of corrected reads per pixel
+
+    Does not require a ramp-quality mask.
+
+    Fractional correction is calculated relative to the
+    pedestal-subtracted signal estimated from the first
+    two reads. The diagnostic excludes saturated reads.
+
+    Parameters
+    ----------
+    raw_cube, corrected_cube : ndarray
+        Input and linearity-corrected cubes (N, H, W).
+    saturation_mask : ndarray
+        Boolean saturation mask (N, H, W).
+    applied_mask : ndarray
+        Boolean map (H, W) indicating pixels where
+        linearity coefficients were applied.
+    output_dir : str or Path
+        Directory for the saved figure.
+    save_prefix : str
+        Output filename prefix.
+    skip_initial_reads : int
+        Number of initial reads excluded from diagnostics.
+    minimum_signal_dn : float
+        Minimum absolute pedestal-subtracted signal used
+        for fractional correction.
+    show : bool
+        Display figure interactively.
+
+    Returns
+    -------
+    fig, axes
+        Matplotlib figure and three axes.
+    """
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+    from matplotlib.colors import TwoSlopeNorm
+
+    raw = np.asarray(raw_cube)
+    corrected = np.asarray(corrected_cube)
+
+    if raw.ndim != 3 or corrected.shape != raw.shape:
+        raise ValueError(
+            "raw_cube and corrected_cube must have "
+            "identical 3D shapes."
+        )
+
+    nreads, ny, nx = raw.shape
+
+    if not 0 <= skip_initial_reads < nreads:
+        raise ValueError("Invalid skip_initial_reads.")
+
+    sat = np.asarray(saturation_mask, dtype=bool)
+    applied = np.asarray(applied_mask, dtype=bool)
+
+    if sat.shape != raw.shape:
+        raise ValueError("saturation_mask shape mismatch.")
+
+    if applied.shape != (ny, nx):
+        raise ValueError("applied_mask shape mismatch.")
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use the same pedestal convention as the correction
+    # routine: mean of the first two raw reads.
+    pedestal = np.mean(
+        raw[:2].astype(np.float64), axis=0
+    )
+
+    fraction_sum = np.zeros((ny, nx), dtype=np.float64)
+    fraction_count = np.zeros((ny, nx), dtype=np.int32)
+
+    maximum_correction = np.zeros(
+        (ny, nx), dtype=np.float64
+    )
+
+    corrected_read_count = np.zeros(
+        (ny, nx), dtype=np.int32
+    )
+
+    # Process one read at a time to avoid large temporary
+    # arrays for a 2048 x 2048 detector.
+    for i in range(skip_initial_reads, nreads):
+
+        signal = raw[i].astype(np.float64) - pedestal
+        delta = (
+            corrected[i].astype(np.float64)
+            - raw[i].astype(np.float64)
+        )
+
+        valid = (
+            applied
+            & ~sat[i]
+            & np.isfinite(signal)
+            & np.isfinite(delta)
+        )
+
+        corrected_read_count += valid.astype(np.int32)
+
+        maximum_correction = np.maximum(
+            maximum_correction,
+            np.where(valid, np.abs(delta), 0.0)
+        )
+
+        valid_fraction = (
+            valid
+            & (np.abs(signal) > minimum_signal_dn)
+            & (signal != 0)
+        )
+
+        fraction = np.zeros((ny, nx), dtype=np.float64)
+
+        np.divide(
+            100.0 * delta,
+            signal,
+            out=fraction,
+            where=valid_fraction
+        )
+
+        fraction_sum += np.where(
+            valid_fraction, fraction, 0.0
+        )
+
+        fraction_count += valid_fraction.astype(np.int32)
+
+    mean_fraction = np.full(
+        (ny, nx), np.nan, dtype=np.float64
+    )
+
+    np.divide(
+        fraction_sum,
+        fraction_count,
+        out=mean_fraction,
+        where=fraction_count > 0
+    )
+
+    maximum_correction = np.where(
+        corrected_read_count > 0,
+        maximum_correction,
+        np.nan
+    )
+
+    # Robust color limits
+    finite_fraction = mean_fraction[
+        np.isfinite(mean_fraction)
+    ]
+
+    if finite_fraction.size:
+        frac_limit = np.percentile(
+            np.abs(finite_fraction), 99
+        )
+        frac_limit = max(frac_limit, 1e-12)
+    else:
+        frac_limit = 1.0
+
+    finite_maximum = maximum_correction[
+        np.isfinite(maximum_correction)
+    ]
+
+    if finite_maximum.size:
+        max_limit = np.percentile(
+            finite_maximum, 99
+        )
+        max_limit = max(max_limit, 1e-12)
+    else:
+        max_limit = 1.0
+
+    fig, axes = plt.subplots(
+        1, 3, figsize=(19, 6), constrained_layout=True
+    )
+
+    im0 = axes[0].imshow(
+        mean_fraction,
+        origin="lower",
+        cmap="RdBu_r",
+        norm=TwoSlopeNorm(
+            vmin=-frac_limit,
+            vcenter=0.0,
+            vmax=frac_limit
+        ),
+        interpolation="nearest"
+    )
+
+    axes[0].set_title("Mean fractional correction [%]")
+    fig.colorbar(im0, ax=axes[0], label="%")
+
+    im1 = axes[1].imshow(
+        maximum_correction,
+        origin="lower",
+        cmap="magma",
+        vmin=0,
+        vmax=max_limit,
+        interpolation="nearest"
+    )
+
+    axes[1].set_title(
+        "Maximum |corrected - raw| (pre-saturation)"
+    )
+    fig.colorbar(im1, ax=axes[1], label="DN")
+
+    im2 = axes[2].imshow(
+        corrected_read_count,
+        origin="lower",
+        cmap="viridis",
+        vmin=0,
+        vmax=nreads - skip_initial_reads,
+        interpolation="nearest"
+    )
+
+    axes[2].set_title("Reads eligible for linearity correction")
+    fig.colorbar(
+        im2, ax=axes[2], label="Number of reads"
+    )
+
+    for ax in axes:
+        ax.set_xlabel("Detector column")
+        ax.set_ylabel("Detector row")
+
+    fig.suptitle(
+        f"Linearity correction diagnostics ({nreads} reads)",
+        fontsize=15
+    )
+
+    output_file = (
+        output_dir / f"{save_prefix}_linearity_diagnostics.png"
+    )
+
+    fig.savefig(output_file, dpi=150)
+
+    print(f"Saved linearity diagnostic: {output_file}")
+    print(f"Applied pixels: {np.count_nonzero(applied):,}")
+    print(
+        "Pixels with eligible reads: "
+        f"{np.count_nonzero(corrected_read_count):,}"
+    )
+
+    if not show:
+        plt.close(fig)
+    else:
+        plt.show()
+
+    return fig, axes
+
+
+def plot_good_reads_for_ramp_fitting(
+    good_read_mask,
+    output_dir="plots",
+    save_prefix="ramp_quality",
+    skip_initial_reads=2,
+    show=False,
+):
+    """
+    Plot the number of usable reads per detector pixel
+    after applying the ramp-quality mask.
+
+    Parameters
+    ----------
+    good_read_mask : ndarray of bool
+        Boolean cube (N, H, W). True means usable.
+    output_dir : str or Path
+        Output directory.
+    save_prefix : str
+        Output filename prefix.
+    skip_initial_reads : int
+        Number of initial reads excluded.
+    show : bool
+        Display the figure.
+
+    Returns
+    -------
+    fig, ax
+        Matplotlib figure and axis.
+    """
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+
+    good = np.asarray(good_read_mask, dtype=bool)
+
+    if good.ndim != 3:
+        raise ValueError(
+            "good_read_mask must be a 3D boolean cube."
+        )
+
+    nreads = good.shape[0]
+
+    if not 0 <= skip_initial_reads < nreads:
+        raise ValueError("Invalid skip_initial_reads.")
+
+    usable_reads = np.count_nonzero(
+        good[skip_initial_reads:], axis=0
+    )
+
+    maximum_reads = nreads - skip_initial_reads
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(
+        figsize=(9, 8), constrained_layout=True
+    )
+
+    im = ax.imshow(
+        usable_reads,
+        origin="lower",
+        cmap="viridis",
+        vmin=0,
+        vmax=maximum_reads,
+        interpolation="nearest"
+    )
+
+    ax.set_title(
+        f"Usable reads for ramp fitting "
+        f"(maximum {maximum_reads})"
+    )
+
+    ax.set_xlabel("Detector column")
+    ax.set_ylabel("Detector row")
+
+    fig.colorbar(
+        im,
+        ax=ax,
+        label="Number of usable reads"
+    )
+
+    output_file = (
+        output_dir / f"{save_prefix}_good_reads.png"
+    )
+
+    fig.savefig(output_file, dpi=150)
+
+    print(f"Saved good-read map: {output_file}")
+    print(
+        f"Median usable reads: "
+        f"{np.median(usable_reads):.1f}"
+    )
+    print(
+        f"Pixels with zero usable reads: "
+        f"{np.count_nonzero(usable_reads == 0):,}"
+    )
+
+    if not show:
+        plt.close(fig)
+    else:
+        plt.show()
+
+    return fig, ax
+
+def plot_extracted_cube_diagnostic(
+    cube, output_directory, *, wavelength=None, combine="median",
+    box_size=5, detection_sigma=4.0, min_component_pixels=3,
+    persistence_fraction=0.15, dilation_iterations=1,
+    spectral_sigma=6.0, save_prefix="extracted_cube", show=False,
+):
+    """Plot collapsed IFS image and robust aperture-median spectrum.
+
+    Assumes cube shape (n_wave, ny, nx), with no spectral reordering.
+    Wavelength, if supplied, must be a 1D array of length n_wave.
+    Returns (fig, axes, info).  info includes source center and aperture.
+
+    Source finding uses robust channel-by-channel spatial contrast and
+    wavelength persistence, then connected-component filtering. The
+    spectrum is the median of valid aperture spaxels at each channel;
+    strong spatial outliers are rejected separately in each channel.
+    """
+    data = np.asarray(cube)
+    if data.ndim != 3:
+        raise ValueError("cube must have shape (n_wave, ny, nx)")
+    nw, ny, nx = data.shape
+    if nw < 3 or ny < 3 or nx < 3:
+        raise ValueError("cube dimensions must each be at least 3")
+    if combine not in ("median", "sum"):
+        raise ValueError("combine must be 'median' or 'sum'")
+    if box_size < 3 or box_size % 2 != 1:
+        raise ValueError("box_size must be odd and >= 3")
+    if wavelength is None:
+        wave = np.arange(nw)
+        xlabel = "Wavelength channel"
+    else:
+        wave = np.asarray(wavelength, dtype=float)
+        if wave.shape != (nw,) or not np.all(np.isfinite(wave)):
+            raise ValueError("wavelength must be finite and length n_wave")
+        xlabel = "Wavelength (input units)"
+
+    # A channel must contain enough valid spaxels to contribute to detection.
+    finite = np.isfinite(data)
+    channel_good = finite.sum(axis=(1, 2)) >= max(9, int(0.1 * ny * nx))
+    if not channel_good.any():
+        raise ValueError("Insufficient finite cube samples")
+
+    # Per-channel robust spatial background and scale. Avoid full-cube
+    # temporary allocations by accumulating a 2D persistence map.
+    persistence = np.zeros((ny, nx), dtype=np.int32)
+    for k in np.flatnonzero(channel_good):
+        plane = np.asarray(data[k], dtype=float)
+        values = plane[np.isfinite(plane)]
+        center = np.median(values)
+        sigma = 1.4826 * np.median(np.abs(values - center))
+        if not np.isfinite(sigma) or sigma <= 0:
+            continue
+        # Smooth each channel to suppress isolated single-spaxel hits.
+        filled = np.where(np.isfinite(plane), plane, center)
+        smooth = median_filter(filled, size=3, mode="nearest")
+        persistence += (smooth > center + detection_sigma * sigma)
+
+    required = max(2, int(np.ceil(persistence_fraction * channel_good.sum())))
+    detected = persistence >= required
+    components, ncomponents = label(detected)
+    candidates = []
+    for cid in range(1, ncomponents + 1):
+        mask = components == cid
+        count = int(mask.sum())
+        if count >= min_component_pixels:
+            candidates.append((int(persistence[mask].sum()), count, cid))
+    if not candidates:
+        raise ValueError(
+            "No persistent spatially extended source detected. "
+            "Try lowering detection_sigma/persistence_fraction, or inspect "
+            "the cube and bad-spaxel mask; no peak was selected blindly."
+        )
+    _, _, best_id = max(candidates)
+    component = components == best_id
+    yy, xx = np.nonzero(component)
+    weights = persistence[component].astype(float)
+    cy = int(np.rint(np.average(yy, weights=weights)))
+    cx = int(np.rint(np.average(xx, weights=weights)))
+
+    # Restrict extraction to a compact box, dilating the persistent source
+    # within it. This avoids pulling in unrelated nearby bright regions.
+    half = box_size // 2
+    y0, y1 = max(0, cy-half), min(ny, cy+half+1)
+    x0, x1 = max(0, cx-half), min(nx, cx+half+1)
+    box = np.zeros((ny, nx), dtype=bool)
+    box[y0:y1, x0:x1] = True
+    aperture = binary_dilation(component, iterations=dilation_iterations) & box
+    if aperture.sum() < 3:
+        aperture = box
+
+    # Collapse the cube for the display only (sum is not background-subtracted).
+    with np.errstate(invalid="ignore"):
+        if combine == "median":
+            collapsed = np.nanmedian(data, axis=0)
+        else:
+            collapsed = np.nansum(data, axis=0).astype(float)
+            collapsed[finite.sum(axis=0) == 0] = np.nan
+
+    spectrum = np.full(nw, np.nan)
+    n_used = np.zeros(nw, dtype=int)
+    for k in range(nw):
+        vals = np.asarray(data[k][aperture], dtype=float)
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            continue
+        med = np.median(vals)
+        mad = 1.4826 * np.median(np.abs(vals-med))
+        if mad > 0 and vals.size >= 5:
+            vals = vals[np.abs(vals-med) <= spectral_sigma*mad]
+        if vals.size:
+            spectrum[k] = np.median(vals)
+            n_used[k] = vals.size
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
+    valid_image = collapsed[np.isfinite(collapsed)]
+    vmin, vmax = np.percentile(valid_image, [2, 99.5])
+    if vmax <= vmin:
+        vmax = vmin + 1
+    im = axes[0].imshow(collapsed, origin="lower", cmap="viridis",
+                        vmin=vmin, vmax=vmax, interpolation="nearest")
+    axes[0].contour(aperture.astype(float), levels=[0.5], colors=["red"],
+                    linewidths=1.5)
+    axes[0].plot(cx, cy, "+", color="white", markersize=12, mew=2)
+    axes[0].set(title=f"Wavelength-{combine} image", xlabel="X spaxel",
+                ylabel="Y spaxel")
+    fig.colorbar(im, ax=axes[0], label="Flux (cube units)")
+    axes[1].plot(wave, spectrum, color="black", lw=1.1)
+    axes[1].set(title=f"Aperture-median spectrum ({int(aperture.sum())} spaxels)",
+                xlabel=xlabel, ylabel="Median flux (cube units)")
+    axes[1].grid(alpha=0.25)
+    fig.suptitle(f"Extracted IFS cube diagnostic | center=({cy}, {cx})")
+    out = Path(output_directory)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{save_prefix}_cube_diagnostic.png"
+    fig.savefig(path, dpi=160)
+    if show:
+        plt.show()
+    info = dict(center_row=cy, center_col=cx, aperture_mask=aperture,
+                spectrum=spectrum, wavelength=wave, valid_spaxels=n_used,
+                persistence_map=persistence, filename=str(path))
+    if not show:
+        plt.close(fig)
+    return fig, axes, info
+
