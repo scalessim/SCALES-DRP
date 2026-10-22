@@ -2256,7 +2256,6 @@ def ramp_fit(
         masked_pair = (
             masked_valid[1:]
             & masked_valid[:-1]
-            & (diffs > 0)
         )
 
         # Dynamic mask may only be applied where at least
@@ -2304,7 +2303,6 @@ def ramp_fit(
     pair_mask = (
         base_valid[1:]
         & base_valid[:-1]
-        & (diffs > 0)
     )
 
     if n_fallback > 0:

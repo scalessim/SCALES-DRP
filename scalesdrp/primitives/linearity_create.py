@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import numpy as np
 from astropy.io import fits
+from matplotlib.colors import LogNorm
 
 BRANDT_DQ = {
     "INPUT_BPM": np.uint32(1 << 0),
@@ -204,7 +205,7 @@ def build_variance_model(
     if not np.isfinite(minimum_variance) or minimum_variance <= 0:
         raise ValueError("minimum_variance must be finite and > 0.")
 
-    variance = (readnoise / gain) ** 2 + np.maximum(signal, 0.0) / gain
+    variance = readnoise ** 2 + np.maximum(signal, 0.0) / gain
     variance = np.maximum(variance, minimum_variance)
     variance[~np.isfinite(signal)] = np.nan
     return variance
@@ -2460,9 +2461,10 @@ def _image(ax, data, title, label, *, cmap='viridis', percentiles=(2,98), mask=N
     finite=arr[np.isfinite(arr)]
     if finite.size:
         lo,hi=np.percentile(finite,percentiles)
-        if lo==hi:
-            lo-=max(1,abs(lo))*.01
-            hi+=max(1,abs(hi))*.01
+        if np.isclose(lo, hi, rtol=0, atol=0):
+            delta = max(abs(lo) * 0.01, 1e-12)
+            lo -= delta
+            hi += delta
     else:
         lo,hi=0,1
     im=ax.imshow(np.ma.masked_invalid(arr),origin='lower',cmap=cmap,vmin=lo,vmax=hi,interpolation='nearest')
@@ -2478,6 +2480,7 @@ def _save(fig, path):
         fig.savefig(path,dpi=180,bbox_inches='tight')
 
 
+
 def plot_lin_ref_dia(
     result,
     *,
@@ -2487,50 +2490,30 @@ def plot_lin_ref_dia(
     show=False,
 ):
     """
-    Create and save two 2x2 diagnostic figures for linearity calibration.
+    Create two 2x2 detector-wide linearity diagnostic figures.
 
-    Figure 1: Linearity coefficient diagnostics
+    Figure 1: Linearity coefficients
         1. Successful-fit map
         2. Quadratic coefficient c2
         3. Cubic coefficient c3
-        4. Fractional correction at signal_dn
+        4. Quartic coefficient c4
 
-    Figure 2: Fit reliability diagnostics
-        1. Reduced chi-square
+    Figure 2: Correction and fit quality
+        1. Fractional correction at signal_dn
         2. Residual RMS
-        3. Minimum polynomial derivative
+        3. Minimum derivative deviation from unity
         4. Identity-fallback map
 
-    Parameters
-    ----------
-    result : dict
-        Dictionary returned by run_linearity_calibration(), or
-        the OUTPUTS dictionary returned by fit_brandt_block().
-
-    signal_dn : float, optional
-        Pedestal-subtracted signal in DN at which the fractional
-        linearity correction is evaluated. Default is 2500 DN.
-
-    output_dir : str or Path, optional
-        Directory where diagnostic figures will be saved.
-        Created automatically if it does not exist.
-
-    save_prefix : str, optional
-        Prefix for output PNG filenames.
-
-    show : bool, optional
-        Whether to display figures interactively.
-        Default is False.
+    Reduced chi-square is intentionally not plotted.
 
     Returns
     -------
     fig1, fig2 : matplotlib.figure.Figure
-        Coefficient and fit-reliability diagnostic figures.
     """
 
-    # ------------------------------------------------------------
-    # Validate inputs
-    # ------------------------------------------------------------
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from pathlib import Path
 
     out = result.get("OUTPUTS", result)
 
@@ -2540,27 +2523,20 @@ def plot_lin_ref_dia(
 
     if coeff.ndim != 3:
         raise ValueError(
-            "COEFF must have shape (n_coefficients, nrows, nx)."
+            "COEFF must have shape (ncoeff, ny, nx)"
         )
 
-    if success.shape != coeff.shape[1:]:
-        raise ValueError(
-            "SUCCESS shape must match coefficient detector dimensions."
-        )
+    shape = coeff.shape[1:]
 
-    if quality.shape != success.shape:
+    if success.shape != shape or quality.shape != shape:
         raise ValueError(
-            "QUALITY shape must match SUCCESS shape."
+            "SUCCESS and QUALITY must match detector shape"
         )
 
     if not np.isfinite(signal_dn) or signal_dn <= 0:
         raise ValueError(
-            "signal_dn must be finite and positive."
+            "signal_dn must be finite and positive"
         )
-
-    # ------------------------------------------------------------
-    # Prepare output directory
-    # ------------------------------------------------------------
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -2568,46 +2544,71 @@ def plot_lin_ref_dia(
     if save_prefix is not None:
         save_prefix = Path(str(save_prefix)).stem
 
-    # ------------------------------------------------------------
-    # Extract polynomial coefficients
-    # ------------------------------------------------------------
+    # --------------------------------------------------
+    # Polynomial coefficients
+    # L(M) = c0 + c1*M + c2*M^2 + c3*M^3 + c4*M^4
+    # --------------------------------------------------
 
-    c2 = (
-        coeff[2]
-        if coeff.shape[0] > 2
-        else np.zeros_like(success, dtype=float)
+    def coefficient_map(order):
+        if coeff.shape[0] > order:
+            return coeff[order]
+        return np.zeros(shape, dtype=float)
+
+    c2 = coefficient_map(2)
+    c3 = coefficient_map(3)
+    c4 = coefficient_map(4)
+
+    # --------------------------------------------------
+    # Fractional correction at reference signal
+    # --------------------------------------------------
+
+    corrected = np.polynomial.polynomial.polyval(
+        signal_dn,
+        coeff
     )
-
-    c3 = (
-        coeff[3]
-        if coeff.shape[0] > 3
-        else np.zeros_like(success, dtype=float)
-    )
-
-    # ------------------------------------------------------------
-    # Evaluate polynomial at specified signal
-    #
-    # L(M) = c0 + c1*M + c2*M^2 + ...
-    # ------------------------------------------------------------
-
-    corrected = np.zeros(success.shape, dtype=float)
-
-    for k in range(coeff.shape[0] - 1, -1, -1):
-        corrected = corrected * signal_dn + coeff[k]
 
     fractional = (
         100.0 * (corrected - signal_dn) / signal_dn
     )
 
-    # ------------------------------------------------------------
-    # FIGURE 1: Coefficient diagnostics
-    # ------------------------------------------------------------
+    # --------------------------------------------------
+    # Residual RMS and derivative
+    # --------------------------------------------------
+
+    residual_rms = np.asarray(
+        out["RESIDUAL_RMS"],
+        dtype=float
+    )
+
+    min_derivative = np.asarray(
+        out["MIN_DERIVATIVE"],
+        dtype=float
+    )
+
+    if residual_rms.shape != shape:
+        raise ValueError("RESIDUAL_RMS shape mismatch")
+
+    if min_derivative.shape != shape:
+        raise ValueError("MIN_DERIVATIVE shape mismatch")
+
+    derivative_deviation = min_derivative - 1.0
+
+    # --------------------------------------------------
+    # Identity fallback
+    # --------------------------------------------------
+
+    fallback = (
+        (quality & DQ["IDENTITY_FALLBACK"]) != 0
+    )
+
+    # --------------------------------------------------
+    # FIGURE 1: Linearity coefficients
+    # --------------------------------------------------
 
     fig1, ax = plt.subplots(
-        2,
-        2,
+        2, 2,
         figsize=(14, 10),
-        constrained_layout=True,
+        constrained_layout=True
     )
 
     _image(
@@ -2616,7 +2617,7 @@ def plot_lin_ref_dia(
         "Successful fit (1=yes)",
         "Success",
         cmap="Greys",
-        percentiles=(0, 100),
+        percentiles=(0, 100)
     )
 
     _image(
@@ -2624,8 +2625,8 @@ def plot_lin_ref_dia(
         c2,
         "Quadratic coefficient c₂",
         "DN⁻¹",
-        mask=success,
         cmap="coolwarm",
+        mask=success
     )
 
     _image(
@@ -2633,62 +2634,59 @@ def plot_lin_ref_dia(
         c3,
         "Cubic coefficient c₃",
         "DN⁻²",
-        mask=success,
         cmap="coolwarm",
+        mask=success
     )
 
     _image(
         ax[1, 1],
-        fractional,
-        f"Correction at {signal_dn:g} DN",
-        "(corrected − raw) / raw [%]",
-        mask=success,
+        c4,
+        "Quartic coefficient c₄",
+        "DN⁻³",
         cmap="coolwarm",
+        mask=success
     )
 
     fig1.suptitle(
         "Linearity coefficient diagnostics | "
         f"successful {success.mean():.1%}",
-        fontsize=14,
+        fontsize=14
     )
 
-    # ------------------------------------------------------------
-    # FIGURE 2: Fit reliability diagnostics
-    # ------------------------------------------------------------
+    # --------------------------------------------------
+    # FIGURE 2: Correction and fit quality
+    # --------------------------------------------------
 
     fig2, ax = plt.subplots(
-        2,
-        2,
+        2, 2,
         figsize=(14, 10),
-        constrained_layout=True,
+        constrained_layout=True
     )
 
     _image(
         ax[0, 0],
-        out["REDCHISQ"],
-        "Reduced χ² (successful pixels)",
-        "χ² / dof",
-        mask=success,
+        fractional,
+        f"Correction at {signal_dn:g} DN",
+        "(corrected − raw) / raw [%]",
+        cmap="coolwarm",
+        mask=success
     )
 
     _image(
         ax[0, 1],
-        out["RESIDUAL_RMS"],
+        residual_rms,
         "Residual RMS (successful pixels)",
         "DN",
-        mask=success,
+        mask=success
     )
 
     _image(
         ax[1, 0],
-        out["MIN_DERIVATIVE"],
-        "Minimum correction derivative",
-        "dL/dM",
-        mask=success,
-    )
-
-    fallback = (
-        (quality & DQ["IDENTITY_FALLBACK"]) != 0
+        derivative_deviation,
+        "Minimum derivative deviation from unity",
+        "min(dL/dM) − 1",
+        cmap="coolwarm",
+        mask=success
     )
 
     _image(
@@ -2697,18 +2695,18 @@ def plot_lin_ref_dia(
         "Identity fallback (1=yes)",
         "Fallback",
         cmap="Greys",
-        percentiles=(0, 100),
+        percentiles=(0, 100)
     )
 
     fig2.suptitle(
-        "Linearity fit reliability | "
+        "Linearity correction and fit quality | "
         f"fallback {fallback.mean():.1%}",
-        fontsize=14,
+        fontsize=14
     )
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------
     # Save figures
-    # ------------------------------------------------------------
+    # --------------------------------------------------
 
     if save_prefix is not None:
 
@@ -2723,27 +2721,24 @@ def plot_lin_ref_dia(
         fig1.savefig(
             coeff_path,
             dpi=200,
-            bbox_inches="tight",
+            bbox_inches="tight"
         )
 
         fig2.savefig(
             reliability_path,
             dpi=200,
-            bbox_inches="tight",
+            bbox_inches="tight"
         )
 
         print("\nLinearity diagnostic plots saved:")
         print(f"  Coefficients : {coeff_path}")
         print(f"  Reliability  : {reliability_path}")
 
-    # ------------------------------------------------------------
-    # Display or close figures
-    # ------------------------------------------------------------
-
     if show:
         plt.show()
 
     return fig1, fig2
+
 
 
 def plot_linearity_ramp_validation(
@@ -3254,6 +3249,391 @@ def plot_linearity_ramp_validation(
     return fig, ax
 
 
+
+def diagnose_linearity_chisq(
+    results,
+    ramps,
+    readnoise,
+    gain=1.0,
+    output_dir=None,
+    filename="linearity_chisq_diagnostic.png",
+    sample_read=10,
+    show=False,
+):
+    """
+    Diagnose reduced chi-square across the full detector.
+
+    Uses saved linearity fit products. Does not refit pixels.
+
+    Parameters
+    ----------
+    results : dict
+        Output from run_linearity_calibration().
+    ramps : ndarray
+        Shape (nramps, nreads, ny, nx), in DN.
+    readnoise : float or ndarray
+        Read noise supplied to the linearity fit.
+        The fitting code expects electrons.
+    gain : float or ndarray
+        Gain supplied to the fit, electrons/DN.
+    output_dir : str or Path, optional
+        Directory for the diagnostic PNG.
+    sample_read : int
+        Read index for an illustrative signal/noise estimate.
+        This is not the actual per-sample fit variance.
+    show : bool
+        Display the figure.
+
+    Returns
+    -------
+    diagnostics : dict
+        Summary statistics and diagnostic maps.
+    """
+    out = results.get("OUTPUTS", results)
+
+    success = np.asarray(out["SUCCESS"], dtype=bool)
+    red = np.asarray(out["REDCHISQ"], dtype=float)
+    chisq = np.asarray(out["CHISQ"], dtype=float)
+    dof = np.asarray(out["DOF"], dtype=float)
+    nvalid = np.asarray(out["NVALID"], dtype=float)
+    rms = np.asarray(out["RESIDUAL_RMS"], dtype=float)
+
+    shape = success.shape
+
+    for name, arr in [
+        ("REDCHISQ", red),
+        ("CHISQ", chisq),
+        ("DOF", dof),
+        ("NVALID", nvalid),
+        ("RESIDUAL_RMS", rms),
+    ]:
+        if arr.shape != shape:
+            raise ValueError(
+                f"{name}: expected {shape}, got {arr.shape}"
+            )
+
+    ramps = np.asarray(ramps)
+    if ramps.ndim != 4 or ramps.shape[-2:] != shape:
+        raise ValueError(
+            "ramps must have shape (nramps, nreads, ny, nx)"
+        )
+
+    nr, nt, ny, nx = ramps.shape
+    if not 0 <= sample_read < nt:
+        raise ValueError("sample_read is out of bounds")
+
+    def as_map(value, name):
+        a = np.asarray(value, dtype=float)
+        if a.ndim == 0:
+            return np.full(shape, float(a))
+        if a.shape != shape:
+            raise ValueError(
+                f"{name}: expected scalar or {shape}"
+            )
+        return a
+
+    gain_map = as_map(gain, "gain")
+    rn_map = as_map(readnoise, "readnoise")
+
+    # --------------------------------------------------
+    # 1. Check saved chi-square consistency
+    # --------------------------------------------------
+    valid = (
+        success
+        & np.isfinite(red)
+        & np.isfinite(chisq)
+        & np.isfinite(dof)
+        & np.isfinite(rms)
+        & (dof > 0)
+        & (red >= 0)
+        & (rms >= 0)
+    )
+
+    if not np.any(valid):
+        raise ValueError(
+            "No successful pixels with valid fit statistics"
+        )
+
+    expected_red = np.full(shape, np.nan)
+    np.divide(
+        chisq, dof,
+        out=expected_red,
+        where=dof > 0,
+    )
+
+    red_difference = np.full(shape, np.nan)
+    red_difference[valid] = (
+        red[valid] - expected_red[valid]
+    )
+
+    # --------------------------------------------------
+    # 2. Effective uncertainty inferred from
+    #    residual RMS and reduced chi-square
+    # --------------------------------------------------
+    # Approximation:
+    # redchisq ~ RMS^2 / sigma_eff^2
+    #
+    # Corrects for NVALID/DOF because RMS is
+    # normalized by NVALID, not DOF.
+    #
+    # sigma_eff is an inferred effective scale,
+    # not the actual sample-by-sample uncertainty.
+
+    sigma_eff = np.full(shape, np.nan)
+
+    positive = (
+        valid
+        & (red > 0)
+        & (nvalid > 0)
+    )
+
+    sigma_eff[positive] = (
+        rms[positive]
+        * np.sqrt(
+            nvalid[positive]
+            / (red[positive] * dof[positive])
+        )
+    )
+
+    # --------------------------------------------------
+    # 3. Illustrative variance at one read
+    # --------------------------------------------------
+    # Estimate pedestal from first two reads.
+    # This is an illustrative comparison, not an
+    # exact reconstruction of the fitting mask.
+
+    n_ped = min(2, nt)
+    pedestal = np.median(
+        np.asarray(ramps[0, :n_ped], dtype=float),
+        axis=0,
+    )
+
+    signal = (
+        np.asarray(ramps[0, sample_read], dtype=float)
+        - pedestal
+    )
+
+    with np.errstate(
+        divide="ignore",
+        invalid="ignore",
+    ):
+        rn_variance = (rn_map / gain_map) ** 2
+        photon_variance = (
+            np.maximum(signal, 0.0) / gain_map
+        )
+        predicted_sigma = np.sqrt(
+            rn_variance + photon_variance
+        )
+
+    predicted_sigma[~np.isfinite(predicted_sigma)] = np.nan
+
+    # --------------------------------------------------
+    # 4. Summary
+    # --------------------------------------------------
+    def stats(label, values, mask=valid):
+        selected = np.asarray(values)[mask]
+        selected = selected[np.isfinite(selected)]
+
+        if selected.size == 0:
+            print(f"{label}: no finite values")
+            return np.nan
+
+        median = np.median(selected)
+        p16, p84 = np.percentile(selected, [16, 84])
+
+        print(
+            f"{label:<33s} "
+            f"median={median:.5g} "
+            f"P16={p16:.5g} "
+            f"P84={p84:.5g}"
+        )
+        return median
+
+    print("\n" + "=" * 75)
+    print("FULL-DETECTOR LINEARITY CHI-SQUARE DIAGNOSTICS")
+    print("=" * 75)
+
+    print(f"Ramps: {nr}, reads per ramp: {nt}")
+    print(f"Detector shape: {shape}")
+    print(
+        f"Successful pixels: {np.count_nonzero(success)} "
+        f"({100*np.mean(success):.2f}%)"
+    )
+    print(
+        f"Valid diagnostic pixels: "
+        f"{np.count_nonzero(valid)}"
+    )
+
+    print("\nFit statistics")
+    print("-" * 75)
+
+    stats("Reduced chi-square", red)
+    stats("Chi-square", chisq)
+    stats("Degrees of freedom", dof)
+    stats("Valid samples", nvalid)
+    stats("Residual RMS [DN]", rms)
+
+    stats(
+        "Max abs chi-square inconsistency",
+        np.abs(red_difference),
+    )
+
+    print("\nNoise-scale comparison")
+    print("-" * 75)
+
+    stats("Inferred effective sigma [DN]", sigma_eff)
+    stats("Predicted sigma [DN]", predicted_sigma)
+    stats(
+        "Read-noise sigma [DN]",
+        np.sqrt(rn_variance),
+    )
+    stats(
+        "Photon-noise sigma [DN]",
+        np.sqrt(photon_variance),
+    )
+
+    with np.errstate(
+        divide="ignore",
+        invalid="ignore",
+    ):
+        rms_to_predicted = rms / predicted_sigma
+        effective_to_predicted = (
+            sigma_eff / predicted_sigma
+        )
+
+    stats("RMS / predicted sigma", rms_to_predicted)
+    stats(
+        "Inferred / predicted sigma",
+        effective_to_predicted,
+    )
+
+    # --------------------------------------------------
+    # 5. Diagnostic plots
+    # --------------------------------------------------
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(17, 10),
+        constrained_layout=True,
+    )
+
+    def show_map(ax, data, title, label, log=False):
+        arr = np.where(valid, data, np.nan)
+        values = arr[
+            np.isfinite(arr) & (arr > 0)
+        ] if log else arr[np.isfinite(arr)]
+
+        if values.size:
+            lo, hi = np.percentile(values, [2, 98])
+            if hi <= lo:
+                hi = lo + max(abs(lo) * 0.01, 1e-8)
+        else:
+            lo, hi = (1e-8, 1.0) if log else (0, 1)
+
+        if log:
+            im = ax.imshow(
+                np.ma.masked_invalid(
+                    np.where(arr > 0, arr, np.nan)
+                ),
+                origin="lower",
+                cmap="viridis",
+                norm=LogNorm(
+                    vmin=max(lo, 1e-12),
+                    vmax=max(hi, max(lo, 1e-12)*1.01),
+                ),
+            )
+        else:
+            im = ax.imshow(
+                np.ma.masked_invalid(arr),
+                origin="lower",
+                cmap="viridis",
+                vmin=lo,
+                vmax=hi,
+            )
+
+        ax.set_title(title)
+        ax.set_xlabel("Column")
+        ax.set_ylabel("Row")
+        fig.colorbar(im, ax=ax, label=label, shrink=0.8)
+
+    show_map(
+        axes[0, 0], red,
+        "Reduced chi-square", "Reduced chi-square",
+        log=True,
+    )
+    show_map(
+        axes[0, 1], rms,
+        "Residual RMS", "DN",
+    )
+    show_map(
+        axes[0, 2], sigma_eff,
+        "Inferred effective noise scale", "DN",
+    )
+    show_map(
+        axes[1, 0], predicted_sigma,
+        f"Predicted noise at read {sample_read}", "DN",
+    )
+    show_map(
+        axes[1, 1], rms_to_predicted,
+        "Residual RMS / predicted noise", "Ratio",
+    )
+
+    ax = axes[1, 2]
+    vals = red[valid]
+    vals = vals[np.isfinite(vals) & (vals > 0)]
+
+    if vals.size:
+        ax.hist(
+            np.log10(vals),
+            bins=80,
+            histtype="step",
+            linewidth=1.5,
+        )
+        ax.axvline(
+            0,
+            linestyle="--",
+            color="black",
+            label="Reduced chi-square = 1",
+        )
+        ax.axvline(
+            np.log10(np.median(vals)),
+            linestyle=":",
+            color="red",
+            label=f"Median = {np.median(vals):.4g}",
+        )
+        ax.legend()
+
+    ax.set_xlabel("log10(reduced chi-square)")
+    ax.set_ylabel("Number of pixels")
+    ax.set_title("Reduced chi-square distribution")
+    ax.grid(alpha=0.2)
+
+    fig.suptitle(
+        "SCALES linearity: full-detector chi-square diagnostics",
+        fontsize=15,
+    )
+
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        savepath = output_dir / filename
+        fig.savefig(
+            savepath,
+            dpi=180,
+            bbox_inches="tight",
+        )
+        print(f"\nSaved diagnostic: {savepath}")
+
+    if show:
+        plt.show()
+
+    return {
+        "valid_mask": valid,
+        "sigma_effective": sigma_eff,
+        "predicted_sigma": predicted_sigma,
+        "rms_to_predicted": rms_to_predicted,
+        "redchisq_difference": red_difference,
+        "figure": fig,
+    }
 
 
 

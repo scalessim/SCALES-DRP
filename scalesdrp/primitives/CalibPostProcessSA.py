@@ -209,7 +209,17 @@ class CalibPostProcessSA(BasePrimitive):
                     output_dir=plot_dir,
                     save_prefix=f"{lin_filename}_diagnostic_fig2",
                     show=False)
+                diagnostics = linearity_create.diagnose_linearity_chisq(
+                    results=results,
+                    ramps=lin_data,
+                    readnoise=SIG_map,
+                    gain=gain,
+                    output_dir=plot_dir,
+                    filename=f"{lin_filename}_chisq_diagnostic.png",
+                    sample_read=10,
+                    show=False)
 
+                plt.close(diagnostics["figure"])
         #--------------------------------------------------------------------------
         if create_sat:
             saturation_files = scbasic.validate_saturation_inputs(
