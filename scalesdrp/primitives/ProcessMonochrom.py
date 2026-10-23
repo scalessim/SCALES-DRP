@@ -1217,9 +1217,6 @@ class ProcessMonochrom(BasePrimitive):
         ####need to create proper array of model and residual thumbnails organized like the spot array!!!!
         for ll in range(len(spots)):
             combined = self.build_oversampled(ll, centroids, spots, nx, ny, oversamp, npix=npix)
-            #plt.imshow(combined)
-            #plt.colorbar()
-            #plt.show()
             fwhm_x = self.halfmax_fwhm_x(combined, oversamp)
             print("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
             raws, models, residuals, scales, models_stampsize, residuals_stampsize = self.downsample_model_and_residuals(combined, spots, centroids, oversamp, ll, npix=npix)
@@ -2107,7 +2104,7 @@ class ProcessMonochrom(BasePrimitive):
 
     def _perform(self):
 
-        
+
         output_dir = self.config.instrument.output_directory
         plot_dir = self.config.instrument.plot_directory
         package = __name__.split('.')[0]
@@ -2118,7 +2115,7 @@ class ProcessMonochrom(BasePrimitive):
         if not create_rectmat:
             self.logger.info("Skipping rectification matrix generation.")
             return self.action.args
-        
+
         self.logger.info("############ started Processing Monochromator Images #############")
         df = fits_headers_to_dataframe(output_dir,pattern="*mcalunit.fits")
         if not df.empty:
@@ -2131,7 +2128,7 @@ class ProcessMonochrom(BasePrimitive):
             self.logger.info(f"Updated IFSMODE values: {df['IFSMODE'].tolist()}")
         self.logger.info(f"Searching monochromator calibration files in: {output_dir}")
         self.logger.info(f"Number of matching files: {len(df)}")
-        
+
         for scmode in ['LowRes-KLM','LowRes-K','LowRes-L',
                        'LowRes-M','LowRes-KL','LowRes-Ls',
                        'MedRes-K','MedRes-L','MedRes-M']:
@@ -2305,10 +2302,10 @@ class ProcessMonochrom(BasePrimitive):
                                 scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd)
                 pyfits.writeto(output_dir+'/'+scmode+'_intp_lams.fits',
                     lams_interp,overwrite=True)
-            
+
             log_string = ProcessMonochrom.__module__
             self.logger.info(log_string)
         self.logger.info("+++++++++++++ Succesfully created and saved the rectification matrix")
         self.logger.info("####################### Calibration files associated with all the input files are created :)")
-        
+
         return self.action.args
