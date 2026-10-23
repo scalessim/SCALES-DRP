@@ -2072,7 +2072,7 @@ def ramp_fit(
     # ================================================================
     # Helper: OLS chi-square
     # ================================================================
-    
+
     def _ols_chisq_row(
         reads_row,
         valid_row,
@@ -3192,17 +3192,17 @@ def select_ifsmode(modslnam, dsprsnam, filtername=None):
 
     ifsmode_map = {
         # Medium-resolution modes
-        ("MedRes", "K-grating"): "MedRes-K",
-        ("MedRes", "L-grating"): "MedRes-L",
-        ("MedRes", "M-grating"): "MedRes-M",
+        ("MedRes", "K-Grating"): "MedRes-K",
+        ("MedRes", "L-Grating"): "MedRes-L",
+        ("MedRes", "M-Grating"): "MedRes-M",
 
         # Low-resolution modes
-        ("LowRes", "K-prism"):   "LowRes-K",
-        ("LowRes", "KL-prism"):  "LowRes-KL",
-        ("LowRes", "KLM-prism"): "LowRes-KLM",
-        ("LowRes", "Ls-prism"):  "LowRes-Ls",
-        ("LowRes", "L-prism"):   "LowRes-L",
-        ("LowRes", "M-prism"):   "LowRes-M",
+        ("LowRes", "K-Prism"):   "LowRes-K",
+        ("LowRes", "KL-Prism"):  "LowRes-KL",
+        ("LowRes", "KLM-Prism"): "LowRes-KLM",
+        ("LowRes", "Ls-Prism"):  "LowRes-Ls",
+        ("LowRes", "L-Prism"):   "LowRes-L",
+        ("LowRes", "M-Prism"):   "LowRes-M",
     }
 
     modslnam = str(modslnam).strip()
