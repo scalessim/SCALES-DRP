@@ -6537,7 +6537,7 @@ def plot_linearity_correction_diagnostics(
     applied_mask,
     output_dir="plots",
     save_prefix="linearity",
-    skip_initial_reads=2,
+    skip_initial_reads=0,
     minimum_signal_dn=0.0,
     show=False,
 ):
@@ -6799,7 +6799,7 @@ def plot_good_reads_for_ramp_fitting(
     good_read_mask,
     output_dir="plots",
     save_prefix="ramp_quality",
-    skip_initial_reads=2,
+    skip_initial_reads=0,
     show=False,
 ):
     """
