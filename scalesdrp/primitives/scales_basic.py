@@ -6408,7 +6408,7 @@ def plot_read_correction_comparison(
 def plot_linearity_saturation_diagnostics(
     raw_cube, corrected_cube, saturation_mask, applied_mask, good_read_mask,
     *, output_dir="linearity_plots", save_prefix="linearity_diagnostic",
-    skip_initial_reads=2, minimum_signal_dn=0.0, dpi=180, show=False,
+    skip_initial_reads=0, minimum_signal_dn=0.0, dpi=180, show=False,
 ):
     """Plot 2x2 detector maps of correction and ramp-fitting read availability.
 
