@@ -549,9 +549,9 @@ class ProcessMonochrom(BasePrimitive):
                              medres=False,exclude_lcent=False):
         trace_shape, trace_shape_pct, full_posns = self.measure_trace_shape(spot_tracks_u, lams, lmin, lmax)
         lcent_ind = int(np.argmin(np.abs(lams - 0.5 * (lmin + lmax))))
-        avgs = np.zeros((len(tracks), 2))
+        avgs = np.zeros((len(spot_tracks_u), 2))
         for j in range(len(spot_tracks_u)):
-            t = spot_tracks[j]
+            t = spot_tracks_u[j]
             if lcent_ind in t and not exclude_lcent:
                 avgs[j] = t[lcent_ind][:2]
                 continue
@@ -2204,7 +2204,7 @@ class ProcessMonochrom(BasePrimitive):
                     spot_tracks = self.track_sequentially(spots, max_match_distance=13)
                     self.logger.info("removing duplicates and silos")
                     spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,lmin=self.lmin,lmax=self.lmax,medres=True)
-                    avgs = self.find_avg_spotpos(spot_tracks_u,self.lmin,self.lmax,medres=True,show_plots=False)
+                    avgs = self.find_avg_spotpos_model(spot_tracks_u,self.lmin,self.lmax,medres=True,show_plots=False)
                     avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=True,show_plots=False)
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_medres_lensarr_xy(avgs_new,show_plots=False)
