@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import median_filter, gaussian_filter, shift
 from skimage.feature import peak_local_max
 from scipy.ndimage import gaussian_filter
-from scipy.spatial import KDTree
+from scipy.spatial import KDTree, cKDTree
 from astropy.modeling.functional_models import Gaussian2D, Const2D
 from astropy.modeling import fitting
 from scalesdrp.core.scales_proctab import Proctab
@@ -605,6 +605,101 @@ class ProcessMonochrom(BasePrimitive):
             #plt.show()
         return avgs
 
+
+    def fit_lensarr_xy(self, avgs, spot_tracks, lams, 
+                       deg=2, conf=0.25, fit_min_len=None):
+        """Assign grid indices from a fitted lattice. 
+           Returns final_posns and diagnostics.
+           The lattice is fitted only to tracks with at least fit_min_len
+            wavelengths (default nlams // 4):
+        """
+        pts_all = np.asarray(avgs, float)
+        lens = np.array([len(spot_tracks[k]) for k in range(len(pts_all))])
+        nl = len(lams)
+
+        fit_min_len = max(1, nl // 4) if fit_min_len is None else fit_min_len
+        use = lens >= fit_min_len
+        pts = pts_all[use]
+
+        # Find nearest neighbors of every spot - within 30 pixels, up to 7
+        d, j = cKDTree(pts).query(pts, k=7, distance_upper_bound=30)
+
+        # Calculate offests between each point and its neighbors
+        offs = np.concatenate([pts[j[:, m][np.isfinite(d[:, m])]] - pts[np.isfinite(d[:, m])] for m in range(1, 7)])
+        
+        # Spot positions are whole pixels, so a median offset would round the pitch (e.g. 20 instead
+        # of 20.4) and the index would drift by a full row ~50 lenslets from the start point. Use a
+        # clipped mean so the lattice vectors keep their sub-pixel value.
+        def clipped_mean(v):
+            m = np.median(v, axis=0)
+            return v[np.all(np.abs(v - m) < 3, axis=1)].mean(axis=0)
+
+        
+        a = clipped_mean(offs[(offs[:, 0] > 10) & (np.abs(offs[:, 1]) < 10)])   # +x neighbour
+        b = clipped_mean(offs[(offs[:, 1] > 10) & (np.abs(offs[:, 0]) < 10)])   # +y neighbour
+
+        # Find the lenslet closest to the center of the array
+        p0 = pts[np.argmin(np.hypot(*(pts - np.median(pts, axis=0)).T))]
+
+        # Measure every lenslet's distance from the center in grid steps
+        frac_idx = (pts - p0) @ np.linalg.inv(np.array([a, b]))      # (x_index, y_index), unrounded
+
+        def design(p, deg):
+            x, y = ((p - 1024) / 1024).T #get fractional difference between pixel positions and center of detector
+
+            #build detector polynomial
+            cols = [np.ones_like(x)] + [x ** i * y ** (k - i) for k in range(1, deg + 1) for i in range(k + 1)]
+            return np.column_stack(cols)
+
+
+
+        r = np.hypot(*(pts - p0).T) #fitted distance from central lenslet
+
+        #assign lenslet indices iteratively using a polynomial fit that starts as linear and ends as quadratic
+        for radius, dg in [(r_, 1 if r_ < 500 else deg) for r_ in range(200, 3001, 100)] + [(3000, deg)]:
+            n = np.round(frac_idx) #rounded indices
+
+            #get spots within 0.25 of a fitted lenslet position, within a fixed radius of the central lenslet
+            good = np.all(np.abs(frac_idx - n) < conf, axis=1) & (r < radius) 
+
+            #get detector polynomial terms for desired degree (based on radius)
+            A = design(pts, dg)
+
+            #find coefficients by fitting a dg-degree polynomial to the lenslet grid indices
+            coef = np.linalg.lstsq(A[good], n[good], rcond=None)[0]
+            frac_idx = A @ coef
+
+        pts = pts_all                                                # now assign every track
+        frac_idx = design(pts, deg) @ coef #final grid of lenslet positions
+        n = np.round(frac_idx).astype(int) #integer grid of lenslet positions
+        frac = frac_idx - n #how far each lenslet is from an integer position
+
+        # Resolve cells claimed by more than one track
+        order = np.lexsort((np.abs(frac).max(axis=1), -lens))       # longest first, then closest to grid
+        owner, losers = {}, []
+        for k in order:
+            cell = (n[k, 0], n[k, 1])
+            if cell in owner:
+                losers.append(k)
+            else:
+                owner[cell] = k
+
+        n -= n.min(axis=0)
+        nx_, ny_ = n.max(axis=0) + 1
+        print(f'NOTE: fitted grid (before dropping spurious tracks) is {ny_} x {nx_}')
+
+        
+        fp = np.full((ny_, nx_, 3), np.nan)
+        for k in owner.values():
+            fp[n[k, 1], n[k, 0]] = [n[k, 0], n[k, 1], k]
+        
+        #create function to return predicted lenslet positions based on pixel position on the detector
+        to_index = lambda p: design(np.atleast_2d(np.asarray(p, float)), deg) @ coef   # pixel -> unrounded index
+        return fp, dict(a=a, b=b, frac=frac, losers=np.array(losers, int), lens=lens, to_index=to_index,
+                        n_fit=int(use.sum()), fit_min_len=fit_min_len)
+
+    
+    
     def get_lensarr_xy(self,avgs,maxdist=15,show_plots=False):
         """
         Function to take clean array of spot positions and
@@ -2191,7 +2286,8 @@ class ProcessMonochrom(BasePrimitive):
                     #avgs = self.find_avg_spotpos(spot_tracks_u,self.lmin,self.lmax,medres=False,show_plots=False)
                     avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=False)
                     self.logger.info("registering lenslets to array")
-                    final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
+                    final_posns, fitinfo = self.fit_lensarr_xy(avgs_new, tracks_new, lams)
+                    #final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
                     fluxcut = self.config.instrument.rectmat_fluxcut
                     posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
                     pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
