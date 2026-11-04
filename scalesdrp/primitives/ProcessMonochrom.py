@@ -534,7 +534,39 @@ class ProcessMonochrom(BasePrimitive):
 
         return avgs_new,tracks_new
 
-    def find_avg_spotpos(self,spot_tracks_u,lmin,lmax,chx=1,chy=1,medres=False,mfilt='imgK',show_plots=False):
+
+    def measure_trace_shape(self,spot_tracks_u,lams,lmin,lmax):
+        nlams = len(lams)
+        lcent_ind = int(np.argmin(np.abs(lams - 0.5 * (lmin + lmax))))
+        traces_filled = [trace for trace in spot_tracks_u.values()
+                         if len(trace)==nlams]
+        posns = np.array([[trace[k][:2] for k in range(nlams)] 
+                          for trace in traces_filled], dtype=float) 
+        offsets = posns - posns[:, lcent_ind:lcent_ind + 1]
+        return np.median(offsets, axis=0), np.percentile(offsets, [16, 84], axis=0), posns
+
+    def find_avg_spotpos_obs(self,spot_tracks_u,lams,lmin,lmax,
+                             medres=False,exclude_lcent=False):
+        trace_shape, trace_shape_pct, full_posns = self.measure_trace_shape(spot_tracks_u, lams, lmin, lmax)
+        lcent_ind = int(np.argmin(np.abs(lams - 0.5 * (lmin + lmax))))
+        avgs = np.zeros((len(tracks), 2))
+        for j in range(len(spot_tracks_u)):
+            t = spot_tracks[j]
+            if lcent_ind in t and not exclude_lcent:
+                avgs[j] = t[lcent_ind][:2]
+                continue
+            ks = np.array([k for k in sorted(t) if not (exclude_lcent and k == lcent_ind)])
+            if len(ks) == 0:
+                avgs[j] = np.nan
+                continue
+            p = np.array([t[k][:2] for k in ks], dtype=float)
+            avgs[j] = np.median(p - trace_shape[ks], axis=0)
+        return avgs
+    
+    def find_avg_spotpos_model(self,spot_tracks_u,lmin,lmax,chx=1,chy=1,medres=False,mfilt='imgK',show_plots=False):
+        ### uses model of the trace starting at first wavelength
+        ### to predict each trace based on the spot tracks
+        ### and then get x,y position of central wavelength in the trace
         avgs = []
         for j in range(len(spot_tracks_u)):
             keys = list(spot_tracks_u[j].keys())
@@ -2155,7 +2187,8 @@ class ProcessMonochrom(BasePrimitive):
                     self.logger.info("removing duplicates and silos")
                     spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,
                                                 lmin=self.lmin,lmax=self.lmax,medres=False)
-                    avgs = self.find_avg_spotpos(spot_tracks_u,self.lmin,self.lmax,medres=False,show_plots=False)
+                    avgs = self.find_avg_spotpos_obs(spot_tracks_u,lams,self.lmin,self.lmax)
+                    #avgs = self.find_avg_spotpos(spot_tracks_u,self.lmin,self.lmax,medres=False,show_plots=False)
                     avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=False)
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
