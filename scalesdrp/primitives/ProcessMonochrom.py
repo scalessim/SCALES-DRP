@@ -887,6 +887,50 @@ class ProcessMonochrom(BasePrimitive):
         return final_posns
 
 
+    def assign_spots_to_grid(self, spots, spot_tracks_u, lams, lmin, lmax, to_index, conf=0.15, min_spots=3):
+        """Map every detected spot to a grid cell. Returns final_posns, tracks, mid-band positions, diagnostics."""
+        
+        shape, shape_pct, full_pos = self.measure_trace_shape(spot_tracks_u,lams,lmin,lmax)
+
+        nw = len(spots)
+        W = np.concatenate([np.full(spots[w]['n_spots'], w) for w in range(nw)])
+        P = np.concatenate([spots[w]['coordinates'] for w in range(nw)]).astype(float)
+        I = np.concatenate([spots[w]['intensities'] for w in range(nw)])
+        L = np.concatenate([spots[w]['lam'] for w in range(nw)])
+        u = to_index(P - shape[W])
+        n = np.round(u).astype(int)
+        f = np.abs(u - n).max(axis=1)
+        cells, ncollide = {}, 0
+        for i in np.where(f < conf)[0]:
+            c = cells.setdefault((n[i, 0], n[i, 1]), {})
+            w = W[i]
+            if w in c:
+                ncollide += 1
+                if f[i] >= c[w][1]:
+                    continue
+            c[w] = ((P[i, 0], P[i, 1], I[i], L[i]), f[i])
+        counts = {c: len(d) for c, d in cells.items()}
+        keep = [c for c in cells if counts[c] >= min_spots]
+        nmin = np.min(np.array(keep), axis=0)
+        tracks = {j: {w: v[0] for w, v in sorted(cells[c].items())} for j, c in enumerate(keep)}
+        avgs = np.array([np.median([np.array(t[w][:2]) - shape[w] for w in t], axis=0) for t in tracks.values()])
+        grid_size = 120                       # fixed lenslet-grid size for every LowRes cube
+        keep_arr = np.array(keep)
+        nxg_, nyg_ = keep_arr.max(axis=0) - nmin + 1
+        if nxg_ > grid_size or nyg_ > grid_size:
+            raise ValueError(
+                f'Lenslet grid spans {nyg_} x {nxg_}, larger than the fixed '
+                f'{grid_size} x {grid_size} grid; increase grid_size.')
+        fpos = np.full((grid_size, grid_size, 3), np.nan)
+        off = (grid_size - np.array([nxg_, nyg_])) // 2
+        for j, (cx, cy) in enumerate(keep):
+            fpos[cy - nmin[1] + off[1], cx - nmin[0] + off[0]] = [cx - nmin[0] + off[0], cy - nmin[1] + off[1], j]
+        return fpos, tracks, avgs, dict(f=f, counts=counts, ncollide=ncollide, nspots=len(P),
+                                        cells=np.array(list(counts)), cell_n=np.array(list(counts.values())))
+
+
+
+
     def make_posarr(self,ims_cal,final_posns,spot_tracks_u,medres=False,show_plots=False,cropsize=10,cut=0.01):
         maxy = final_posns.shape[0]
         maxx = final_posns.shape[1]
@@ -2288,6 +2332,8 @@ class ProcessMonochrom(BasePrimitive):
                     self.logger.info("registering lenslets to array")
                     final_posns, fitinfo = self.fit_lensarr_xy(avgs_new, tracks_new, lams)
                     #final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
+                    final_posns, tracks_new, avgs_new, sinfo = self.assign_spots_to_grid(spots, spot_tracks_u, lams, self.lmin, self.lmax, fitinfo['to_index'])
+                    
                     fluxcut = self.config.instrument.rectmat_fluxcut
                     posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
                     pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
