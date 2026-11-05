@@ -929,14 +929,83 @@ class ProcessMonochrom(BasePrimitive):
                                         cells=np.array(list(counts)), cell_n=np.array(list(counts.values())))
 
 
+    def fill_missing_spots(self,ims_cal,tracks_new,lams,lmin,lmax,min_fit_spots=5,fill_missing=True,cropsize=8):
+        trace_shape, trace_shape_pct, full_posns = self.measure_trace_shape(tracks_new, lams, lmin, lmax)
+        
+        def fit_lenslet_traces(tracks, shape, min_fit=5):
+            """Per lenslet and axis, fit pos(w) = c + s*shape[w] to its detected spots. Returns c, s of shape (n, 2)."""
+            n = len(tracks)
+            c, s = np.zeros((n, 2)), np.ones((n, 2))
+            for j in range(n):
+                ws = np.array(sorted(tracks[j]))
+                p = np.array([tracks[j][w][:2] for w in ws], float)
+                for ax in range(2):
+                    sh = shape[ws, ax]
+                    if len(ws) >= min_fit and np.ptp(sh) > 5:
+                        s[j, ax], c[j, ax] = np.polyfit(sh, p[:, ax], 1)
+                    else:
+                        c[j, ax] = np.median(p[:, ax] - sh)
+            return c, s
 
+        def smoothed_value(im, x, y, sigma=1.2, half=6):
+            xi, yi = int(round(x)), int(round(y))
+            st_ = im[max(yi - half, 0):yi + half + 1, max(xi - half, 0):xi + half + 1]
+            sm = gaussian_filter(st_, sigma)
+            return sm[yi - max(yi - half, 0), xi - max(xi - half, 0)]
+
+        trc_c, trc_s = fit_lenslet_traces(tracks_new, trace_shape, min_fit_spots)
+        print(f'trace stretch s: x median {np.median(trc_s[:, 0]):.3f} (16-84%: {np.percentile(trc_s[:, 0], 16):.3f}-'
+          f'{np.percentile(trc_s[:, 0], 84):.3f}), y median {np.median(trc_s[:, 1]):.3f} '
+          f'({np.percentile(trc_s[:, 1], 16):.3f}-{np.percentile(trc_s[:, 1], 84):.3f})')
+
+        rng = np.random.default_rng(0)
+        errs = {'per-lenslet c + s*shape': [], 'global shape (s=1)': []}
+        for j in rng.choice(len(tracks_new), 3000):
+            t = tracks_new[j]
+            if len(t) < min_fit_spots + 1:
+                continue
+            w0 = rng.choice(list(t))
+            rest = {w: v for w, v in t.items() if w != w0}
+            c1, s1 = fit_lenslet_traces({0: rest}, trace_shape, min_fit_spots)
+            truth = np.array(t[w0][:2])
+            errs['per-lenslet c + s*shape'].append(np.hypot(*(c1[0] + s1[0] * trace_shape[w0] - truth)))
+            p = np.array([v[:2] for v in rest.values()], float) - trace_shape[list(rest)]
+            errs['global shape (s=1)'].append(np.hypot(*(np.median(p, axis=0) + trace_shape[w0] - truth)))
+        for k, e in errs.items():
+            print(f'leave-one-out position error, {k:24s}: median {np.median(e):.2f} px, 90th {np.percentile(e, 90):.2f}, '
+                f'max {np.max(e):.2f}')
+
+        filled_set = {}      # (lenslet, w) -> 'gap' (inside its detected range) or 'edge' (outside it)
+        n_off = 0
+        if fill_missing:
+            half = cropsize / 2
+            for j in range(len(tracks_new)):
+                t = tracks_new[j]
+                wlo, whi = min(t), max(t)
+                for w in range(len(lams)):
+                    if w in t:
+                        continue
+                    x, y = trc_c[j] + trc_s[j] * trace_shape[w]
+                    # make_posarr crops [int(x - half), int(x + half)); int() truncates toward zero, so the
+                    # crop is only full-size when x - half >= 0 (not just int(x - half) >= 0)
+                    if x - half < 0 or int(x + half) > ims_cal.shape[2] or y - half < 0 or int(y + half) > ims_cal.shape[1]:
+                        n_off += 1
+                        continue
+                    t[w] = (x, y, smoothed_value(ims_cal[w], x, y), lams[w])
+                    filled_set[(j, w)] = 'gap' if wlo < w < whi else 'edge'
+                tracks_new[j] = dict(sorted(t.items()))
+            kinds = np.array(list(filled_set.values()))
+            print(f'filled {len(filled_set)} spots ({(kinds == "gap").sum()} gap, {(kinds == "edge").sum()} edge); '
+                f'{n_off} predicted crops off the detector were left empty')
+
+        return tracks_new, filled_set, kinds
 
     def make_posarr(self,ims_cal,final_posns,spot_tracks_u,medres=False,show_plots=False,cropsize=10,cut=0.01):
         maxy = final_posns.shape[0]
         maxx = final_posns.shape[1]
         if medres==False:
-            sizex = 112
-            sizey = 112
+            sizex = 120
+            sizey = 120
             diffx = sizex-maxx
             diffy = sizey-maxy
         if medres==True:
@@ -2193,54 +2262,42 @@ class ProcessMonochrom(BasePrimitive):
 
 
     def set_lamlimits(self,scmode):
+        if scmode.split('-')[0][:6]=='LowRes':
+            self.nx = 120
+            self.ny = 120
+        if scmode.split('-')[0][:6]=='MedRes':
+            self.nx = 18
+            self.ny = 17
         if scmode == "LowRes-KLM":
             self.lmin = 2.0
             self.lmax = 5.2
-            self.nx = 112
-            self.ny = 112
         if scmode == 'LowRes-K':
             self.lmin = 1.95
             self.lmax = 2.45
-            self.nx = 112
-            self.ny = 112
         if scmode == 'MedRes-K':
             self.lmin = 1.95
             self.lmax = 2.45
             self.mfilt = 'imgK'
             self.lmin_i = 2.02
             self.lmax_i = 2.38
-            self.nx = 18
-            self.ny = 17
         if scmode == 'LowRes-L':
             self.lmin = 2.9
             self.lmax = 4.15
-            self.nx = 112
-            self.ny = 112
         if scmode == 'MedRes-L':
             self.lmin = 2.9
             self.lmax = 4.15
-            self.nx = 18
-            self.ny = 17
         if scmode == 'LowRes-M':
             self.lmin = 4.5
             self.lmax = 5.2
-            self.nx = 112
-            self.ny = 112
         if scmode == 'MedRes-M':
             self.lmin = 4.5
             self.lmax = 5.2
-            self.nx = 18
-            self.ny = 17
         if scmode == 'LowRes-KL':
             self.lmin = 2.0
             self.lmax = 4.0
-            self.nx = 112
-            self.ny = 112
         if scmode == 'LowRes-Ls':
             self.lmin = 3.1
             self.lmax = 3.5
-            self.nx = 112
-            self.ny = 112
 
         return
 
@@ -2333,6 +2390,8 @@ class ProcessMonochrom(BasePrimitive):
                     final_posns, fitinfo = self.fit_lensarr_xy(avgs_new, tracks_new, lams)
                     #final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
                     final_posns, tracks_new, avgs_new, sinfo = self.assign_spots_to_grid(spots, spot_tracks_u, lams, self.lmin, self.lmax, fitinfo['to_index'])
+                    tracks_new, filled_set, kinds = self.fill_missing_spots(ims_cal,tracks_new,lams,self.lmin,self.lmax)
+
                     
                     fluxcut = self.config.instrument.rectmat_fluxcut
                     posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
