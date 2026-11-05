@@ -67,9 +67,6 @@ class SpectralExtractOptimal(BasePrimitive):
             package = __name__.split('.')[0]
             calibfilepath = self.context.calib_file_path
             calib_path = str(get_resource_path(package, calibfilepath))+'/'
-            det_config = self.action.args.ccddata.header['MCLOCK']
-            package = __name__.split('.')[0]
-            det_config = str(det_config).strip()
             modslnam = self.action.args.ccddata.header['MODSLNAM']
             dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
             filter = self.action.args.ccddata.header['FILTER']
@@ -77,21 +74,9 @@ class SpectralExtractOptimal(BasePrimitive):
             filename = self.action.args.ccddata.header.get("OFNAME")
             #print(ifsmode)
 
-            if det_config =='5.0 MHz':  #fast1.0
-                readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
-
-            elif det_config =='9.0 MHz': #fast1.0
-                readnoise  = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
-
-            elif det_config =='20.0 MHz': #slow
-                readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_slow)
-
-            else: #default
-                readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
-
+            # L1 UNCERT is the total per-pixel 1-sigma (read + photon noise);
+            # optimal_extract_horne uses it directly, nothing is added here.
             sigma_image = self.action.args.ccddata.uncertainty
-            var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
-            GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             data_image = self.action.args.ccddata.data
 
             if ifsmode is None:
