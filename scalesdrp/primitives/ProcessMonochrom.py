@@ -1052,6 +1052,83 @@ class ProcessMonochrom(BasePrimitive):
         return posarr, spotim_arr
 
 
+    def drop_lowsnr_spots(self,ims_cal,posarr,final_posns,
+                          filled_set,spotim_arr,
+                          snr_min_gap=5.0,snr_min_edge=5.0):
+
+        # filled mask, using make_posarr's placement of grid cell (i, j) at (i + diffy, j + diffx)
+        filled = np.zeros(posarr.shape[:3], bool)
+        fill_kind = np.full(posarr.shape[:3], '', dtype=object)
+            
+        diffy, diffx = posarr.shape[1] - final_posns.shape[0], posarr.shape[2] - final_posns.shape[1]
+        cell_of = {int(final_posns[i, j, 2]): (i + diffy, j + diffx)
+                for i, j in zip(*np.where(np.isfinite(final_posns[..., 2])))}
+        for (j, w), kind in filled_set.items():
+            iy, ix = cell_of[j]
+            filled[w, iy, ix] = True
+            fill_kind[w, iy, ix] = kind
+
+
+        def spot_snr(ims, posarr, r_in=5, r_out=7):
+            """S/N of every posarr entry, measured on the unclipped images."""
+            snr = np.full(posarr.shape[:3], np.nan)
+            yy, xx = np.mgrid[-r_out:r_out + 1, -r_out:r_out + 1]
+            rr = np.hypot(xx, yy)
+            core = (np.abs(xx) <= 1) & (np.abs(yy) <= 1)
+            ann = (rr >= r_in) & (rr <= r_out)
+            for w in range(len(posarr)):
+                im = np.pad(np.asarray(ims[w], float), r_out, constant_values=np.nan)   # off-detector pixels are NaN
+                iy, ix = np.where(np.isfinite(posarr[w, ..., 0]))
+                xc = np.round(posarr[w, iy, ix, 0]).astype(int) + r_out
+                yc = np.round(posarr[w, iy, ix, 3]).astype(int) + r_out
+                stamps = im[yc[:, None, None] + yy, xc[:, None, None] + xx]     # (n, 15, 15)
+                a = stamps[:, ann]
+                bkg = np.nanmedian(a, axis=1)
+                noise = 1.4826 * np.nanmedian(np.abs(a - bkg[:, None]), axis=1)
+                sig = np.nansum(stamps[:, core], axis=1) - 9 * bkg
+                snr[w, iy, ix] = sig / (3 * np.maximum(noise, 1e-12))
+            return snr
+
+
+        snr = spot_snr(ims_cal, posarr)
+        det = np.isfinite(posarr[..., 0]) & ~filled
+        groups = {'detected': det, 'filled: gap': filled & (fill_kind == 'gap'),
+                'filled: edge': filled & (fill_kind == 'edge')}
+        for k, m in groups.items():
+            v = snr[m & np.isfinite(snr)]
+            if len(v):
+                print(f'{k:30s} n={m.sum():6d}  S/N median {np.median(v):7.1f}  <3: {(v < 3).sum():5d}  <5: {(v < 5).sum():5d}')
+
+        """
+        fig, ax = plt.subplots(1, 3, figsize=(20, 5.5))
+        bins = np.logspace(-1, 3.5, 80)
+        for k, m in groups.items():
+            v = snr[m & np.isfinite(snr)]
+            ax[0].hist(np.clip(v, 0.1, None), bins, histtype='step', lw=2, label=k)
+        for cut_, col_ in [(SNR_MIN_GAP, 'C1'), (SNR_MIN_EDGE, 'C2')]:
+            if cut_ is not None:
+                ax[0].axvline(cut_, c=col_, ls='--')
+        ax[0].set(xscale='log', yscale='log', xlabel='S/N', ylabel='# spots', title='S/N by spot type'); ax[0].legend(fontsize=8)
+        for a, (k, m) in zip(ax[1:], list(groups.items())[1:]):
+            w_, iy, ix = np.where(m)
+            sc = a.scatter(posarr[w_, iy, ix, 0], posarr[w_, iy, ix, 3], c=np.clip(snr[w_, iy, ix], 0, 20), s=3, cmap='viridis')
+            plt.colorbar(sc, ax=a, label='S/N (clipped at 20)'); a.set_aspect('equal'); a.set_title(k)
+            a.set_xlim(0, 2048); a.set_ylim(0, 2048)
+        plt.tight_layout()
+        """
+
+        drop = np.zeros_like(filled)
+        for kind_, cut_ in [('gap', snr_min_gap), ('edge', snr_min_edge)]:
+            if cut_ is not None:
+                d_ = filled & (fill_kind == kind_) & ~(snr >= cut_)
+                print(f'removing {d_.sum()} {kind_} fills with S/N < {cut_} (or unmeasurable)')
+                drop |= d_
+        posarr[drop] = np.nan
+        spotim_arr[drop] = np.nan
+        filled &= ~drop
+        print(f'{filled.sum()} filled spots remain in posarr')
+        return posarr, spotim_arr
+
 
     def adaptive_centroid(
         self,
@@ -2391,10 +2468,11 @@ class ProcessMonochrom(BasePrimitive):
                     #final_posns = self.get_lensarr_xy(avgs_new,maxdist=16,show_plots=False)
                     final_posns, tracks_new, avgs_new, sinfo = self.assign_spots_to_grid(spots, spot_tracks_u, lams, self.lmin, self.lmax, fitinfo['to_index'])
                     tracks_new, filled_set, kinds = self.fill_missing_spots(ims_cal,tracks_new,lams,self.lmin,self.lmax)
-
-                    
                     fluxcut = self.config.instrument.rectmat_fluxcut
                     posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
+                    posarr, spots = self.drop_lowsnr_spots(ims_cal,posarr,final_posns,filled_set,spots)
+                    
+                    
                     pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
                     pyfits.writeto(output_dir+'/'+scmode+'_cropped_spotpsf_arr.fits',np.array(spots),overwrite=True)
 
