@@ -1048,6 +1048,7 @@ def optimal_extract_fast(
     optimized_flux = np.array(R_transpose*np.matrix(data_image.reshape([2048*2048,1])))
     return optimized_flux
 
+
 def solve_bounded_weighted_nnls(
     R_matrix: sp.spmatrix,
     data_vector: np.ndarray,
@@ -1087,13 +1088,134 @@ def solve_bounded_weighted_nnls(
     print(f"Bounded lsq_linear finished in {t:.4f} mins.")
     return res.x
 
+
+def solve_weighted_lsq_per_lenslet(
+    R_matrix: sp.spmatrix,
+    data_vector: np.ndarray,
+    variance_vector: np.ndarray,
+    A_guess: np.ndarray,
+    flux_shape_3d: tuple,
+    bad_pixel_mask: np.ndarray = None,
+    fill_value: float = 0.0,
+    tolerance: float = 1e-10,
+    maxiter: int = 100000,
+    return_diagnostics: bool = False):
+    """
+    Weighted, unbounded linear least squares solved one lenslet at a time.
+
+    Alternative to solve_bounded_weighted_nnls with the same flat
+    (N_fluxes,) output that reshapes to flux_shape_3d. Differences:
+      - no bounds (plain linear least squares, solved with scipy lsmr)
+      - each lenslet's nlam columns of R are fit independently, using only
+        the detector pixels that lenslet touches.
+      - takes the TOTAL per-pixel variance (e.g. the L1 UNCERT plane
+        squared, which already includes read + photon noise); no photon
+        term is added here.
+
+    Column ordering of R matches flux_shape_3d = (nlam, ny, nx)
+    in C order, i.e. column = x + y*nx + lam*nx*ny.
+
+    Args:
+        R_matrix: The (N_pixels, N_fluxes) sparse rectification matrix.
+        data_vector: The (N_pixels,) or (H, W) input data.
+        variance_vector: The (N_pixels,) or (H, W) total 1-sigma variance
+            of each pixel. Pixels with non-finite or <= 0 variance are
+            excluded from the fit.
+        A_guess: Initial guess (N_fluxes,), e.g. from optimal extraction.
+            Used as lsmr's warm start (x0); it changes iteration count,
+            not the converged answer. Pass None to start from zero.
+        flux_shape_3d: (nlam, ny, nx) shape of the output cube.
+        bad_pixel_mask: Optional (N_pixels,) or (H, W) bool, True = exclude.
+        fill_value: Value for lenslets with no usable pixels or that failed.
+        tolerance: lsmr atol/btol.
+        maxiter: lsmr iteration limit per lenslet.
+        return_diagnostics: If True, also return a dict of per-lenslet
+            (ny, nx) arrays: chi2_per_dof, n_dof, istop, n_iters,
+            failed, fail_msg.
+    Returns:
+        Best-fit amplitude vector (N_fluxes,)
+        [, diagnostics dict if return_diagnostics]
+    """
+    from scipy.sparse.linalg import lsmr
+
+    print("\nSolving with per-lenslet weighted linear least squares...")
+    nlam, ny, nx = flux_shape_3d
+    n_flux = nlam * ny * nx
+    if R_matrix.shape[1] != n_flux:
+        raise ValueError(
+            f"R_matrix has {R_matrix.shape[1]} columns but flux_shape_3d "
+            f"{tuple(flux_shape_3d)} implies {n_flux}.")
+
+    data_vector = np.asarray(data_vector, dtype=np.float64).ravel()
+    variance = np.asarray(variance_vector, dtype=np.float64).ravel()
+
+    good = np.isfinite(data_vector) & np.isfinite(variance) & (variance > 0)
+    weights = np.zeros_like(variance)
+    weights[good] = 1.0 / np.sqrt(variance[good])
+    if bad_pixel_mask is not None:
+        good &= ~np.asarray(bad_pixel_mask, dtype=bool).ravel()
+
+    R_csc = R_matrix.tocsc()
+    A_guess_cube = None
+    if A_guess is not None:
+        A_guess_cube = np.nan_to_num(np.asarray(A_guess, dtype=np.float64)
+                                     ).reshape(flux_shape_3d)
+
+    flux_cube = np.full(flux_shape_3d, fill_value, dtype=np.float64)
+    chi2_per_dof = np.full((ny, nx), np.nan)
+    n_dof = np.zeros((ny, nx), dtype=int)
+    istop_arr = np.zeros((ny, nx), dtype=int)
+    n_iters = np.zeros((ny, nx), dtype=int)
+    failed = np.zeros((ny, nx), dtype=bool)
+    fail_msg = np.empty((ny, nx), dtype=object)
+
+    lam_offsets = np.arange(nlam) * (nx * ny)
+    start_time = time.time()
+    for yy in range(ny):
+        for xx in range(nx):
+            cols = xx + yy * nx + lam_offsets
+            R_cut = R_csc[:, cols]
+            # unique: a pixel hit by several wavelength columns of this
+            # lenslet must only count once
+            rows = np.unique(R_cut.indices)
+            rows = rows[good[rows]]
+            if len(rows) == 0:
+                continue
+            try:
+                w = weights[rows]
+                R_fit = sp.diags(w) @ R_cut.tocsr()[rows]
+                d_fit = data_vector[rows] * w
+                x0 = A_guess_cube[:, yy, xx] if A_guess_cube is not None else None
+                x, istop, itn, *_ = lsmr(R_fit, d_fit, x0=x0, atol=tolerance,
+                                         btol=tolerance, maxiter=maxiter)
+                flux_cube[:, yy, xx] = x
+                istop_arr[yy, xx] = istop
+                n_iters[yy, xx] = itn
+                dof = len(rows) - nlam
+                n_dof[yy, xx] = dof
+                if dof > 0:
+                    resid = R_fit @ x - d_fit
+                    chi2_per_dof[yy, xx] = np.sum(resid**2) / dof
+            except Exception as e:
+                failed[yy, xx] = True
+                fail_msg[yy, xx] = f"{type(e).__name__}: {e}"
+
+    t = (time.time() - start_time) / 60.0
+    print(f"Per-lenslet lsmr finished in {t:.4f} mins "
+          f"({failed.sum()} lenslets failed).")
+
+    flux_vector = flux_cube.ravel()
+    if return_diagnostics:
+        diag = dict(chi2_per_dof=chi2_per_dof, n_dof=n_dof, istop=istop_arr,
+                    n_iters=n_iters, failed=failed, fail_msg=fail_msg)
+        return flux_vector, diag
+    return flux_vector
+
     ############### chi sqaure error estimation #########################
 def calculate_error_flux_cube(
     R_matrix: sp.spmatrix,
-    flux_vector_A: np.ndarray,
-    var_read_vector: np.ndarray,
-    flux_shape_3d: tuple,
-    gain: float = 1.0) -> np.ndarray:
+    variance_vector: np.ndarray,
+    flux_shape_3d: tuple) -> np.ndarray:
     """
     This provides a fast and reliable estimate of the standard deviation for each
     flux element from a least-squares fit.
@@ -1102,20 +1224,17 @@ def calculate_error_flux_cube(
     where H is the Hessian matrix H_jj = Σ_i (R_ij^2 / σ_i^2).
     Args:
         R_matrix: The (N_pixels, N_fluxes) sparse rectification matrix.
-        flux_vector_A: The (N_fluxes,) solved flux vector.
-        var_read_vector: The (N_pixels,) vector of read noise variance.
+        variance_vector: The (N_pixels,) or (H, W) total per-pixel variance
+            (e.g. L1 UNCERT squared, which already includes read + photon
+            noise). Non-finite or <= 0 entries are treated as excluded.
         flux_shape_3d: The 3D shape of the final flux cube (e.g., (54, 108, 108)).
-        gain: The detector gain, used for calculating photon noise.
     Returns:
         A 3D NumPy array containing the standard deviation (error) for each flux element.
     """
     print("\nCalculating the error flux cube...")
     start_time = time.time()
-    model_data_vector = R_matrix @ flux_vector_A
-    model_data_vector[model_data_vector < 0] = 0
-    var_photon_vector = model_data_vector / gain
-    total_var_vector = var_read_vector + var_photon_vector
-    total_var_vector[total_var_vector <= 0] = np.inf
+    total_var_vector = np.asarray(variance_vector, dtype=np.float64).ravel().copy()
+    total_var_vector[~np.isfinite(total_var_vector) | (total_var_vector <= 0)] = np.inf
     R_squared = R_matrix.power(2)
     inverse_variance_vector = 1.0 / total_var_vector
     hessian_diagonal = R_squared.T @ inverse_variance_vector
