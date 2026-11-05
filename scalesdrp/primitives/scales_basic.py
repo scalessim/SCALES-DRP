@@ -2066,6 +2066,7 @@ def ramp_fit(
     JUMP_THRESH_ONEOMIT=20.25,
     JUMP_THRESH_TWOOMIT=23.8,
     group_dq=None,
+    gain=1.0,
 ):
     """
     Fit detector ramps and return slope, uncertainty, chi-square,
@@ -2125,6 +2126,11 @@ def ramp_fit(
         The dynamic mask is only applied to a pixel if at least one
         valid read difference remains. Otherwise the unmasked ramp is
         used for that pixel.
+
+    gain : float, optional
+        Detector gain in e-/DN. Sets the photon-noise term of the OLS
+        fallback uncertainty (rate_DN / gain per unit time). Pass None to
+        use read noise only (the old behavior).
 
     Returns
     -------
@@ -2640,7 +2646,8 @@ def ramp_fit(
                     input_read[:, i, :],
                     base_valid[:, i, :],
                     t,
-                    sig_row
+                    sig_row,
+                    gain=gain
                 )
             )
 
@@ -2665,7 +2672,8 @@ def ramp_fit(
                     input_read[:, i, :],
                     base_valid[:, i, :],
                     t,
-                    sig_row
+                    sig_row,
+                    gain=gain
                 )
             )
 
@@ -2839,7 +2847,8 @@ def ramp_fit(
                     input_read[:, i, :],
                     base_valid[:, i, :],
                     t,
-                    sig_row
+                    sig_row,
+                    gain=gain
                 )
             )
 
@@ -2894,7 +2903,8 @@ def ramp_fit(
                     input_read[:, i, :],
                     base_valid[:, i, :],
                     t,
-                    sig_row
+                    sig_row,
+                    gain=gain
                 )
             )
 
@@ -2997,8 +3007,20 @@ FIT_REJECT_BITS = int(FIT_DQ['NO_USABLE_PAIR'] | FIT_DQ['FIT_FAILED']
                       | FIT_DQ['INVALID_NOISE'] | FIT_DQ['PLACEHOLDER'])
 
 
-def _ols_row_and_uncert(reads, valid, t, sig):
-    """OLS on accepted reads; known independent per-read noise sets uncertainty.
+def _ols_row_and_uncert(reads, valid, t, sig, gain=None):
+    """OLS on accepted reads; uncertainty from read noise plus photon noise.
+
+    Read noise: independent per read with 1-sigma `sig` (DN), giving
+        Var_read = sig^2 / leverage.
+    Photon noise: cumulative reads are a Poisson process, so
+        Cov(y_i, y_j) = (rate / gain) * min(t_i, t_j)   [DN^2]
+    and with OLS weights w_i = (t_i - tmean) / leverage (0 for masked reads)
+        Var_phot = (rate / gain) * sum_k (t_k - t_{k-1}) * (sum_{i>=k} w_i)^2.
+    For two reads this reduces to rate / (gain * dt). The fitted slope
+    (clipped at 0) is used as the rate. Pass gain=None to omit photon noise.
+
+    Units: reads and sig in DN, t in s, gain in e-/DN; slope and
+    uncertainty are returned in DN/s.
 
     Returns NaN internally where fewer than two reads/time leverage remain.
     The public fitter converts those failures to flagged finite placeholders.
@@ -3016,7 +3038,20 @@ def _ols_row_and_uncert(reads, valid, t, sig):
     slope = np.full(reads.shape[1], np.nan)
     uncertainty = slope.copy()
     slope[good] = np.sum(np.where(mask, tc * yc, 0.), axis=0)[good] / leverage[good]
-    uncertainty[good] = sig[good] / np.sqrt(leverage[good])
+    var = np.full(reads.shape[1], np.nan)
+    var[good] = sig[good]**2 / leverage[good]
+
+    if gain is not None and np.isfinite(gain) and gain > 0 and len(t) > 1:
+        w = np.zeros(reads.shape, dtype=float)
+        w[:, good] = np.where(mask[:, good], tc[:, good], 0.) / leverage[good]
+        # S_k = sum_{i>=k} w_i for k = 1..N-1 (S_0 = sum w = 0 drops out)
+        tail = np.cumsum(w[::-1], axis=0)[::-1][1:]
+        dt_k = np.diff(np.asarray(t, dtype=float))[:, None]
+        phot_coeff = np.sum(dt_k * tail**2, axis=0)
+        rate = np.clip(slope, 0., None)
+        var[good] += rate[good] / gain * phot_coeff[good]
+
+    uncertainty[good] = np.sqrt(var[good])
     return slope, uncertainty
 
 ######################################################################################
