@@ -976,6 +976,7 @@ class ProcessMonochrom(BasePrimitive):
                 f'max {np.max(e):.2f}')
 
         filled_set = {}      # (lenslet, w) -> 'gap' (inside its detected range) or 'edge' (outside it)
+        kinds = np.array([])
         n_off = 0
         if fill_missing:
             half = cropsize / 2
