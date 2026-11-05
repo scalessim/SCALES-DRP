@@ -88,8 +88,9 @@ class SpectralExtractChi(BasePrimitive):
                 readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
 
             sigma_image = self.action.args.ccddata.uncertainty
-            #print(sigma_image.shape)
-            #var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
+            # L1 UNCERT already includes read + photon noise, so its square is
+            # the total per-pixel variance; nothing else is added downstream.
+            var_total_vector = (sigma_image.array.flatten().astype(np.float64))**2
             GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             data_image = self.action.args.ccddata.data
             data_vector_d = data_image.flatten().astype(np.float64)
@@ -201,21 +202,19 @@ class SpectralExtractChi(BasePrimitive):
                 A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
                 A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
                 
-                A_optimal_nnls = scbasic.solve_bounded_weighted_nnls(
+                A_optimal_nnls = scbasic.solve_weighted_lsq_per_lenslet(
                     R_for_extract,
                     data_vector_d,
-                    var_read_vector,
-                    GAIN,
-                    A_guess_vector)
+                    var_total_vector,
+                    A_guess_vector,
+                    FLUX_SHAPE_3D)
                 
                 Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
                 
                 Amp_chi_square_err = scbasic.calculate_error_flux_cube(
                     R_matrix=R_for_extract,
-                    flux_vector_A=A_optimal_nnls,
-                    var_read_vector=var_read_vector,
-                    flux_shape_3d=FLUX_SHAPE_3D,
-                    gain=GAIN)
+                    variance_vector=var_total_vector,
+                    flux_shape_3d=FLUX_SHAPE_3D)
 
                 if self.config.instrument.apply_lens_flat == True:
                     
