@@ -62,7 +62,7 @@ class RampFit(BasePrimitive):
     def _perform(self):
         imtype = self.action.args.ccddata.header['IMTYPE']
         if imtype =='OBJECT':
-            total_exptime = self.action.args.ccddata.header['EXPTIME']
+            total_exptime = self.action.args.ccddata.header['REXPTIME']
             obsmode = self.action.args.ccddata.header['CAMERA']
             det_config = self.action.args.ccddata.header['MCLOCK']
             filename = self.action.args.ccddata.header.get("OFNAME")
