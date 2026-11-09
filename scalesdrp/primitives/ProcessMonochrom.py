@@ -540,8 +540,8 @@ class ProcessMonochrom(BasePrimitive):
         lcent_ind = int(np.argmin(np.abs(lams - 0.5 * (lmin + lmax))))
         traces_filled = [trace for trace in spot_tracks_u.values()
                          if len(trace)==nlams]
-        posns = np.array([[trace[k][:2] for k in range(nlams)] 
-                          for trace in traces_filled], dtype=float) 
+        posns = np.array([[trace[k][:2] for k in range(nlams)]
+                          for trace in traces_filled], dtype=float)
         offsets = posns - posns[:, lcent_ind:lcent_ind + 1]
         return np.median(offsets, axis=0), np.percentile(offsets, [16, 84], axis=0), posns
 
@@ -562,7 +562,7 @@ class ProcessMonochrom(BasePrimitive):
             p = np.array([t[k][:2] for k in ks], dtype=float)
             avgs[j] = np.median(p - trace_shape[ks], axis=0)
         return avgs
-    
+
     def find_avg_spotpos_model(self,spot_tracks_u,lmin,lmax,chx=1,chy=1,medres=False,mfilt='imgK',show_plots=False):
         ### uses model of the trace starting at first wavelength
         ### to predict each trace based on the spot tracks
@@ -606,9 +606,9 @@ class ProcessMonochrom(BasePrimitive):
         return avgs
 
 
-    def fit_lensarr_xy(self, avgs, spot_tracks, lams, 
+    def fit_lensarr_xy(self, avgs, spot_tracks, lams,
                        deg=2, conf=0.25, fit_min_len=None):
-        """Assign grid indices from a fitted lattice. 
+        """Assign grid indices from a fitted lattice.
            Returns final_posns and diagnostics.
            The lattice is fitted only to tracks with at least fit_min_len
             wavelengths (default nlams // 4):
@@ -626,7 +626,7 @@ class ProcessMonochrom(BasePrimitive):
 
         # Calculate offests between each point and its neighbors
         offs = np.concatenate([pts[j[:, m][np.isfinite(d[:, m])]] - pts[np.isfinite(d[:, m])] for m in range(1, 7)])
-        
+
         # Spot positions are whole pixels, so a median offset would round the pitch (e.g. 20 instead
         # of 20.4) and the index would drift by a full row ~50 lenslets from the start point. Use a
         # clipped mean so the lattice vectors keep their sub-pixel value.
@@ -634,7 +634,7 @@ class ProcessMonochrom(BasePrimitive):
             m = np.median(v, axis=0)
             return v[np.all(np.abs(v - m) < 3, axis=1)].mean(axis=0)
 
-        
+
         a = clipped_mean(offs[(offs[:, 0] > 10) & (np.abs(offs[:, 1]) < 10)])   # +x neighbour
         b = clipped_mean(offs[(offs[:, 1] > 10) & (np.abs(offs[:, 0]) < 10)])   # +y neighbour
 
@@ -660,7 +660,7 @@ class ProcessMonochrom(BasePrimitive):
             n = np.round(frac_idx) #rounded indices
 
             #get spots within 0.25 of a fitted lenslet position, within a fixed radius of the central lenslet
-            good = np.all(np.abs(frac_idx - n) < conf, axis=1) & (r < radius) 
+            good = np.all(np.abs(frac_idx - n) < conf, axis=1) & (r < radius)
 
             #get detector polynomial terms for desired degree (based on radius)
             A = design(pts, dg)
@@ -688,18 +688,18 @@ class ProcessMonochrom(BasePrimitive):
         nx_, ny_ = n.max(axis=0) + 1
         print(f'NOTE: fitted grid (before dropping spurious tracks) is {ny_} x {nx_}')
 
-        
+
         fp = np.full((ny_, nx_, 3), np.nan)
         for k in owner.values():
             fp[n[k, 1], n[k, 0]] = [n[k, 0], n[k, 1], k]
-        
+
         #create function to return predicted lenslet positions based on pixel position on the detector
         to_index = lambda p: design(np.atleast_2d(np.asarray(p, float)), deg) @ coef   # pixel -> unrounded index
         return fp, dict(a=a, b=b, frac=frac, losers=np.array(losers, int), lens=lens, to_index=to_index,
                         n_fit=int(use.sum()), fit_min_len=fit_min_len)
 
-    
-    
+
+
     def get_lensarr_xy(self,avgs,maxdist=15,show_plots=False):
         """
         Function to take clean array of spot positions and
@@ -889,7 +889,7 @@ class ProcessMonochrom(BasePrimitive):
 
     def assign_spots_to_grid(self, spots, spot_tracks_u, lams, lmin, lmax, to_index, conf=0.15, min_spots=3):
         """Map every detected spot to a grid cell. Returns final_posns, tracks, mid-band positions, diagnostics."""
-        
+
         shape, shape_pct, full_pos = self.measure_trace_shape(spot_tracks_u,lams,lmin,lmax)
 
         nw = len(spots)
@@ -931,7 +931,7 @@ class ProcessMonochrom(BasePrimitive):
 
     def fill_missing_spots(self,ims_cal,tracks_new,lams,lmin,lmax,min_fit_spots=5,fill_missing=True,cropsize=8):
         trace_shape, trace_shape_pct, full_posns = self.measure_trace_shape(tracks_new, lams, lmin, lmax)
-        
+
         def fit_lenslet_traces(tracks, shape, min_fit=5):
             """Per lenslet and axis, fit pos(w) = c + s*shape[w] to its detected spots. Returns c, s of shape (n, 2)."""
             n = len(tracks)
@@ -1005,13 +1005,13 @@ class ProcessMonochrom(BasePrimitive):
         maxy = final_posns.shape[0]
         maxx = final_posns.shape[1]
         if medres==False:
-            sizex = 120
-            sizey = 120
+            sizex = self.nx
+            sizey = self.ny
             diffx = sizex-maxx
             diffy = sizey-maxy
         if medres==True:
-            sizex=18
-            sizey=17
+            sizex=self.nx
+            sizey=self.ny
             diffx=0
             diffy=0
 
@@ -1060,7 +1060,7 @@ class ProcessMonochrom(BasePrimitive):
         # filled mask, using make_posarr's placement of grid cell (i, j) at (i + diffy, j + diffx)
         filled = np.zeros(posarr.shape[:3], bool)
         fill_kind = np.full(posarr.shape[:3], '', dtype=object)
-            
+
         diffy, diffx = posarr.shape[1] - final_posns.shape[0], posarr.shape[2] - final_posns.shape[1]
         cell_of = {int(final_posns[i, j, 2]): (i + diffy, j + diffx)
                 for i, j in zip(*np.where(np.isfinite(final_posns[..., 2])))}
@@ -2472,8 +2472,8 @@ class ProcessMonochrom(BasePrimitive):
                     fluxcut = self.config.instrument.rectmat_fluxcut
                     posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
                     posarr, spots = self.drop_lowsnr_spots(ims_cal,posarr,final_posns,filled_set,spots)
-                    
-                    
+
+
                     pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
                     pyfits.writeto(output_dir+'/'+scmode+'_cropped_spotpsf_arr.fits',np.array(spots),overwrite=True)
 
