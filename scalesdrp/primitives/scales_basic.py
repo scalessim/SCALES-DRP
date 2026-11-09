@@ -1089,6 +1089,86 @@ def solve_bounded_weighted_nnls(
     return res.x
 
 
+############### rectmat I/O with cube shape #########################
+N_DET_PIX = 2048 * 2048
+
+
+def _rectmat_n_flux(R_matrix, n_det_pix=N_DET_PIX):
+    """Number of cube voxels in a rectmat of either orientation:
+    C2 is (n_det_pix, n_flux), OPT is (n_flux, n_det_pix)."""
+    if R_matrix.shape[0] == n_det_pix:
+        return R_matrix.shape[1]
+    if R_matrix.shape[1] == n_det_pix:
+        return R_matrix.shape[0]
+    raise ValueError(f"Neither rectmat axis {R_matrix.shape} matches "
+                     f"{n_det_pix} detector pixels.")
+
+
+def save_rectmat(path, R_matrix, cube_shape):
+    """
+    Save a rectmat as a standard scipy sparse .npz, plus a 'cube_shape'
+    entry (nlam, ny, nx) describing how its flux axis maps onto the cube.
+
+    The file still loads with scipy.sparse.load_npz (the extra key is
+    ignored); use load_rectmat to also get the cube shape back.
+
+    cube_shape must match the column/row ordering used to build the
+    rectmat, i.e. flux index = x + y*nx + lam*nx*ny.
+    """
+    cube_shape = tuple(int(n) for n in cube_shape)
+    if len(cube_shape) != 3:
+        raise ValueError(f"cube_shape must be (nlam, ny, nx), got {cube_shape}.")
+    n_flux = _rectmat_n_flux(R_matrix)
+    if n_flux != int(np.prod(cube_shape)):
+        raise ValueError(f"Rectmat has {n_flux} flux elements but cube_shape "
+                         f"{cube_shape} implies {int(np.prod(cube_shape))}.")
+    R = R_matrix if R_matrix.format in ('csr', 'csc') else R_matrix.tocsr()
+    np.savez_compressed(
+        path,
+        format=np.array(R.format.encode('ascii')),
+        shape=np.array(R.shape),
+        data=R.data,
+        indices=R.indices,
+        indptr=R.indptr,
+        cube_shape=np.array(cube_shape),
+    )
+
+
+def load_rectmat(path, lenslet_grid=None):
+    """
+    Load a rectmat and the cube shape (nlam, ny, nx) of its flux axis.
+
+    Rectmats written by save_rectmat carry their own cube_shape, which is
+    used (and checked against the matrix). Older rectmats have none; then
+    nlam is derived from the matrix size and lenslet_grid = (ny, nx).
+
+    Returns:
+        R_matrix (scipy sparse), cube_shape (tuple of 3 ints)
+    """
+    R_matrix = sp.load_npz(path)
+    n_flux = _rectmat_n_flux(R_matrix)
+
+    with np.load(path) as z:
+        stored = tuple(int(n) for n in z['cube_shape']) if 'cube_shape' in z.files else None
+
+    if stored is not None:
+        if int(np.prod(stored)) != n_flux:
+            raise ValueError(f"{os.path.basename(path)}: stored cube_shape {stored} "
+                             f"does not match its {n_flux} flux elements.")
+        return R_matrix, stored
+
+    if lenslet_grid is None:
+        raise ValueError(f"{os.path.basename(path)} has no stored cube_shape; "
+                         f"pass lenslet_grid=(ny, nx) to infer it.")
+    ny, nx = (int(n) for n in lenslet_grid)
+    if n_flux % (ny * nx):
+        raise ValueError(f"{os.path.basename(path)} has {n_flux} flux elements, "
+                         f"not divisible by the lenslet grid ny*nx = {ny}*{nx}. "
+                         f"Check the lenslet grid for this mode, or regenerate "
+                         f"the rectmat so it stores its cube_shape.")
+    return R_matrix, (n_flux // (ny * nx), ny, nx)
+
+
 def solve_weighted_lsq_per_lenslet(
     R_matrix: sp.spmatrix,
     data_vector: np.ndarray,

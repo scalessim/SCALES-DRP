@@ -296,10 +296,10 @@ def main():
     framework.context.C2_rmat_LowRes_M = scales_config.C2_rmat_LowRes_M
     framework.context.OPT_rmat_LowRes_KLM = scales_config.OPT_rmat_LowRes_KLM
     framework.context.C2_rmat_LowRes_KLM = scales_config.C2_rmat_LowRes_KLM
-    framework.context.OPT_rmat_LowRes_KL = scales_config.OPT_rmat_LowRes_KLM
-    framework.context.C2_rmat_LowRes_KL = scales_config.C2_rmat_LowRes_KLM
-    framework.context.OPT_rmat_LowRes_Ls = scales_config.OPT_rmat_LowRes_KLM
-    framework.context.C2_rmat_LowRes_Ls = scales_config.C2_rmat_LowRes_KLM
+    framework.context.OPT_rmat_LowRes_KL = scales_config.OPT_rmat_LowRes_KL
+    framework.context.C2_rmat_LowRes_KL = scales_config.C2_rmat_LowRes_KL
+    framework.context.OPT_rmat_LowRes_Ls = scales_config.OPT_rmat_LowRes_Ls
+    framework.context.C2_rmat_LowRes_Ls = scales_config.C2_rmat_LowRes_Ls
     framework.context.OPT_rmat_MedRes_K = scales_config.OPT_rmat_MedRes_K
     framework.context.C2_rmat_MedRes_K = scales_config.C2_rmat_MedRes_K
     framework.context.OPT_rmat_MedRes_L = scales_config.OPT_rmat_MedRes_L
@@ -340,8 +340,8 @@ def main():
     framework.context.apply_det_flat = scales_config.apply_det_flat
     framework.context.apply_bias = scales_config.apply_bias
     framework.context.apply_lens_flat = scales_config.apply_lens_flat
-    framework.context.lowres_final_cube = scales_config.lowres_final_cube
-    framework.context.medres_final_cube = scales_config.medres_final_cube
+    framework.context.lowres_lenslet_grid = scales_config.lowres_lenslet_grid
+    framework.context.medres_lenslet_grid = scales_config.medres_lenslet_grid
     framework.context.do_chi2_full = scales_config.do_chi2_full
     # implement the group mode
     if args.group_mode is True:

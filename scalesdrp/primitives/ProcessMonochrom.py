@@ -2584,35 +2584,43 @@ class ProcessMonochrom(BasePrimitive):
                     OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=fluxcut,method='optimal')
                     self.logger.info("making interpolated shifted chi2 rectmat")
                     C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=fluxcut)
-                    sparse.save_npz(output_dir+'/'+
+                    scbasic.save_rectmat(output_dir+'/'+
                                     scmode+'_C2_intp_rectmat_dx'+str(self.config.instrument.rectmat_xshift)+
                                     '_dy'+str(self.config.instrument.rectmat_yshift)+
-                                    '.npz',C2_rmat_interpd_shift)
-                    sparse.save_npz(output_dir+'/'+
+                                    '.npz',C2_rmat_interpd_shift,
+                                    cube_shape=interp_shift_arr.shape[:3])
+                    scbasic.save_rectmat(output_dir+'/'+
                                     scmode+'_OPT_intp_rectmat_dx'+str(self.config.instrument.rectmat_xshift)+
                                     '_dy'+str(self.config.instrument.rectmat_yshift)+
-                                    '.npz',OPT_rmat_interpd_shift)
+                                    '.npz',OPT_rmat_interpd_shift,
+                                    cube_shape=interp_shift_arr.shape[:3])
 
 
                 self.logger.info("writing out rectmats")
-                sparse.save_npz(output_dir+'/'+
-                                scmode+'_OPT_rectmat.npz',OPT_rmat)
+                # cube_shape = (nlam, ny, nx): the same array shapes the
+                # gen_*_rectmat functions use to lay out the flux axis
+                scbasic.save_rectmat(output_dir+'/'+
+                                scmode+'_OPT_rectmat.npz',OPT_rmat,
+                                cube_shape=posarr.shape[:3])
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_OPT_lsf.fits',OPT_lsf,overwrite=True)
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_OPT_lflat.fits',OPT_lflat,overwrite=True)
-                sparse.save_npz(output_dir+'/'+
-                                scmode+'_OPT_intp_rectmat.npz',OPT_rmat_interpd)
+                scbasic.save_rectmat(output_dir+'/'+
+                                scmode+'_OPT_intp_rectmat.npz',OPT_rmat_interpd,
+                                cube_shape=interp_arr.shape[:3])
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_OPT_intp_lsf.fits',OPT_lsf_interpd,
                                 overwrite=True)
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_OPT_intp_lflat.fits',OPT_lflat_interpd,
                                 overwrite=True)
-                sparse.save_npz(output_dir+'/'+
-                                scmode+'_C2_rectmat.npz',C2_rmat)
-                sparse.save_npz(output_dir+'/'+
-                                scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd)
+                scbasic.save_rectmat(output_dir+'/'+
+                                scmode+'_C2_rectmat.npz',C2_rmat,
+                                cube_shape=posarr.shape[:3])
+                scbasic.save_rectmat(output_dir+'/'+
+                                scmode+'_C2_intp_rectmat.npz',C2_rmat_interpd,
+                                cube_shape=interp_arr.shape[:3])
                 pyfits.writeto(output_dir+'/'+scmode+'_intp_lams.fits',
                     lams_interp,overwrite=True)
 
