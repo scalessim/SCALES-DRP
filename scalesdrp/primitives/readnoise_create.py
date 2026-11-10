@@ -635,7 +635,7 @@ def plot_readnoise_diagnostics(
 
     fig.colorbar(
         im, ax=ax,
-        label="Single-read noise (e⁻)",
+        label="Single-read noise (DN)",
         fraction=0.046,
         pad=0.04,
     )
@@ -675,7 +675,7 @@ def plot_readnoise_diagnostics(
     )
 
     ax.set_title("Read-Noise Distribution (Measured Pixels)")
-    ax.set_xlabel("Single-read noise (e⁻)")
+    ax.set_xlabel("Single-read noise (DN)")
     ax.set_ylabel("Number of pixels")
     ax.legend(fontsize=9)
     ax.grid(alpha=0.2)

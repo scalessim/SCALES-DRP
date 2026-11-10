@@ -73,9 +73,9 @@ class SpectralExtractOptimal(BasePrimitive):
             modslnam = self.action.args.ccddata.header['MODSLNAM']
             dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
             filter = self.action.args.ccddata.header['FILTER']
+            #ifsmode = self.action.args.ccddata.header['IFSMODE']
             ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam,filter)
             filename = self.action.args.ccddata.header.get("OFNAME")
-            #print(ifsmode)
 
             if det_config =='5.0 MHz':  #fast1.0
                 readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
@@ -91,7 +91,6 @@ class SpectralExtractOptimal(BasePrimitive):
 
             sigma_image = self.action.args.ccddata.uncertainty
             var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
-            GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             data_image = self.action.args.ccddata.data
 
             if ifsmode is None:

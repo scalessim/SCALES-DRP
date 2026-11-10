@@ -347,7 +347,7 @@ class StartCalibSA(BasePrimitive):
                     chisq=None,
                     suffix="L10")
 
-                scbasic.proctab_update(
+                scbasic.proctab_update_sa(
                     header=self.action.args.ccddata.header,
                     output_dir=self.config.instrument.output_directory,
                     input_filename=self.action.args.name,
@@ -388,7 +388,7 @@ class StartCalibSA(BasePrimitive):
                     chisq=None,
                     suffix="L13")
 
-                scbasic.proctab_update(
+                scbasic.proctab_update_sa(
                     header=self.action.args.ccddata.header,
                     output_dir=self.config.instrument.output_directory,
                     input_filename=self.action.args.name,
@@ -469,7 +469,7 @@ class StartCalibSA(BasePrimitive):
                             chisq=None,
                             suffix="L11")
 
-                        scbasic.proctab_update(
+                        scbasic.proctab_update_sa(
                             header=self.action.args.ccddata.header,
                             output_dir=self.config.instrument.output_directory,
                             input_filename=self.action.args.name,
@@ -601,7 +601,7 @@ class StartCalibSA(BasePrimitive):
                 chisq=chisq,
                 suffix="L12")
 
-            scbasic.proctab_update(
+            scbasic.proctab_update_sa(
                 header=self.action.args.ccddata.header,
                 output_dir=self.config.instrument.output_directory,
                 input_filename=self.action.args.name,
@@ -679,7 +679,7 @@ class StartCalibSA(BasePrimitive):
                 chisq=chisq,
                 suffix="L1")
 
-            scbasic.proctab_update(
+            scbasic.proctab_update_sa(
                 header=self.action.args.ccddata.header,
                 output_dir=self.config.instrument.output_directory,
                 input_filename=self.action.args.name,
