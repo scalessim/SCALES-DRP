@@ -8,7 +8,6 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import pandas as pd
 from scipy.optimize import minimize
-from scipy.sparse import load_npz
 import scipy.sparse as sp
 from astropy.nddata import CCDData
 import astropy.units as u
@@ -88,8 +87,9 @@ class SpectralExtractChi(BasePrimitive):
                 readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
 
             sigma_image = self.action.args.ccddata.uncertainty
-            #print(sigma_image.shape)
-            #var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
+            # L1 UNCERT already includes read + photon noise, so its square is
+            # the total per-pixel variance; nothing else is added downstream.
+            var_total_vector = (sigma_image.array.flatten().astype(np.float64))**2
             GAIN = 1.0#self.action.args.ccddata.header['GAIN']
             data_image = self.action.args.ccddata.data
             data_vector_d = data_image.flatten().astype(np.float64)
@@ -100,60 +100,56 @@ class SpectralExtractChi(BasePrimitive):
                     "Skipping spectral extraction.")
                 return self.action.args
 
-            elif ifsmode=='LowRes-K': 
+            elif ifsmode=='LowRes-K':
                 rmat_opt = self.context.OPT_rmat_LowRes_K
-                rmat_chi = self.context.OPT_rmat_LowRes_K
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                rmat_chi = self.context.C2_rmat_LowRes_K
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-L':
                 rmat_opt = self.context.OPT_rmat_LowRes_L
                 rmat_chi = self.context.C2_rmat_LowRes_L
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-M':
                 rmat_chi = self.context.C2_rmat_LowRes_M
                 rmat_opt = self.context.OPT_rmat_LowRes_M
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-KLM':
                 rmat_opt = self.context.OPT_rmat_LowRes_KLM
                 rmat_chi = self.context.C2_rmat_LowRes_KLM
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-KL':
                 rmat_opt = self.context.OPT_rmat_LowRes_KL
                 rmat_chi = self.context.C2_rmat_LowRes_KL
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-Ls':
                 rmat_opt = self.context.OPT_rmat_LowRes_Ls
                 rmat_chi = self.context.C2_rmat_LowRes_Ls
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='MedRes-K':
                 rmat_opt = self.context.OPT_rmat_MedRes_K
                 rmat_chi = self.context.C2_rmat_MedRes_K
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.medres_final_cube
+                lenslet_grid = self.context.medres_lenslet_grid
             elif ifsmode=='MedRes-L':
                 rmat_opt = self.context.OPT_rmat_MedRes_L
                 rmat_chi =self.context.C2_rmat_MedRes_L
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.medres_final_cube
+                lenslet_grid = self.context.medres_lenslet_grid
             elif ifsmode=='MedRes-M':
                 rmat_opt =self.context.OPT_rmat_MedRes_M
                 rmat_chi = self.context.C2_rmat_MedRes_M
-                R_for_extract = load_npz(calib_path+rmat_chi)
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.medres_final_cube
+                lenslet_grid = self.context.medres_lenslet_grid
+
+            # Cube shape (nlam, ny, nx) comes from the rectmats themselves:
+            # stored in them if written by save_rectmat, otherwise nlam is
+            # derived from their size and the lenslet grid.
+            R_for_extract, FLUX_SHAPE_3D = scbasic.load_rectmat(
+                calib_path+rmat_chi, lenslet_grid=lenslet_grid)
+            R_matrix, opt_shape = scbasic.load_rectmat(
+                calib_path+rmat_opt, lenslet_grid=lenslet_grid)
+            if opt_shape != FLUX_SHAPE_3D:
+                raise ValueError(
+                    f"{rmat_opt} implies cube shape {opt_shape} but {rmat_chi} "
+                    f"implies {FLUX_SHAPE_3D}; the OPT and C2 rectmats must "
+                    f"come from the same calibration.")
+            self.logger.info(f"Cube shape {FLUX_SHAPE_3D} from {rmat_chi}")
 
             existing_l1_name = scbasic.find_existing_proc_file(
                 input_filename=filename,
@@ -194,31 +190,29 @@ class SpectralExtractChi(BasePrimitive):
 
             A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
             A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
-            
+
             if self.config.instrument.do_chi2_full == True:
-                
+
                 A_guess_vector = A_guess_cube.flatten()
                 A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
                 A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
-                
-                A_optimal_nnls = scbasic.solve_bounded_weighted_nnls(
+
+                A_optimal_nnls = scbasic.solve_weighted_lsq_per_lenslet(
                     R_for_extract,
                     data_vector_d,
-                    var_read_vector,
-                    GAIN,
-                    A_guess_vector)
-                
+                    var_total_vector,
+                    A_guess_vector,
+                    FLUX_SHAPE_3D)
+
                 Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
-                
+
                 Amp_chi_square_err = scbasic.calculate_error_flux_cube(
                     R_matrix=R_for_extract,
-                    flux_vector_A=A_optimal_nnls,
-                    var_read_vector=var_read_vector,
-                    flux_shape_3d=FLUX_SHAPE_3D,
-                    gain=GAIN)
+                    variance_vector=var_total_vector,
+                    flux_shape_3d=FLUX_SHAPE_3D)
 
                 if self.config.instrument.apply_lens_flat == True:
-                    
+
                     Amp_chi_square, Amp_chi_square_err = scbasic.apply_flatlens(
                         Amp_chi_square,
                         Amp_chi_square_err,
@@ -259,7 +253,7 @@ class SpectralExtractChi(BasePrimitive):
                     frame=None,
                     proctab=self.proctab)
 
-            
+
             log_string = SpectralExtractChi.__module__
             self.action.args.ccddata.header['HISTORY'] = log_string
             self.logger.info(log_string)

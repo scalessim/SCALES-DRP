@@ -229,8 +229,8 @@ class StartCalib(BasePrimitive):
             self.action.args.ccddata.header['HISTORY'] = 'detector level odd-even correction applied in the DRP'
             self.logger.info("detector level odd-even correction applied in the DRP")
         #print('NaNs in the input data=',np.isnan(input_data).sum())
-            
-        self.logger.info("refpix and 1/f correction started")            
+
+        self.logger.info("refpix and 1/f correction started")
         sci_im_full_original = reference.reffix_hxrg(
             cube =input_data,
             nchans=self.config.instrument.nchans,
@@ -310,7 +310,7 @@ class StartCalib(BasePrimitive):
         corrected_cube = None
         sat_mask = None
         applied_mask = None
-        
+
         if sci_im_full_original.ndim ==2:
             self.action.args.ccddata.data = sci_im_full_original
             self.action.args.ccddata.header['HISTORY'] = 'Non-linearity correction is NOT applied'
@@ -338,19 +338,19 @@ class StartCalib(BasePrimitive):
             else:
                 self.logger.info("+++++++++++ linearity correction is turned off +++++++++++")
                 self.action.args.ccddata.data = sci_im_full_original
-                
+
         ############# RAMP FITTING ###################################################
         quality_map = None
         chisq = None
         sci_im_full_original = self.action.args.ccddata.data
-        
+
         if sci_im_full_original.ndim ==2:
             final_slope = sci_im_full_original
             uncert = scbasic.estimate_uncert_single_read(
                 image_dn=final_slope,
                 readnoise_map_dn=SIG_map_scaled,
                 gain=1.0)
-            
+
             final_slope *= gain   # e-/s
             uncert *= gain        # e-/s
 
@@ -358,7 +358,7 @@ class StartCalib(BasePrimitive):
             self.action.args.ccddata.chisq = None
 
         elif sci_im_full_original.ndim ==3:
-            
+
             if self.config.instrument.apply_sat_mask == True:
                 self.logger.info("+++++++++++ Masking saturated neighbours started +++++++++++")
                 quality_map, good_read_mask = saturation_correct.make_ramp_quality_mask(
@@ -379,32 +379,34 @@ class StartCalib(BasePrimitive):
                     minimum_signal_dn=0.0,
                     show=False)
                 plt.close(fig)
-                
+
                 self.action.args.ccddata.dq = quality_map.astype(np.uint32)
                 self.action.args.ccddata.header['HISTORY'] = (f'Saturation map applied using {os.path.basename(sat_map_file)}')
                 self.logger.info("+++++++++++ ramp fitting started +++++++++++")
-                
+
                 final_slope,final_reset,uncert,chisq = scbasic.ramp_fit(
                     sci_im_full_original,
                     total_exptime,
                     SIG_map_scaled,
-                    group_dq = good_read_mask)
+                    group_dq = good_read_mask,
+                    gain = gain)
 
                 final_slope *= gain   # e-/s
                 final_reset *= gain   # e-
                 uncert *= gain        # e-/s
-                
+
             elif self.config.instrument.apply_sat_mask == False:
                 self.logger.info("+++++++++++ Saturation correction is turned off +++++++++++")
                 self.action.args.ccddata.dq = None
-                self.action.args.ccddata.header['HISTORY'] = (f'Saturation map NOT applied')    
-                
+                self.action.args.ccddata.header['HISTORY'] = (f'Saturation map NOT applied')
+
                 self.logger.info("+++++++++++ ramp fitting started +++++++++++")
                 final_slope,final_reset,uncert,chisq = scbasic.ramp_fit(
                     sci_im_full_original,
                     total_exptime,
                     SIG_map_scaled,
-                    group_dq = None)
+                    group_dq = None,
+                    gain = gain)
 
                 final_slope *= gain   # e-/s
                 final_reset *= gain   # e-
@@ -435,8 +437,8 @@ class StartCalib(BasePrimitive):
             final_ramp = final_slope
             final_uncert = uncert
             self.action.args.ccddata.header['HISTORY'] =(f'bad pixel map is NOT applied')
-            
-        
+
+
         #print('NaNs in the bpm corrected slope data=',np.isnan(final_ramp).sum())
 
         if self.config.instrument.subtract_row_median==True:

@@ -545,7 +545,8 @@ class StartCalibSA(BasePrimitive):
                     sci_im_full_original,
                     total_exptime,
                     SIG_map_scaled,
-                    group_dq = good_read_mask)
+                    group_dq = good_read_mask,
+                    gain = gain)
                 
                 final_slope *= gain   # e-/s
                 final_reset *= gain   # e-
@@ -561,7 +562,8 @@ class StartCalibSA(BasePrimitive):
                     sci_im_full_original,
                     total_exptime,
                     SIG_map_scaled,
-                    group_dq = None)
+                    group_dq = None,
+                    gain = gain)
                 
                 final_slope *= gain   # e-/s
                 final_reset *= gain   # e-

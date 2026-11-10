@@ -1048,6 +1048,7 @@ def optimal_extract_fast(
     optimized_flux = np.array(R_transpose*np.matrix(data_image.reshape([2048*2048,1])))
     return optimized_flux
 
+
 def solve_bounded_weighted_nnls(
     R_matrix: sp.spmatrix,
     data_vector: np.ndarray,
@@ -1087,13 +1088,214 @@ def solve_bounded_weighted_nnls(
     print(f"Bounded lsq_linear finished in {t:.4f} mins.")
     return res.x
 
+
+############### rectmat I/O with cube shape #########################
+N_DET_PIX = 2048 * 2048
+
+
+def _rectmat_n_flux(R_matrix, n_det_pix=N_DET_PIX):
+    """Number of cube voxels in a rectmat of either orientation:
+    C2 is (n_det_pix, n_flux), OPT is (n_flux, n_det_pix)."""
+    if R_matrix.shape[0] == n_det_pix:
+        return R_matrix.shape[1]
+    if R_matrix.shape[1] == n_det_pix:
+        return R_matrix.shape[0]
+    raise ValueError(f"Neither rectmat axis {R_matrix.shape} matches "
+                     f"{n_det_pix} detector pixels.")
+
+
+def save_rectmat(path, R_matrix, cube_shape):
+    """
+    Save a rectmat as a standard scipy sparse .npz, plus a 'cube_shape'
+    entry (nlam, ny, nx) describing how its flux axis maps onto the cube.
+
+    The file still loads with scipy.sparse.load_npz (the extra key is
+    ignored); use load_rectmat to also get the cube shape back.
+
+    cube_shape must match the column/row ordering used to build the
+    rectmat, i.e. flux index = x + y*nx + lam*nx*ny.
+    """
+    cube_shape = tuple(int(n) for n in cube_shape)
+    if len(cube_shape) != 3:
+        raise ValueError(f"cube_shape must be (nlam, ny, nx), got {cube_shape}.")
+    n_flux = _rectmat_n_flux(R_matrix)
+    if n_flux != int(np.prod(cube_shape)):
+        raise ValueError(f"Rectmat has {n_flux} flux elements but cube_shape "
+                         f"{cube_shape} implies {int(np.prod(cube_shape))}.")
+    R = R_matrix if R_matrix.format in ('csr', 'csc') else R_matrix.tocsr()
+    np.savez_compressed(
+        path,
+        format=np.array(R.format.encode('ascii')),
+        shape=np.array(R.shape),
+        data=R.data,
+        indices=R.indices,
+        indptr=R.indptr,
+        cube_shape=np.array(cube_shape),
+    )
+
+
+def load_rectmat(path, lenslet_grid=None):
+    """
+    Load a rectmat and the cube shape (nlam, ny, nx) of its flux axis.
+
+    Rectmats written by save_rectmat carry their own cube_shape, which is
+    used (and checked against the matrix). Older rectmats have none; then
+    nlam is derived from the matrix size and lenslet_grid = (ny, nx).
+
+    Returns:
+        R_matrix (scipy sparse), cube_shape (tuple of 3 ints)
+    """
+    R_matrix = sp.load_npz(path)
+    n_flux = _rectmat_n_flux(R_matrix)
+
+    with np.load(path) as z:
+        stored = tuple(int(n) for n in z['cube_shape']) if 'cube_shape' in z.files else None
+
+    if stored is not None:
+        if int(np.prod(stored)) != n_flux:
+            raise ValueError(f"{os.path.basename(path)}: stored cube_shape {stored} "
+                             f"does not match its {n_flux} flux elements.")
+        return R_matrix, stored
+
+    if lenslet_grid is None:
+        raise ValueError(f"{os.path.basename(path)} has no stored cube_shape; "
+                         f"pass lenslet_grid=(ny, nx) to infer it.")
+    ny, nx = (int(n) for n in lenslet_grid)
+    if n_flux % (ny * nx):
+        raise ValueError(f"{os.path.basename(path)} has {n_flux} flux elements, "
+                         f"not divisible by the lenslet grid ny*nx = {ny}*{nx}. "
+                         f"Check the lenslet grid for this mode, or regenerate "
+                         f"the rectmat so it stores its cube_shape.")
+    return R_matrix, (n_flux // (ny * nx), ny, nx)
+
+
+def solve_weighted_lsq_per_lenslet(
+    R_matrix: sp.spmatrix,
+    data_vector: np.ndarray,
+    variance_vector: np.ndarray,
+    A_guess: np.ndarray,
+    flux_shape_3d: tuple,
+    bad_pixel_mask: np.ndarray = None,
+    fill_value: float = 0.0,
+    tolerance: float = 1e-10,
+    maxiter: int = 100000,
+    return_diagnostics: bool = False):
+    """
+    Weighted, unbounded linear least squares solved one lenslet at a time.
+
+    Alternative to solve_bounded_weighted_nnls with the same flat
+    (N_fluxes,) output that reshapes to flux_shape_3d. Differences:
+      - no bounds (plain linear least squares, solved with scipy lsmr)
+      - each lenslet's nlam columns of R are fit independently, using only
+        the detector pixels that lenslet touches.
+      - takes the TOTAL per-pixel variance (e.g. the L1 UNCERT plane
+        squared, which already includes read + photon noise); no photon
+        term is added here.
+
+    Column ordering of R matches flux_shape_3d = (nlam, ny, nx)
+    in C order, i.e. column = x + y*nx + lam*nx*ny.
+
+    Args:
+        R_matrix: The (N_pixels, N_fluxes) sparse rectification matrix.
+        data_vector: The (N_pixels,) or (H, W) input data.
+        variance_vector: The (N_pixels,) or (H, W) total 1-sigma variance
+            of each pixel. Pixels with non-finite or <= 0 variance are
+            excluded from the fit.
+        A_guess: Initial guess (N_fluxes,), e.g. from optimal extraction.
+            Used as lsmr's warm start (x0); it changes iteration count,
+            not the converged answer. Pass None to start from zero.
+        flux_shape_3d: (nlam, ny, nx) shape of the output cube.
+        bad_pixel_mask: Optional (N_pixels,) or (H, W) bool, True = exclude.
+        fill_value: Value for lenslets with no usable pixels or that failed.
+        tolerance: lsmr atol/btol.
+        maxiter: lsmr iteration limit per lenslet.
+        return_diagnostics: If True, also return a dict of per-lenslet
+            (ny, nx) arrays: chi2_per_dof, n_dof, istop, n_iters,
+            failed, fail_msg.
+    Returns:
+        Best-fit amplitude vector (N_fluxes,)
+        [, diagnostics dict if return_diagnostics]
+    """
+    from scipy.sparse.linalg import lsmr
+
+    self.logger.info("\nSolving with per-lenslet weighted linear least squares...")
+    nlam, ny, nx = flux_shape_3d
+    n_flux = nlam * ny * nx
+    if R_matrix.shape[1] != n_flux:
+        raise ValueError(
+            f"R_matrix has {R_matrix.shape[1]} columns but flux_shape_3d "
+            f"{tuple(flux_shape_3d)} implies {n_flux}.")
+
+    data_vector = np.asarray(data_vector, dtype=np.float64).ravel()
+    variance = np.asarray(variance_vector, dtype=np.float64).ravel()
+
+    good = np.isfinite(data_vector) & np.isfinite(variance) & (variance > 0)
+    weights = np.zeros_like(variance)
+    weights[good] = 1.0 / np.sqrt(variance[good])
+    if bad_pixel_mask is not None:
+        good &= ~np.asarray(bad_pixel_mask, dtype=bool).ravel()
+
+    R_csc = R_matrix.tocsc()
+    A_guess_cube = None
+    if A_guess is not None:
+        A_guess_cube = np.nan_to_num(np.asarray(A_guess, dtype=np.float64)
+                                     ).reshape(flux_shape_3d)
+
+    flux_cube = np.full(flux_shape_3d, fill_value, dtype=np.float64)
+    chi2_per_dof = np.full((ny, nx), np.nan)
+    n_dof = np.zeros((ny, nx), dtype=int)
+    istop_arr = np.zeros((ny, nx), dtype=int)
+    n_iters = np.zeros((ny, nx), dtype=int)
+    failed = np.zeros((ny, nx), dtype=bool)
+    fail_msg = np.empty((ny, nx), dtype=object)
+
+    lam_offsets = np.arange(nlam) * (nx * ny)
+    start_time = time.time()
+    for yy in range(ny):
+        for xx in range(nx):
+            cols = xx + yy * nx + lam_offsets
+            R_cut = R_csc[:, cols]
+            # unique: a pixel hit by several wavelength columns of this
+            # lenslet must only count once
+            rows = np.unique(R_cut.indices)
+            rows = rows[good[rows]]
+            if len(rows) == 0:
+                continue
+            try:
+                w = weights[rows]
+                R_fit = sp.diags(w) @ R_cut.tocsr()[rows]
+                d_fit = data_vector[rows] * w
+                x0 = A_guess_cube[:, yy, xx] if A_guess_cube is not None else None
+                x, istop, itn, *_ = lsmr(R_fit, d_fit, x0=x0, atol=tolerance,
+                                         btol=tolerance, maxiter=maxiter)
+                flux_cube[:, yy, xx] = x
+                istop_arr[yy, xx] = istop
+                n_iters[yy, xx] = itn
+                dof = len(rows) - nlam
+                n_dof[yy, xx] = dof
+                if dof > 0:
+                    resid = R_fit @ x - d_fit
+                    chi2_per_dof[yy, xx] = np.sum(resid**2) / dof
+            except Exception as e:
+                failed[yy, xx] = True
+                fail_msg[yy, xx] = f"{type(e).__name__}: {e}"
+
+    t = (time.time() - start_time) / 60.0
+    self.logger.info(f"Per-lenslet lsmr finished in {t:.4f} mins "
+          f"({failed.sum()} lenslets failed).")
+
+    flux_vector = flux_cube.ravel()
+    if return_diagnostics:
+        diag = dict(chi2_per_dof=chi2_per_dof, n_dof=n_dof, istop=istop_arr,
+                    n_iters=n_iters, failed=failed, fail_msg=fail_msg)
+        return flux_vector, diag
+    return flux_vector
+
     ############### chi sqaure error estimation #########################
 def calculate_error_flux_cube(
     R_matrix: sp.spmatrix,
-    flux_vector_A: np.ndarray,
-    var_read_vector: np.ndarray,
-    flux_shape_3d: tuple,
-    gain: float = 1.0) -> np.ndarray:
+    variance_vector: np.ndarray,
+    flux_shape_3d: tuple) -> np.ndarray:
     """
     This provides a fast and reliable estimate of the standard deviation for each
     flux element from a least-squares fit.
@@ -1102,20 +1304,17 @@ def calculate_error_flux_cube(
     where H is the Hessian matrix H_jj = Σ_i (R_ij^2 / σ_i^2).
     Args:
         R_matrix: The (N_pixels, N_fluxes) sparse rectification matrix.
-        flux_vector_A: The (N_fluxes,) solved flux vector.
-        var_read_vector: The (N_pixels,) vector of read noise variance.
+        variance_vector: The (N_pixels,) or (H, W) total per-pixel variance
+            (e.g. L1 UNCERT squared, which already includes read + photon
+            noise). Non-finite or <= 0 entries are treated as excluded.
         flux_shape_3d: The 3D shape of the final flux cube (e.g., (54, 108, 108)).
-        gain: The detector gain, used for calculating photon noise.
     Returns:
         A 3D NumPy array containing the standard deviation (error) for each flux element.
     """
     print("\nCalculating the error flux cube...")
     start_time = time.time()
-    model_data_vector = R_matrix @ flux_vector_A
-    model_data_vector[model_data_vector < 0] = 0
-    var_photon_vector = model_data_vector / gain
-    total_var_vector = var_read_vector + var_photon_vector
-    total_var_vector[total_var_vector <= 0] = np.inf
+    total_var_vector = np.asarray(variance_vector, dtype=np.float64).ravel().copy()
+    total_var_vector[~np.isfinite(total_var_vector) | (total_var_vector <= 0)] = np.inf
     R_squared = R_matrix.power(2)
     inverse_variance_vector = 1.0 / total_var_vector
     hessian_diagonal = R_squared.T @ inverse_variance_vector
@@ -1987,6 +2186,7 @@ def ramp_fit(
     JUMP_THRESH_ONEOMIT=20.25,
     JUMP_THRESH_TWOOMIT=23.8,
     group_dq=None,
+    gain=1.0,
 ):
     """
     Fit detector ramps and return slope, uncertainty, chi-square,
@@ -2046,6 +2246,11 @@ def ramp_fit(
         The dynamic mask is only applied to a pixel if at least one
         valid read difference remains. Otherwise the unmasked ramp is
         used for that pixel.
+
+    gain : float, optional
+        Detector gain in e-/DN. Sets the photon-noise term of the OLS
+        fallback uncertainty (rate_DN / gain per unit time). Pass None to
+        use read noise only (the old behavior).
 
     Returns
     -------
@@ -2112,7 +2317,7 @@ def ramp_fit(
     # ================================================================
     # Helper: OLS chi-square
     # ================================================================
-    
+
     def _ols_chisq_row(
         reads_row,
         valid_row,
@@ -2561,7 +2766,8 @@ def ramp_fit(
                     input_read[:, i, :],
                     base_valid[:, i, :],
                     t,
-                    sig_row
+                    sig_row,
+                    gain=gain
                 )
             )
 
@@ -2586,7 +2792,8 @@ def ramp_fit(
                     input_read[:, i, :],
                     base_valid[:, i, :],
                     t,
-                    sig_row
+                    sig_row,
+                    gain=gain
                 )
             )
 
@@ -2760,7 +2967,8 @@ def ramp_fit(
                     input_read[:, i, :],
                     base_valid[:, i, :],
                     t,
-                    sig_row
+                    sig_row,
+                    gain=gain
                 )
             )
 
@@ -2815,7 +3023,8 @@ def ramp_fit(
                     input_read[:, i, :],
                     base_valid[:, i, :],
                     t,
-                    sig_row
+                    sig_row,
+                    gain=gain
                 )
             )
 
@@ -2918,8 +3127,20 @@ FIT_REJECT_BITS = int(FIT_DQ['NO_USABLE_PAIR'] | FIT_DQ['FIT_FAILED']
                       | FIT_DQ['INVALID_NOISE'] | FIT_DQ['PLACEHOLDER'])
 
 
-def _ols_row_and_uncert(reads, valid, t, sig):
-    """OLS on accepted reads; known independent per-read noise sets uncertainty.
+def _ols_row_and_uncert(reads, valid, t, sig, gain=None):
+    """OLS on accepted reads; uncertainty from read noise plus photon noise.
+
+    Read noise: independent per read with 1-sigma `sig` (DN), giving
+        Var_read = sig^2 / leverage.
+    Photon noise: cumulative reads are a Poisson process, so
+        Cov(y_i, y_j) = (rate / gain) * min(t_i, t_j)   [DN^2]
+    and with OLS weights w_i = (t_i - tmean) / leverage (0 for masked reads)
+        Var_phot = (rate / gain) * sum_k (t_k - t_{k-1}) * (sum_{i>=k} w_i)^2.
+    For two reads this reduces to rate / (gain * dt). The fitted slope
+    (clipped at 0) is used as the rate. Pass gain=None to omit photon noise.
+
+    Units: reads and sig in DN, t in s, gain in e-/DN; slope and
+    uncertainty are returned in DN/s.
 
     Returns NaN internally where fewer than two reads/time leverage remain.
     The public fitter converts those failures to flagged finite placeholders.
@@ -2937,7 +3158,20 @@ def _ols_row_and_uncert(reads, valid, t, sig):
     slope = np.full(reads.shape[1], np.nan)
     uncertainty = slope.copy()
     slope[good] = np.sum(np.where(mask, tc * yc, 0.), axis=0)[good] / leverage[good]
-    uncertainty[good] = sig[good] / np.sqrt(leverage[good])
+    var = np.full(reads.shape[1], np.nan)
+    var[good] = sig[good]**2 / leverage[good]
+
+    if gain is not None and np.isfinite(gain) and gain > 0 and len(t) > 1:
+        w = np.zeros(reads.shape, dtype=float)
+        w[:, good] = np.where(mask[:, good], tc[:, good], 0.) / leverage[good]
+        # S_k = sum_{i>=k} w_i for k = 1..N-1 (S_0 = sum w = 0 drops out)
+        tail = np.cumsum(w[::-1], axis=0)[::-1][1:]
+        dt_k = np.diff(np.asarray(t, dtype=float))[:, None]
+        phot_coeff = np.sum(dt_k * tail**2, axis=0)
+        rate = np.clip(slope, 0., None)
+        var[good] += rate[good] / gain * phot_coeff[good]
+
+    uncertainty[good] = np.sqrt(var[good])
     return slope, uncertainty
 
 ######################################################################################
@@ -3232,17 +3466,17 @@ def select_ifsmode(modslnam, dsprsnam, filtername=None):
 
     ifsmode_map = {
         # Medium-resolution modes
-        ("MedRes", "K-grating"): "MedRes-K",
-        ("MedRes", "L-grating"): "MedRes-L",
-        ("MedRes", "M-grating"): "MedRes-M",
+        ("MedRes", "K-Grating"): "MedRes-K",
+        ("MedRes", "L-Grating"): "MedRes-L",
+        ("MedRes", "M-Grating"): "MedRes-M",
 
         # Low-resolution modes
-        ("LowRes", "K-prism"):   "LowRes-K",
-        ("LowRes", "KL-prism"):  "LowRes-KL",
-        ("LowRes", "KLM-prism"): "LowRes-KLM",
-        ("LowRes", "Ls-prism"):  "LowRes-Ls",
+        ("LowRes", "K-Prism"):   "LowRes-K",
+        ("LowRes", "KL-Prism"):  "LowRes-KL",
+        ("LowRes", "KLM-Prism"): "LowRes-KLM",
+        ("LowRes", "Ls-Prism"):  "LowRes-Ls",
         ("LowRes", "L-Prism"):   "LowRes-L",
-        ("LowRes", "M-prism"):   "LowRes-M",
+        ("LowRes", "M-Prism"):   "LowRes-M",
     }
 
     modslnam = str(modslnam).strip()
@@ -6577,7 +6811,7 @@ def plot_linearity_correction_diagnostics(
     applied_mask,
     output_dir="plots",
     save_prefix="linearity",
-    skip_initial_reads=2,
+    skip_initial_reads=0,
     minimum_signal_dn=0.0,
     show=False,
 ):
@@ -6839,7 +7073,7 @@ def plot_good_reads_for_ramp_fitting(
     good_read_mask,
     output_dir="plots",
     save_prefix="ramp_quality",
-    skip_initial_reads=2,
+    skip_initial_reads=0,
     show=False,
 ):
     """

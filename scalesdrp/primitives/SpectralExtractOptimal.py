@@ -8,7 +8,6 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 import pandas as pd
 from scipy.optimize import minimize
-from scipy.sparse import load_npz
 import scipy.sparse as sp
 from astropy.nddata import CCDData
 import astropy.units as u
@@ -67,9 +66,6 @@ class SpectralExtractOptimal(BasePrimitive):
             package = __name__.split('.')[0]
             calibfilepath = self.context.calib_file_path
             calib_path = str(get_resource_path(package, calibfilepath))+'/'
-            det_config = self.action.args.ccddata.header['MCLOCK']
-            package = __name__.split('.')[0]
-            det_config = str(det_config).strip()
             modslnam = self.action.args.ccddata.header['MODSLNAM']
             dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
             filter = self.action.args.ccddata.header['FILTER']
@@ -77,20 +73,9 @@ class SpectralExtractOptimal(BasePrimitive):
             ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam,filter)
             filename = self.action.args.ccddata.header.get("OFNAME")
 
-            if det_config =='5.0 MHz':  #fast1.0
-                readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
-
-            elif det_config =='9.0 MHz': #fast1.0
-                readnoise  = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
-
-            elif det_config =='20.0 MHz': #slow
-                readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_slow)
-
-            else: #default
-                readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast0p6)
-
+            # L1 UNCERT is the total per-pixel 1-sigma (read + photon noise);
+            # optimal_extract_horne uses it directly, nothing is added here.
             sigma_image = self.action.args.ccddata.uncertainty
-            var_read_vector = (sigma_image.array.flatten().astype(np.float64))**2+(readnoise.flatten().astype(np.float64))**2
             data_image = self.action.args.ccddata.data
 
             if ifsmode is None:
@@ -101,40 +86,38 @@ class SpectralExtractOptimal(BasePrimitive):
 
             elif ifsmode=='LowRes-K':
                 rmat_opt = self.context.OPT_rmat_LowRes_K
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-L':
                 rmat_opt = self.context.OPT_rmat_LowRes_L
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-M':
                 rmat_opt = self.context.OPT_rmat_LowRes_M
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-KLM':
                 rmat_opt = self.context.OPT_rmat_LowRes_KLM
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-KL':
                 rmat_opt = self.context.OPT_rmat_LowRes_KL
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-Ls':
                 rmat_opt = self.context.OPT_rmat_LowRes_Ls
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.lowres_final_cube
+                lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='MedRes-K':
                 rmat_opt = self.context.OPT_rmat_MedRes_K
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.medres_final_cube
+                lenslet_grid = self.context.medres_lenslet_grid
             elif ifsmode=='MedRes-L':
                 rmat_opt = self.context.OPT_rmat_MedRes_L
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.medres_final_cube
+                lenslet_grid = self.context.medres_lenslet_grid
             elif ifsmode=='MedRes-M':
                 rmat_opt =self.context.OPT_rmat_MedRes_M
-                R_matrix = load_npz(calib_path+rmat_opt)
-                FLUX_SHAPE_3D = self.context.medres_final_cube
+                lenslet_grid = self.context.medres_lenslet_grid
+
+            # Cube shape (nlam, ny, nx) comes from the rectmat itself: stored
+            # in it if it was written by save_rectmat, otherwise nlam is
+            # derived from its size and the lenslet grid.
+            R_matrix, FLUX_SHAPE_3D = scbasic.load_rectmat(
+                calib_path+rmat_opt, lenslet_grid=lenslet_grid)
+            self.logger.info(f"Cube shape {FLUX_SHAPE_3D} from {rmat_opt}")
 
             existing_l1_name = scbasic.find_existing_proc_file(
                 input_filename=filename,

@@ -62,7 +62,7 @@ class RampFit(BasePrimitive):
     def _perform(self):
         imtype = self.action.args.ccddata.header['IMTYPE']
         if imtype =='OBJECT':
-            total_exptime = self.action.args.ccddata.header['EXPTIME']
+            total_exptime = self.action.args.ccddata.header['REXPTIME']
             obsmode = self.action.args.ccddata.header['CAMERA']
             det_config = self.action.args.ccddata.header['MCLOCK']
             filename = self.action.args.ccddata.header.get("OFNAME")
@@ -165,6 +165,7 @@ class RampFit(BasePrimitive):
                     #rmat1 = sparse.load_npz(calib_path+self.context.bpmat_ifs_fast0p6)
                     #bpm = self.context.bpm_ifs_fast0p6
                     #master_bpm = fits.getdata(calib_path+bpm)
+                    gain = self.context.gain_ifs_fast0p6
                     sat_map_file = self.context.sat_map_ifs_fast0p6
                     with fits.open(calib_path+sat_map_file) as hdul:
                         sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
@@ -243,7 +244,8 @@ class RampFit(BasePrimitive):
                         sci_im_full_original,
                         total_exptime,
                         SIG_map_scaled,
-                        group_dq = good_read_mask)
+                        group_dq = good_read_mask,
+                        gain = gain)
                     
                     final_slope *= gain   # e-/s
                     final_reset *= gain   # e-
@@ -259,7 +261,8 @@ class RampFit(BasePrimitive):
                         sci_im_full_original,
                         total_exptime,
                         SIG_map_scaled,
-                        group_dq = None)
+                        group_dq = None,
+                        gain = gain)
 
                     final_slope *= gain   # e-/s
                     final_reset *= gain   # e-

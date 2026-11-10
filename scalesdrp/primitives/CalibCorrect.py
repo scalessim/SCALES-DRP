@@ -19,8 +19,8 @@ class CalibCorrect(BasePrimitive):
     """
     This function applies master detector bias, master dark, and masster detector flat
     to the bad pixel corrected slope image from the previous step. You can turn on/off
-    each of this using config file. Appropriate master files are selected from the redux/ 
-    or calib/ folder in the order of listed here. 
+    each of this using config file. Appropriate master files are selected from the redux/
+    or calib/ folder in the order of listed here.
         Args:
             data_image: The (H,W) bad pixel corrected slope image.
 
