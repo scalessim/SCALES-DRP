@@ -375,7 +375,7 @@ class StartCalib(BasePrimitive):
                     good_read_mask=good_read_mask,
                     output_dir=plot_dir,
                     save_prefix=f"{self.action.args.name}_lin_dign",
-                    skip_initial_reads=2,
+                    skip_initial_reads=0,
                     minimum_signal_dn=0.0,
                     show=False)
                 plt.close(fig)

@@ -135,15 +135,15 @@ def main():
     # START HANDLING OF CONFIGURATION FILES ##########
 
     # check for the logs diretory
-    check_directory("logs")
+    #check_directory("logs")
     # check for the plots directory
-    check_directory("plots")
+    #check_directory("plots")
 
-    framework_config_file = "configs/framework.cfg"
+    framework_config_file = "configs/framework_calib_sa.cfg"
     framework_config_fullpath = get_resource_path(pkg, framework_config_file)
     framework_config_fullpath = str(framework_config_fullpath)
 
-    framework_logcfg_file = 'configs/logger.cfg'
+    framework_logcfg_file = 'configs/logger_calib_sa.cfg'
     framework_logcfg_fullpath = get_resource_path(pkg, framework_logcfg_file)
     framework_logcfg_fullpath = str(framework_logcfg_fullpath)
 
@@ -161,10 +161,15 @@ def main():
 
     # Add current working directory to config info
     scales_config.cwd = os.getcwd()
-
+    check_directory("calib_sa")
+    check_directory("calib_sa/logs")
     # check for the output directory
     check_directory(scales_config.output_directory)
-
+    check_directory(scales_config.plot_directory)
+    proc_dir = os.path.dirname(scales_config.procfile)
+ 
+    if proc_dir:
+        check_directory(proc_dir)
     try:
         framework = Framework(Scales_Calib_Pipeline_SA, framework_config_fullpath)
         # add this line ONLY if you are using a local logging config file
@@ -187,6 +192,9 @@ def main():
             "Using proc table file %s" % args.proctab
         )
         framework.config.instrument.procfile = args.proctab
+        override_proc_dir = os.path.dirname(args.proctab)
+        if override_proc_dir:
+            check_directory(override_proc_dir)
 
 
     # initialize the proctab and read it
@@ -205,6 +213,7 @@ def main():
         # The queue manager runs forever.
         framework.logger.info("Starting queue manager only, no processing")
         framework.start(args.queue_manager_only)
+        return
 
     # single frame processing
     elif args.frames:

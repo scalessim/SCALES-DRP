@@ -45,11 +45,12 @@
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="Installation.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a></li>
-<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Quick_Start.html">Quick Start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a></li>
-<li class="toctree-l1"><a class="reference internal" href="calib_products.html">Calibration Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a></li>
+<li class="toctree-l1"><a class="reference internal" href="calib_products.html">Calibration Products</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Support.html">Support</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Versions.html">Versions</a></li>
@@ -105,9 +106,9 @@ SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has
 </ul>
 </div></blockquote>
 </section>
-<section id="release-1-0">
-<h2>Release 1.0<a class="headerlink" href="#release-1-0" title="Link to this heading"></a></h2>
-<p>The latest version of 1.0.0 of the SCALES-DRP includes:</p>
+<section id="release-1-0-1">
+<h2>Release 1.0.1<a class="headerlink" href="#release-1-0-1" title="Link to this heading"></a></h2>
+<p>The latest version of 1.0.1 of the SCALES-DRP includes:</p>
 <blockquote>
 <div><ul class="simple">
 <li><p>Simplified installation via pip and conda environment</p></li>
@@ -125,16 +126,13 @@ SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has
 <li class="toctree-l2"><a class="reference internal" href="Installation.html#installation-steps">Installation Steps</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation &amp; the Execution</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Mode_of_Pipelines.html#calibration-pipeline">Calibration Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Mode_of_Pipelines.html">Modes of DRP Operation</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="Mode_of_Pipelines.html#calibration-module-i">Calibration Module-I</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Mode_of_Pipelines.html#calibration-pipeline-ii">Calibration Pipeline-II</a></li>
 <li class="toctree-l2"><a class="reference internal" href="Mode_of_Pipelines.html#science-grad-pipeline">Science-Grad Pipeline</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#process-files-file-lists-and-entire-directories">Process files, file lists and entire directories</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#other-command-line-options">Other command line options</a></li>
-</ul>
-</li>
+<li class="toctree-l1"><a class="reference internal" href="Quick_Start.html">Quick Start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="Primitives.html">Primitives</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="Primitives.html#reference-pixel-correction">Reference Pixel Correction</a></li>
 <li class="toctree-l2"><a class="reference internal" href="Primitives.html#f-noise-correction">1/f Noise Correction</a></li>
@@ -146,6 +144,12 @@ SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has
 <li class="toctree-l2"><a class="reference internal" href="Primitives.html#world-coordinate-system-wcs">World Coordinate System (WCS)</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#configuration-parameters-common-to-both-the-module">Configuration Parameters Common to both the module</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#calibration-module-specific-configuration-parameters">Calibration Module Specific Configuration Parameters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#science-grade-module-specific-configuration-parameters">Science-grade Module Specific Configuration Parameters</a></li>
+</ul>
+</li>
 <li class="toctree-l1"><a class="reference internal" href="calib_products.html">Calibration Products</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="calib_products.html#linearity-coefficient-generation">Linearity Coefficient Generation</a></li>
 <li class="toctree-l2"><a class="reference internal" href="calib_products.html#creating-master-bad-pixel-mask">Creating Master Bad Pixel Mask</a></li>
@@ -154,10 +158,9 @@ SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has
 <li class="toctree-l2"><a class="reference internal" href="calib_products.html#master-calibration-frame-generation">Master Calibration Frame Generation</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="Configuration_Parameters.html">Configuration Parameters</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#configuration-parameters-common-to-both-the-module">Configuration Parameters Common to both the module</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#calibration-module-specific-configuration-parameters">Calibration Module Specific Configuration Parameters</a></li>
-<li class="toctree-l2"><a class="reference internal" href="Configuration_Parameters.html#science-grade-module-specific-configuration-parameters">Science-grade Module Specific Configuration Parameters</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html">More into the DRP Execution</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#process-files-file-lists-and-entire-directories">Process files, file lists and entire directories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="Running_the_SCALES-DRP_Pipeline.html#other-command-line-options">Other command line options</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="Data_Products.html">Data Products</a></li>
@@ -171,6 +174,16 @@ SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has
 <li class="toctree-l1"><a class="reference internal" href="FAQ.html">FAQ</a></li>
 </ul>
 </div>
+</section>
+<section id="developers">
+<h2>Developers<a class="headerlink" href="#developers" title="Link to this heading"></a></h2>
+<p>The SCALES DRP was developed in collaboration between:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>Athira Unni and Steph Sallum and the SCALES team at UCSC.</p></li>
+<li><p>Max Brodheim, Matthew Brown, and Rosalie McGurk at W. M. Keck Observatory</p></li>
+</ul>
+</div></blockquote>
 </section>
 </section>
 
