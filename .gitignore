@@ -8,3 +8,6 @@
 **/*.fits
 **/logs
 **/*.pyc
+
+# Generated Sphinx documentation
+/docs/build/
