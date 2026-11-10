@@ -102,7 +102,7 @@ class SpectralExtractChi(BasePrimitive):
 
             elif ifsmode=='LowRes-K':
                 rmat_opt = self.context.OPT_rmat_LowRes_K
-                rmat_chi = self.context.OPT_rmat_LowRes_K
+                rmat_chi = self.context.C2_rmat_LowRes_K
                 lenslet_grid = self.context.lowres_lenslet_grid
             elif ifsmode=='LowRes-L':
                 rmat_opt = self.context.OPT_rmat_LowRes_L
