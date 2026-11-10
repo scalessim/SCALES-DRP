@@ -713,6 +713,7 @@ class CalibPostProcessSA(BasePrimitive):
                 uncert_stack = []
                 chisq_stack = []
                 dq_stack = []
+                dq_missing = []
                 hdrm = None
 
                 for filename in filenames:
@@ -764,26 +765,35 @@ class CalibPostProcessSA(BasePrimitive):
                                 f"{filename}.")
                         chisq_stack.append(chisq)
 
-                        if "DQ" not in hdul:
-                            raise RuntimeError(
-                                f"DQ extension missing from "
-                                f"{filename}.")
+                        # DQ is optional: L1s made with
+                        # apply_sat_mask=False have no DQ extension.
+                        if "DQ" not in hdul or hdul["DQ"].data is None:
+                            dq_missing.append(filename)
+                        else:
+                            dq = np.asarray(
+                                hdul["DQ"].data,
+                                dtype=np.uint16)
 
-                        dq = np.asarray(
-                            hdul["DQ"].data,
-                            dtype=np.uint16)
-
-                        if dq.shape != data.shape:
-                            raise ValueError(
-                                f"DQ shape {dq.shape} does not "
-                                f"match DATA shape {data.shape} in "
-                                f"{filename}.")
-                        dq_stack.append(dq)
+                            if dq.shape != data.shape:
+                                raise ValueError(
+                                    f"DQ shape {dq.shape} does not "
+                                    f"match DATA shape {data.shape} in "
+                                    f"{filename}.")
+                            dq_stack.append(dq)
 
                 data_stack = np.stack(data_stack,axis=0)
                 uncert_stack = np.stack(uncert_stack,axis=0)
                 chisq_stack = np.stack(chisq_stack,axis=0)
-                dq_stack = np.stack(dq_stack,axis=0)
+                if dq_missing:
+                    self.logger.warning(
+                        f"DQ extension missing from {len(dq_missing)} of "
+                        f"{len(filenames)} L1 files (e.g. {dq_missing[0]}); "
+                        "master will be written without DQ.")
+                    dq_stack = None
+                    dq_history = "DQ not propagated (missing from input L1s)"
+                else:
+                    dq_stack = np.stack(dq_stack,axis=0)
+                    dq_history = "DQ propagated using bitwise OR of input L1 DQ maps"
                 n_slopes = data_stack.shape[0]
                 
                 self.logger.info(f"Master input stack shape: {data_stack.shape}")
@@ -813,7 +823,7 @@ class CalibPostProcessSA(BasePrimitive):
                     hdrm["HISTORY"] = (f"Master wavelength combined: {monowave}")
                     hdrm["HISTORY"] = ("UNCERT propagated during master combination")
                     hdrm["HISTORY"] = ("CHISQ propagated as median of contributing L1 values")
-                    hdrm["HISTORY"] = ("DQ propagated using bitwise OR of input L1 DQ maps")
+                    hdrm["HISTORY"] = dq_history
 
                     fits_writer_calib(
                         data=master,
