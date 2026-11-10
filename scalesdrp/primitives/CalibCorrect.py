@@ -50,7 +50,7 @@ class CalibCorrect(BasePrimitive):
             calib_path = str(get_resource_path(package, calibfilepath))+'/'
 
             final_ramp = self.action.args.ccddata.data
-            final_uncert = self.action.args.ccddata.uncertainty
+            final_uncert = self.action.args.ccddata.uncertainty.array
             chisq = getattr(self.action.args.ccddata,"chisq",None)
             quality_map = getattr(self.action.args.ccddata,"dq",None)
 
@@ -118,6 +118,7 @@ class CalibCorrect(BasePrimitive):
                     self.logger.info("+++++++++++ Master bias subtracted +++++++++++")
 
             if self.config.instrument.apply_det_flat == True:
+                
                 m_flat, m_flat_uncert = scbasic.load_single_master_file(keywords_unique, master_type='FLATLAMP')
                 if m_flat is not None:
                     norm_flat,norm_flat_uncert = scbasic.normalize_detector_flat(m_flat,m_flat_uncert)
@@ -150,8 +151,7 @@ class CalibCorrect(BasePrimitive):
                 final_ramp = final_ramp-bias
 
             self.action.args.ccddata.data = final_ramp
-            #self.action.args.ccddata.uncertainty = StdDevUncertainty(final_uncert.astype(np.float32))
-            self.action.args.ccddata.uncertainty = StdDevUncertainty(final_uncert.array.astype(np.float32))
+            self.action.args.ccddata.uncertainty = StdDevUncertainty(final_uncert.astype(np.float32))
             self.action.args.ccddata.chisq = StdDevUncertainty(chisq.astype(np.float32))
 
             log_string = CalibCorrect.__module__

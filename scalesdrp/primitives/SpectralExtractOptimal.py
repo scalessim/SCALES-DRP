@@ -69,9 +69,9 @@ class SpectralExtractOptimal(BasePrimitive):
             modslnam = self.action.args.ccddata.header['MODSLNAM']
             dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
             filter = self.action.args.ccddata.header['FILTER']
+            #ifsmode = self.action.args.ccddata.header['IFSMODE']
             ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam,filter)
             filename = self.action.args.ccddata.header.get("OFNAME")
-            #print(ifsmode)
 
             # L1 UNCERT is the total per-pixel 1-sigma (read + photon noise);
             # optimal_extract_horne uses it directly, nothing is added here.

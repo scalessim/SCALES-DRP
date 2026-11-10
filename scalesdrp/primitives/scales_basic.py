@@ -1375,6 +1375,46 @@ def proctab_update(
 			print("Proctab update failed for %s: %s",output_path, str(e))
 	return output_path
 
+def proctab_update_sa(
+    header,output_dir,input_filename,
+    suffix,frame=None,proctab=None,
+    proctab_path=None,newtype=None):
+
+    redux_output_dir = get_base_output_dir(output_dir)
+    base_name = os.path.basename(input_filename)
+    file_root, file_ext = os.path.splitext(base_name)
+    output_filename = f"{file_root}{suffix}{file_ext}"
+    #redux_output_dir = os.path.join(output_dir, "redux")
+    os.makedirs(redux_output_dir, exist_ok=True)
+    output_path = os.path.join(redux_output_dir, output_filename)
+
+    if proctab is not None:
+        if proctab_path is None:
+            proctab_path = os.path.join(redux_output_dir, "scales.proc")
+        try:
+            proctab.read_proctab(proctab_path)
+        except Exception as e:
+            proctab.new_proctab()
+
+        if frame is not None:
+            use_frame = frame
+        else:
+            class _FrameShim():
+                def __init__(self,hdr):
+                    self.header = hdr
+            use_frame = _FrameShim(header)
+        try:
+            proctab.update_proctab(
+                use_frame,
+                suffix=suffix,
+                filename=output_filename,
+                newtype=newtype)
+            proctab.write_proctab(proctab_path)
+            print("Proctab updated: %s", proctab_path)
+        except Exception as e:
+            print("Proctab update failed for %s: %s",output_path, str(e))
+    return output_path
+
 
 def build_master_from_stack(
     data_stack,                 # (N,H,W) or list of (H,W)
