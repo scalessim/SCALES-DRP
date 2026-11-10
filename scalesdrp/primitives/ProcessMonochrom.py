@@ -2388,7 +2388,7 @@ class ProcessMonochrom(BasePrimitive):
         lensflatcube = []
         imgs = np.array(self.gen_imgs_gaussfit(interp_arr,cut=cut,cropsize=cropsize))
         for ii in range(len(imgs)):
-            self.logger.info("Doing LSF and lensflat "+str(ii)+"/"str(len(imgs)))
+            self.logger.info("Doing LSF and lensflat "+str(ii)+"/"+str(len(imgs)))
             scube = np.array(rmat*imgs[ii].flatten()).reshape([len(lams),ny,nx])
             #scube_lsf = scube/np.max(scube,axis=0)
             lflat = scube[ii]
