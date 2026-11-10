@@ -57,7 +57,7 @@ class CalibPostProcessSA(BasePrimitive):
         bpm_groups = []
         l1_groups = []
         readnoise_grp=[]
-        
+
         proctab_path = os.path.join(output_dir,"scales.proc")
         self.proctab.read_proctab(proctab_path)
         if self.proctab.proctab is None:
@@ -419,17 +419,11 @@ class CalibPostProcessSA(BasePrimitive):
                         **flat_params))
 
                 combined_dq = dark_dq | flat_dq
-                science_mask = np.zeros(combined_dq.shape, dtype=bool)
-                science_mask[4:-4, 4:-4] = True
-                combined_bpm = (combined_dq != 0) & science_mask
-                n_bad = int(np.count_nonzero(combined_bpm))
-                n_science = int(np.count_nonzero(science_mask))
-                bad_fraction = n_bad / n_science
+                combined_bpm = combined_dq != 0
 
                 self.logger.info(f"Dark BPM pixels: {np.sum(dark_bpm)}")
                 self.logger.info(f"Flat BPM pixels: {np.sum(flat_bpm)}")
-                self.logger.info(f"Combined BPM pixels: {n_bad}")
-                self.logger.info(f"Combined BPM fraction: {100 * bad_fraction:.4f}%")
+                self.logger.info(f"Combined BPM pixels: {np.sum(combined_bpm)}")
 
                 bpm_header = bpm_create.create_bpm_header(
                     camera=camera,
@@ -439,8 +433,8 @@ class CalibPostProcessSA(BasePrimitive):
                     dark_params=dark_params,
                     flat_params=flat_params)
 
-                bpm_header["NBADPIX"] = (n_bad,"Flagged science pixels")
-                bpm_header["BADFRAC"] = (float(bad_fraction),"Fraction of flagged science pixels")
+                bpm_header["NBADPIX"] = (int(np.sum(combined_bpm)),"Total flagged pixels")
+                bpm_header["BADFRAC"] = (float(np.mean(combined_bpm)),"Fraction of flagged pixels")
                 bpm_output_path = os.path.join(calib_dir,"bpm_IFS_cd6.fits")
                 #fits.PrimaryHDU(data=combined_bpm.astype(np.uint16),header=bpm_header,).writeto(bpm_output_path,overwrite=True)
                 fits.HDUList([
@@ -468,25 +462,6 @@ class CalibPostProcessSA(BasePrimitive):
                     dark_min_frames_bad_spatial=dark_params["min_frames_bad_spatial"],
                     flat_min_frames_bad_spatial=flat_params["min_frames_bad_spatial"],
                     save_pdf=False)
-                
-                result_bpm = bpm_create.plot_bpm_parameter_validation(
-                    dark_masks=dark_masks,
-                    flat_masks=flat_masks,
-                    dark_products=dark_products,
-                    flat_products=flat_products,
-                    output_dir=plot_dir,
-                    prefix=f"bpm_{camera}_{mclock}",
-                    flat_low_response_thresh=self.config.instrument.ifs_flat_low_response_thresh,
-                    flat_high_response_thresh=self.config.instrument.ifs_flat_high_response_thresh,
-                    dark_min_frames_bad_spatial=self.config.instrument.ifs_dark_min_frames_bad_spatial,
-                    flat_min_frames_bad_spatial=self.config.instrument.ifs_flat_min_frames_bad_spatial,
-                    dpi=200,
-                    save_pdf=False)
-
-                for fig in result_bpm["figures"]:
-                    plt.close(fig)
-                print(result_bpm["statistics"])
-
                 self.logger.info(f"BPM diagnostics saved: {diagnostics['png_path']}")
                 plt.close(diagnostics["figure"])
                 self.logger.info(f"Finished Creating IFS bad pixel map: "f"{bpm_output_path}")
@@ -532,17 +507,11 @@ class CalibPostProcessSA(BasePrimitive):
                         **flat_params))
 
                 combined_dq = dark_dq | flat_dq
-                science_mask = np.zeros(combined_dq.shape, dtype=bool)
-                science_mask[4:-4, 4:-4] = True
-                combined_bpm = (combined_dq != 0) & science_mask
-                n_bad = int(np.count_nonzero(combined_bpm))
-                n_science = int(np.count_nonzero(science_mask))
-                bad_fraction = n_bad / n_science
+                combined_bpm = combined_dq != 0
 
                 self.logger.info(f"Dark BPM pixels: {np.sum(dark_bpm)}")
                 self.logger.info(f"Flat BPM pixels: {np.sum(flat_bpm)}")
-                self.logger.info(f"Combined BPM pixels: {n_bad}")
-                self.logger.info(f"Combined BPM fraction: {100 * bad_fraction:.4f}%")
+                self.logger.info(f"Combined BPM pixels: {np.sum(combined_bpm)}")
 
                 bpm_header = bpm_create.create_bpm_header(
                     camera=camera,
@@ -552,8 +521,8 @@ class CalibPostProcessSA(BasePrimitive):
                     dark_params=dark_params,
                     flat_params=flat_params)
 
-                bpm_header["NBADPIX"] = (n_bad,"Flagged science pixels")
-                bpm_header["BADFRAC"] = (float(bad_fraction),"Fraction of flagged science pixels")
+                bpm_header["NBADPIX"] = (int(np.sum(combined_bpm)),"Total flagged pixels")
+                bpm_header["BADFRAC"] = (float(np.mean(combined_bpm)),"Fraction of flagged pixels")
                 bpm_output_path = os.path.join(calib_dir,"bpm_img_cd6.fits")
                 #fits.PrimaryHDU(data=combined_bpm.astype(np.uint16),header=bpm_header,).writeto(bpm_output_path,overwrite=True)
                 fits.HDUList([
@@ -580,26 +549,6 @@ class CalibPostProcessSA(BasePrimitive):
                     dark_min_frames_bad_spatial=dark_params["min_frames_bad_spatial"],
                     flat_min_frames_bad_spatial=flat_params["min_frames_bad_spatial"],
                     save_pdf=False)
-
-                result_bpm = bpm_create.plot_bpm_parameter_validation(
-                    dark_masks=dark_masks,
-                    flat_masks=flat_masks,
-                    dark_products=dark_products,
-                    flat_products=flat_products,
-                    output_dir=plot_dir,
-                    prefix=f"bpm_{camera}_{mclock}",
-                    flat_low_response_thresh=self.config.instrument.im_flat_low_response_thresh,
-                    flat_high_response_thresh=self.config.instrument.im_flat_high_response_thresh,
-                    dark_min_frames_bad_spatial=self.config.instrument.im_dark_min_frames_bad_spatial,
-                    flat_min_frames_bad_spatial=self.config.instrument.im_flat_min_frames_bad_spatial,
-                    dpi=200,
-                    save_pdf=False)
-
-                for fig in result_bpm["figures"]:
-                    plt.close(fig)
-                
-                print(result_bpm["statistics"])
-
                 self.logger.info(f"BPM diagnostics saved: {diagnostics['png_path']}")
                 plt.close(diagnostics["figure"])                
                 self.logger.info(f"Finished Creating Im bad pixel map: "f"{bpm_output_path}")
