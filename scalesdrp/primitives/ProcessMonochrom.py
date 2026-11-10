@@ -59,7 +59,7 @@ class ProcessMonochrom(BasePrimitive):
         ims = []
         for name in names:
             image = pyfits.getdata(output_dir+'/'+name,memmap=False)
-            if True in np.isnan(image): print('nan in image')
+            if True in np.isnan(image): self.logger.info('nan in image')
             ims.append(image)
         ims = np.array(ims)
         return ims, lams/1000.0
@@ -175,7 +175,7 @@ class ProcessMonochrom(BasePrimitive):
                 coordinates = np.column_stack([coords_yx[:, 1], coords_yx[:, 0]])
             intensities = data_smooth[coords_yx[:, 0], coords_yx[:, 1]]
 
-            print(f"Found {len(coords_yx)} spots in image {ii}")
+            self.logger.info(f"Found {len(coords_yx)} spots in image {ii}")
             spots[ii] = {
                     'filename': 'blank',
                     'coordinates': coordinates,
@@ -229,7 +229,7 @@ class ProcessMonochrom(BasePrimitive):
         n_images = len(spots)
 
 
-        print(f"\nSequential tracking through {n_images} images...")
+        self.logger.info(f"\nSequential tracking through {n_images} images...")
 
         # Initialize with first image
         coords_0 = spots[0]['coordinates']
@@ -249,7 +249,7 @@ class ProcessMonochrom(BasePrimitive):
                 0: (coords_0[spot_id, 0], coords_0[spot_id, 1], intensities_0[spot_id], lams_0[spot_id])
             }
 
-        print(f"  Image 0: {n_spots_0} spots initialized")
+        self.logger.info(f"  Image 0: {n_spots_0} spots initialized")
 
         # Track forward through remaining images
         prev_coords = coords_0
@@ -271,7 +271,7 @@ class ProcessMonochrom(BasePrimitive):
                 next_spot_id += n_curr_spots
                 prev_coords = curr_coords
                 prev_spot_ids = new_spot_ids
-                print(f"  Image {img_idx}: {n_curr_spots} new spots (no previous spots to match)")
+                self.logger.info(f"  Image {img_idx}: {n_curr_spots} new spots (no previous spots to match)")
                 continue
 
             # Build KDTree for current image spots
@@ -320,14 +320,14 @@ class ProcessMonochrom(BasePrimitive):
                     next_spot_id += 1
                     n_new += 1
 
-            print(f"  Image {img_idx}: {n_matched} matched, {n_lost} lost, {n_new} new (total: {n_curr_spots})")
+            self.logger.info(f"  Image {img_idx}: {n_matched} matched, {n_lost} lost, {n_new} new (total: {n_curr_spots})")
 
             # Update for next iteration
             prev_coords = curr_coords
             prev_spot_ids = curr_spot_ids
 
         total_spots = len(spot_tracks)
-        print(f"\nTotal unique spots tracked: {total_spots}")
+        self.logger.info(f"\nTotal unique spots tracked: {total_spots}")
 
         return spot_tracks
 
@@ -686,7 +686,7 @@ class ProcessMonochrom(BasePrimitive):
 
         n -= n.min(axis=0)
         nx_, ny_ = n.max(axis=0) + 1
-        print(f'NOTE: fitted grid (before dropping spurious tracks) is {ny_} x {nx_}')
+        self.logger.info(f'NOTE: fitted grid (before dropping spurious tracks) is {ny_} x {nx_}')
 
 
         fp = np.full((ny_, nx_, 3), np.nan)
@@ -954,7 +954,7 @@ class ProcessMonochrom(BasePrimitive):
             return sm[yi - max(yi - half, 0), xi - max(xi - half, 0)]
 
         trc_c, trc_s = fit_lenslet_traces(tracks_new, trace_shape, min_fit_spots)
-        print(f'trace stretch s: x median {np.median(trc_s[:, 0]):.3f} (16-84%: {np.percentile(trc_s[:, 0], 16):.3f}-'
+        self.logger.info(f'trace stretch s: x median {np.median(trc_s[:, 0]):.3f} (16-84%: {np.percentile(trc_s[:, 0], 16):.3f}-'
           f'{np.percentile(trc_s[:, 0], 84):.3f}), y median {np.median(trc_s[:, 1]):.3f} '
           f'({np.percentile(trc_s[:, 1], 16):.3f}-{np.percentile(trc_s[:, 1], 84):.3f})')
 
@@ -972,7 +972,7 @@ class ProcessMonochrom(BasePrimitive):
             p = np.array([v[:2] for v in rest.values()], float) - trace_shape[list(rest)]
             errs['global shape (s=1)'].append(np.hypot(*(np.median(p, axis=0) + trace_shape[w0] - truth)))
         for k, e in errs.items():
-            print(f'leave-one-out position error, {k:24s}: median {np.median(e):.2f} px, 90th {np.percentile(e, 90):.2f}, '
+            self.logger.info(f'leave-one-out position error, {k:24s}: median {np.median(e):.2f} px, 90th {np.percentile(e, 90):.2f}, '
                 f'max {np.max(e):.2f}')
 
         filled_set = {}      # (lenslet, w) -> 'gap' (inside its detected range) or 'edge' (outside it)
@@ -996,7 +996,7 @@ class ProcessMonochrom(BasePrimitive):
                     filled_set[(j, w)] = 'gap' if wlo < w < whi else 'edge'
                 tracks_new[j] = dict(sorted(t.items()))
             kinds = np.array(list(filled_set.values()))
-            print(f'filled {len(filled_set)} spots ({(kinds == "gap").sum()} gap, {(kinds == "edge").sum()} edge); '
+            self.logger.info(f'filled {len(filled_set)} spots ({(kinds == "gap").sum()} gap, {(kinds == "edge").sum()} edge); '
                 f'{n_off} predicted crops off the detector were left empty')
 
         return tracks_new, filled_set, kinds
@@ -1098,7 +1098,7 @@ class ProcessMonochrom(BasePrimitive):
         for k, m in groups.items():
             v = snr[m & np.isfinite(snr)]
             if len(v):
-                print(f'{k:30s} n={m.sum():6d}  S/N median {np.median(v):7.1f}  <3: {(v < 3).sum():5d}  <5: {(v < 5).sum():5d}')
+                self.logger.info(f'{k:30s} n={m.sum():6d}  S/N median {np.median(v):7.1f}  <3: {(v < 3).sum():5d}  <5: {(v < 5).sum():5d}')
 
         """
         fig, ax = plt.subplots(1, 3, figsize=(20, 5.5))
@@ -1122,12 +1122,12 @@ class ProcessMonochrom(BasePrimitive):
         for kind_, cut_ in [('gap', snr_min_gap), ('edge', snr_min_edge)]:
             if cut_ is not None:
                 d_ = filled & (fill_kind == kind_) & ~(snr >= cut_)
-                print(f'removing {d_.sum()} {kind_} fills with S/N < {cut_} (or unmeasurable)')
+                self.logger.info(f'removing {d_.sum()} {kind_} fills with S/N < {cut_} (or unmeasurable)')
                 drop |= d_
         posarr[drop] = np.nan
         spotim_arr[drop] = np.nan
         filled &= ~drop
-        print(f'{filled.sum()} filled spots remain in posarr')
+        self.logger.info(f'{filled.sum()} filled spots remain in posarr')
         return posarr, spotim_arr
 
 
@@ -1376,7 +1376,7 @@ class ProcessMonochrom(BasePrimitive):
             for xind in range(nx):
                 centroid = centroids[ll, yind, xind]
                 if np.any(np.isnan(centroid)):
-                    print(yind,xind,' cent is nan')
+                    self.logger.info(yind,xind,' cent is nan')
                     continue
                 xcen, ycen = centroid
 
@@ -1456,15 +1456,15 @@ class ProcessMonochrom(BasePrimitive):
         for ll in range(len(spots)):
             combined = self.build_oversampled_2(ll, spots, centroids, oversamp, ny, nx, npix=16)
             fwhm_x = self.halfmax_fwhm_x(combined, oversamp)
-            print("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
+            self.logger.info("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
 
             raws, models, residuals, scales, modim = self.downsample_model_and_residuals_2(ll, spots, centroids, combined, oversamp,
                                                                                       ny, nx, posarr,npix=16,normtype='sum')
             good = ~np.isnan(residuals).any(axis=(2,3))
             rms = np.sqrt(np.nanmean(residuals[good]**2))
-            print("n spots:", good.sum(), "  overall RMS residual:", rms)
+            self.logger.info("n spots:", good.sum(), "  overall RMS residual:", rms)
             per_spot_rms_pct, overall_rms_pct = self.residual_rms_pct_2(raws, residuals)
-            print("overall RMS residual (%% of peak, pooled) = %.2f%%" % overall_rms_pct)
+            self.logger.info("overall RMS residual (%% of peak, pooled) = %.2f%%" % overall_rms_pct)
 
             gauss = Gaussian2D(amplitude=1, x_mean=len(combined)/2.0-0.5, y_mean=len(combined)/2.0-0.5,
                                x_stddev=fwhm_x/2.355*oversamp, y_stddev=fwhm_x/2.355*oversamp,
@@ -1473,14 +1473,14 @@ class ProcessMonochrom(BasePrimitive):
             filt = gauss(xx,yy)
             combined2 = combined*filt
             fwhm_x = self.halfmax_fwhm_x(combined2, oversamp)
-            print("FWHM_x (direct half-max crossing, filtered oversampled image) =", fwhm_x)
+            self.logger.info("FWHM_x (direct half-max crossing, filtered oversampled image) =", fwhm_x)
             raws, models_sym, residuals_sym, scales_sym, modim_sym = self.downsample_model_and_residuals_2(ll, spots, centroids, combined2, oversamp,
                                                                                               ny, nx, posarr,npix=16,normtype='max')
             good = ~np.isnan(residuals_sym).any(axis=(2,3))
             rms = np.sqrt(np.nanmean(residuals_sym[good]**2))
-            print("n spots:", good.sum(), "  overall RMS residual (filtered):", rms)
+            self.logger.info("n spots:", good.sum(), "  overall RMS residual (filtered):", rms)
             per_spot_rms_pct_sym, overall_rms_pct_sym = self.residual_rms_pct_2(raws, residuals_sym)
-            print("overall RMS residual (%% of peak, pooled, filtered) = %.2f%%" % overall_rms_pct_sym)
+            self.logger.info("overall RMS residual (%% of peak, pooled, filtered) = %.2f%%" % overall_rms_pct_sym)
 
             """
             yind=10
@@ -1536,7 +1536,7 @@ class ProcessMonochrom(BasePrimitive):
         for ll in range(len(spots)):
             combined = self.build_oversampled(ll, centroids, spots, nx, ny, oversamp, npix=npix)
             fwhm_x = self.halfmax_fwhm_x(combined, oversamp)
-            print("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
+            self.logger.info("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
             raws, models, residuals, scales, models_stampsize, residuals_stampsize = self.downsample_model_and_residuals(combined, spots, centroids, oversamp, ll, npix=npix)
             modim = np.zeros([2048,2048])
             resim = np.zeros([2048,2048])
@@ -1550,19 +1550,19 @@ class ProcessMonochrom(BasePrimitive):
                         xe = int(xe)
                         ys = int(ys)
                         ye = int(ye)
-                        print(ll,lensy,lensx,ys,ye,xs,xe,models_stampsize.shape)
+                        #print(ll,lensy,lensx,ys,ye,xs,xe,models_stampsize.shape)
                         modim[ys:ye,xs:xe]+=models_stampsize[lensy*self.nx + lensx][:ye-ys,:xe-xs] ##this matches how the spot psf thumbnails are constructed
                         resim[ys:ye,xs:xe]+=residuals_stampsize[lensy*self.nx + lensx][:ye-ys,:xe-xs] ##this matches how the spot psf thumbnails are constructed
                         model_arr[ll,lensy,lensx] = models[lensy*self.nx + lensx]
-                        print(models.shape,np.unique(models[lensy*self.nx + lensx]))
+                        #print(models.shape,np.unique(models[lensy*self.nx + lensx]))
                         resid_arr[ll,lensy,lensx] = residuals[lensy*self.nx + lensx]
             modims.append(modim)
             resims.append(resim)
             good = ~np.isnan(residuals).any(axis=(1,2))
             rms = np.sqrt(np.nanmean(residuals[good]**2))
-            print("n spots:", good.sum(), "  overall RMS residual:", rms)
+            self.logger.info("n spots:", good.sum(), "  overall RMS residual:", rms)
             per_spot_rms_pct, overall_rms_pct = self.residual_rms_pct(raws, residuals)
-            print("overall RMS residual (%% of peak, pooled) = %.2f%%" % overall_rms_pct)
+            self.logger.info("overall RMS residual (%% of peak, pooled) = %.2f%%" % overall_rms_pct)
         return model_arr, resid_arr, np.array(modims), np.array(resims)
 
 
@@ -1613,7 +1613,6 @@ class ProcessMonochrom(BasePrimitive):
         modims = []
 
         for ll in range(len(calims)):
-            print(ll)
             modim = np.zeros(calims[ll].shape)
             for lensx in range(posarr.shape[2]):
                 for lensy in range(posarr.shape[1]):
@@ -1716,19 +1715,19 @@ class ProcessMonochrom(BasePrimitive):
 
 
                     if not fit_ok:
-                        print(f"  [warn] fit did not converge cleanly at "
+                        self.logger.info(f"  [warn] fit did not converge cleanly at "
                               f"lensx={lensx}, lensy={lensy}, ll={ll} "
                               f"(ierr={fitter.fit_info.get('ierr')})")
 
                     if show_plots:
-                        print("--- Fit Results (value +/- 1-sigma) ---")
-                        print(f"Amplitude: {gauss_part.amplitude.value:.2f} +/- {amp_err:.2f}")
-                        print(f"X Center:  {gauss_part.x_mean.value:.2f} +/- {xmean_err:.2f}")
-                        print(f"Y Center:  {gauss_part.y_mean.value:.2f} +/- {ymean_err:.2f}")
-                        print(f"X Sigma:   {gauss_part.x_stddev.value:.2f} +/- {xstd_err:.2f}")
-                        print(f"Y Sigma:   {gauss_part.y_stddev.value:.2f} +/- {ystd_err:.2f}")
-                        print(f"Theta:     {gauss_part.theta.value:.2f} +/- {theta_err:.2f} rad")
-                        print(f"Background:{bkg_part.amplitude.value:.4f} +/- {bkg_err:.4f}")
+                        self.logger.info("--- Fit Results (value +/- 1-sigma) ---")
+                        self.logger.info(f"Amplitude: {gauss_part.amplitude.value:.2f} +/- {amp_err:.2f}")
+                        self.logger.info(f"X Center:  {gauss_part.x_mean.value:.2f} +/- {xmean_err:.2f}")
+                        self.logger.info(f"Y Center:  {gauss_part.y_mean.value:.2f} +/- {ymean_err:.2f}")
+                        self.logger.info(f"X Sigma:   {gauss_part.x_stddev.value:.2f} +/- {xstd_err:.2f}")
+                        self.logger.info(f"Y Sigma:   {gauss_part.y_stddev.value:.2f} +/- {ystd_err:.2f}")
+                        self.logger.info(f"Theta:     {gauss_part.theta.value:.2f} +/- {theta_err:.2f} rad")
+                        self.logger.info(f"Background:{bkg_part.amplitude.value:.4f} +/- {bkg_err:.4f}")
 
                         full_model = fitted_model(x, y)
                         plt.figure(figsize=(12, 4), clear=True)
@@ -1800,18 +1799,16 @@ class ProcessMonochrom(BasePrimitive):
                                                           fitted_model.y_stddev.value,
                                                           fitted_model.theta.value]
 
-                                #print(ll,lensy,lensx)
-                                #print(fitted_model.x_mean.value,fitted_model.y_mean.value)
                                 if True in np.isnan(fitarr[ll,lensy,lensx]):
-                                    print('nans in '+str(ll)+' '+str(lensy)+' '+str(lensx))
+                                    self.logger.info('nans in '+str(ll)+' '+str(lensy)+' '+str(lensx))
                                 if show_plots==True:
-                                    print("--- Fit Results ---")
-                                    print(f"Amplitude: {fitted_model.amplitude.value:.2f}")
-                                    print(f"X Center:  {fitted_model.x_mean.value:.2f}")
-                                    print(f"Y Center:  {fitted_model.y_mean.value:.2f}")
-                                    print(f"X Sigma:   {fitted_model.x_stddev.value:.2f}")
-                                    print(f"Y Sigma:   {fitted_model.y_stddev.value:.2f}")
-                                    print(f"Theta:     {fitted_model.theta.value:.2f} rad")
+                                    self.logger.info("--- Fit Results ---")
+                                    self.logger.info(f"Amplitude: {fitted_model.amplitude.value:.2f}")
+                                    self.logger.info(f"X Center:  {fitted_model.x_mean.value:.2f}")
+                                    self.logger.info(f"Y Center:  {fitted_model.y_mean.value:.2f}")
+                                    self.logger.info(f"X Sigma:   {fitted_model.x_stddev.value:.2f}")
+                                    self.logger.info(f"Y Sigma:   {fitted_model.y_stddev.value:.2f}")
+                                    self.logger.info(f"Theta:     {fitted_model.theta.value:.2f} rad")
 
                                     plt.figure(figsize=(12, 4),clear=True)
                                     plt.subplot(1, 3, 1)
@@ -1849,7 +1846,6 @@ class ProcessMonochrom(BasePrimitive):
                     for i in range(len(gausspars[0])):
                         #fint = LinearNDInterpolator(lams_in,gausspars[:,i])
                         tofit = gausspars[:,i]
-                        print(lensy,lensx,tofit)
                         lamsfit = lams_in[np.where(np.isnan(tofit)==False)]
                         tofit = tofit[np.where(np.isnan(tofit)==False)]
                         if method=='poly':
@@ -1858,8 +1854,6 @@ class ProcessMonochrom(BasePrimitive):
                         if method=='interp':
                             fint = interp1d(lamsfit,tofit)
                         gausspars_new = fint(lams_des)
-                        print(gausspars_new)
-                        print('==========================================')
                         if show_plots==True:
                             f = plt.figure(clear=True)
                             plt.scatter(lams_des,gausspars_new)
@@ -1963,7 +1957,7 @@ class ProcessMonochrom(BasePrimitive):
 
         ims = []
         for ll in range(len(interp_arr)):
-            print('doing wavelength slice '+str(ll))
+            self.logger.info('doing wavelength slice '+str(ll))
             imslice = np.zeros([2048,2048])
             for yy in range(len(interp_arr[0])):
                 for xx in range(len(interp_arr[0,0])):
@@ -2172,9 +2166,7 @@ class ProcessMonochrom(BasePrimitive):
         Function to generate rectmat from cube of cal unit images.
         """
 
-        #print('doing c2 rectmat lowres')
         matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds(calims,posarr,cut=cut)
-        #print(len(matrowinds),len(matcolinds),len(matvals))
         rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(calims[0].shape),np.prod(posarr.shape[:3])))
         return rmat
 
@@ -2184,7 +2176,6 @@ class ProcessMonochrom(BasePrimitive):
         """
 
         matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds_interpd(interp_arr,cut=cut)
-        #print(len(matrowinds),len(matcolinds),len(matvals))
         rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(calims[0].shape),np.prod(interp_arr.shape[:3]),))
         return rmat
 
@@ -2235,7 +2226,7 @@ class ProcessMonochrom(BasePrimitive):
                 minx = np.min(rowarr)
                 maxx = np.max(rowarr)
                 if minx < 50 and maxx < 1998:
-                    print('spots are off on the left!')
+                    #print('spots are off on the left!')
                     for i in range(102-len(rowarr),102):
                         posns_idx[yc,i] = [i,yc,rowind[i-(102-len(rowarr))]]
                         posns_pix[yc,i] = [i,yc,
@@ -2243,12 +2234,12 @@ class ProcessMonochrom(BasePrimitive):
                                             rowarr[i-(102-len(rowarr)),1],
                                             rowind[i-(102-len(rowarr))]]
                 elif minx > 50 and maxx > 1998:
-                    print('spots are off on the right!')
+                    #print('spots are off on the right!')
                     for i in range(len(rowarr)):
                         posns_idx[yc,i] = [i,yc,rowind[i]]
                         posns_pix[yc,i] = [i,yc,rowarr[i,0],rowarr[i,1],rowind[i]]
                 else:
-                    print('I cant tell which direction we lost a spot!!')
+                    self.logger.info('Uh oh I cant tell which direction we lost a spot!!')
 
         if show_plots==True:
             f = plt.figure(clear=True)
@@ -2397,9 +2388,7 @@ class ProcessMonochrom(BasePrimitive):
         lensflatcube = []
         imgs = np.array(self.gen_imgs_gaussfit(interp_arr,cut=cut,cropsize=cropsize))
         for ii in range(len(imgs)):
-            print('scube '+str(ii)+' of '+str(len(imgs)))
-            print(rmat.shape)
-            print(imgs[ii].shape)
+            self.logger.info("Doing LSF and lensflat "+str(ii)+"/"str(len(imgs)))
             scube = np.array(rmat*imgs[ii].flatten()).reshape([len(lams),ny,nx])
             #scube_lsf = scube/np.max(scube,axis=0)
             lflat = scube[ii]
@@ -2451,7 +2440,6 @@ class ProcessMonochrom(BasePrimitive):
                     ims_cal = ims_cal_tmp
                 pyfits.writeto(output_dir+'/'+scmode+'_calim_stack.fits',ims_cal,overwrite=True)
                 self.logger.info("done loading images for "+str(self.scmode))
-                print(ims_cal.shape)
                 if scmode.split('-')[0] == 'LowRes':
                     csize = 8
                     self.logger.info("finding spots")
@@ -2552,7 +2540,6 @@ class ProcessMonochrom(BasePrimitive):
                     lams_interp = np.linspace(self.lmin_i,self.lmax_i,600)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
 
-                print(len(np.where(np.isnan(interp_arr)==False)[0]))
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_gauss_spotpars_interpd.fits',np.array(interp_arr),
                                 overwrite=True)

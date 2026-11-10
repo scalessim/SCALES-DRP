@@ -1218,7 +1218,7 @@ def solve_weighted_lsq_per_lenslet(
     """
     from scipy.sparse.linalg import lsmr
 
-    print("\nSolving with per-lenslet weighted linear least squares...")
+    self.logger.info("\nSolving with per-lenslet weighted linear least squares...")
     nlam, ny, nx = flux_shape_3d
     n_flux = nlam * ny * nx
     if R_matrix.shape[1] != n_flux:
@@ -1281,7 +1281,7 @@ def solve_weighted_lsq_per_lenslet(
                 fail_msg[yy, xx] = f"{type(e).__name__}: {e}"
 
     t = (time.time() - start_time) / 60.0
-    print(f"Per-lenslet lsmr finished in {t:.4f} mins "
+    self.logger.info(f"Per-lenslet lsmr finished in {t:.4f} mins "
           f"({failed.sum()} lenslets failed).")
 
     flux_vector = flux_cube.ravel()
