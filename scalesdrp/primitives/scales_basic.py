@@ -23,6 +23,7 @@ import os
 import matplotlib.pyplot as plt
 from scipy.optimize import leastsq
 import time
+import logging
 from scipy.signal import savgol_filter
 from scipy.ndimage import convolve, median_filter
 from scipy.interpolate import griddata
@@ -1179,7 +1180,8 @@ def solve_weighted_lsq_per_lenslet(
     fill_value: float = 0.0,
     tolerance: float = 1e-10,
     maxiter: int = 100000,
-    return_diagnostics: bool = False):
+    return_diagnostics: bool = False,
+    logger: logging.Logger = None):
     """
     Weighted, unbounded linear least squares solved one lenslet at a time.
 
@@ -1212,13 +1214,16 @@ def solve_weighted_lsq_per_lenslet(
         return_diagnostics: If True, also return a dict of per-lenslet
             (ny, nx) arrays: chi2_per_dof, n_dof, istop, n_iters,
             failed, fail_msg.
+        logger: Logger for progress messages (e.g. the primitive's
+            self.logger). Defaults to this module's logger.
     Returns:
         Best-fit amplitude vector (N_fluxes,)
         [, diagnostics dict if return_diagnostics]
     """
     from scipy.sparse.linalg import lsmr
 
-    self.logger.info("\nSolving with per-lenslet weighted linear least squares...")
+    logger = logger or logging.getLogger(__name__)
+    logger.info("\nSolving with per-lenslet weighted linear least squares...")
     nlam, ny, nx = flux_shape_3d
     n_flux = nlam * ny * nx
     if R_matrix.shape[1] != n_flux:
@@ -1281,7 +1286,7 @@ def solve_weighted_lsq_per_lenslet(
                 fail_msg[yy, xx] = f"{type(e).__name__}: {e}"
 
     t = (time.time() - start_time) / 60.0
-    self.logger.info(f"Per-lenslet lsmr finished in {t:.4f} mins "
+    logger.info(f"Per-lenslet lsmr finished in {t:.4f} mins "
           f"({failed.sum()} lenslets failed).")
 
     flux_vector = flux_cube.ravel()
@@ -3509,13 +3514,17 @@ def load_and_normalize_lenslet_flat(
     *,
     clip_sigma=7.0,
     iterations=3,
-    method='median'):
+    method='median',
+    logger=None):
     """
     Find <prefix>_cube_flatlens.fits by IFSMODE, ensure it's a 3D cube,
     load (data, uncert), normalize each slice, and propagate uncertainties.
     Search order: ./redux/ then pkg calib/.
     Returns (flat_norm, flat_norm_uncert) or (None, None).
+    logger: Logger for debug messages (e.g. the primitive's self.logger).
+        Defaults to this module's logger.
     """
+    logger = logger or logging.getLogger(__name__)
     norm_ifsmode = (ifsmode or "").strip().upper().replace("_", "-")
 
     def _try_dir(base_dir):
@@ -3535,10 +3544,10 @@ def load_and_normalize_lenslet_flat(
 
                     data = hdul[0].data
                     if data is None:
-                        self.logger.debug(f"Skipping {fname}: primary data is None.")
+                        logger.debug(f"Skipping {fname}: primary data is None.")
                         continue
                     if data.ndim != 3:
-                        self.logger.debug(f"Skipping {fname}: not a cube (ndim={data.ndim}).")
+                        logger.debug(f"Skipping {fname}: not a cube (ndim={data.ndim}).")
                         continue
 
                     # try to get uncertainty cube with same shape
@@ -3547,12 +3556,12 @@ def load_and_normalize_lenslet_flat(
                         if hdul["UNCERT"].data.shape == data.shape:
                             uncert = hdul["UNCERT"].data
                         else:
-                            self.logger.debug(f"Skipping UNCERT in {fname}: shape mismatch {hdul['UNCERT'].data.shape} vs {data.shape}.")
+                            logger.debug(f"Skipping UNCERT in {fname}: shape mismatch {hdul['UNCERT'].data.shape} vs {data.shape}.")
                     elif len(hdul) > 1 and getattr(hdul[1], "data", None) is not None:
                         if hdul[1].data.shape == data.shape:
                             uncert = hdul[1].data
                         else:
-                            self.logger.debug(f"Skipping ext[1] as UNCERT in {fname}: shape mismatch {hdul[1].data.shape} vs {data.shape}.")
+                            logger.debug(f"Skipping ext[1] as UNCERT in {fname}: shape mismatch {hdul[1].data.shape} vs {data.shape}.")
 
                     return path, data, uncert
             except Exception as e:

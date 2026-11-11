@@ -202,7 +202,8 @@ class SpectralExtractChi(BasePrimitive):
                     data_vector_d,
                     var_total_vector,
                     A_guess_vector,
-                    FLUX_SHAPE_3D)
+                    FLUX_SHAPE_3D,
+                    logger=self.logger)
 
                 Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
 
@@ -213,6 +214,8 @@ class SpectralExtractChi(BasePrimitive):
 
                 if self.config.instrument.apply_lens_flat == True:
 
+                    norm_flatlens, norm_flatlens_uncert = scbasic.load_and_normalize_lenslet_flat(
+                        ifsmode, logger=self.logger)
                     Amp_chi_square, Amp_chi_square_err = scbasic.apply_flatlens(
                         Amp_chi_square,
                         Amp_chi_square_err,
