@@ -161,6 +161,11 @@ All these calibration files should be present in the ``SCALES-DRP/scalesdrp/cali
   C2_rmat_MedRes_M = 'MedRes-M_C2_intp_rectmat.npz'
 
   do_chi2_full = False #enable chi square spectral extraction
+  chi2_method_lowres = 'lsmr' # per-lenslet chi2 solver for LowRes: 'lsmr' (iterative) or 'dense' (direct SVD)
+  chi2_method_medres = 'lsmr' # per-lenslet chi2 solver for MedRes
+  chi2_n_workers = 'auto' # worker processes for the chi2 solve; 'auto' = CPUs - 1, 1 = serial
+  chi2_block_cache = 'disk' # cache the rectmat's per-lenslet blocks: 'disk', 'memory' or 'off'
+  chi2_block_cache_dir = '' # disk cache location; empty = <output_directory>/cache
   apply_lens_flat=False # apply lenslet flat correction
   lowres_final_cube = (54, 112, 112) # final cube shape of the lowRes IFS mode
   medres_final_cube = (1900, 17, 18) # final cube shape of the MedRes IFS mode

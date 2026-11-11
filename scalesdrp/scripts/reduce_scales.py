@@ -343,6 +343,11 @@ def main():
     framework.context.lowres_lenslet_grid = scales_config.lowres_lenslet_grid
     framework.context.medres_lenslet_grid = scales_config.medres_lenslet_grid
     framework.context.do_chi2_full = scales_config.do_chi2_full
+    framework.context.chi2_method_lowres = scales_config.chi2_method_lowres
+    framework.context.chi2_method_medres = scales_config.chi2_method_medres
+    framework.context.chi2_n_workers = scales_config.chi2_n_workers
+    framework.context.chi2_block_cache = scales_config.chi2_block_cache
+    framework.context.chi2_block_cache_dir = scales_config.chi2_block_cache_dir
     # implement the group mode
     if args.group_mode is True:
         data_set = framework.context.data_set

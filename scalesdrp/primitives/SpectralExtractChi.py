@@ -20,6 +20,8 @@ import os
 import scalesdrp.primitives.scales_basic as scbasic
 from scalesdrp.core.scales_proctab import Proctab
 from scalesdrp.core.scales_pkg_resources import get_resource_path
+from scalesdrp.core.lenslet_block_cache import get_lenslet_blocks
+from scalesdrp.core.lenslet_solve import chi2_solver_settings
 import logging
 log = logging.getLogger("SCALES")
 pt = Proctab(logger=log)
@@ -197,13 +199,28 @@ class SpectralExtractChi(BasePrimitive):
                 A_opt = A_guess_cube.reshape(FLUX_SHAPE_3D)
                 A_opt_err = A_guess_cube_err.reshape(FLUX_SHAPE_3D)
 
+                # Solver method per mode, worker count and block cache from
+                # scales.cfg (chi2_method_lowres/medres, chi2_n_workers,
+                # chi2_block_cache, chi2_block_cache_dir).
+                solver = chi2_solver_settings(self.config.instrument, ifsmode)
+                blocks = get_lenslet_blocks(
+                    R_for_extract,
+                    FLUX_SHAPE_3D,
+                    rectmat_path=calib_path+rmat_chi,
+                    mode=solver['cache_mode'],
+                    cache_dir=solver['cache_dir'],
+                    logger=self.logger)
+
                 A_optimal_nnls = scbasic.solve_weighted_lsq_per_lenslet(
                     R_for_extract,
                     data_vector_d,
                     var_total_vector,
                     A_guess_vector,
                     FLUX_SHAPE_3D,
-                    logger=self.logger)
+                    logger=self.logger,
+                    method=solver['method'],
+                    n_workers=solver['n_workers'],
+                    blocks=blocks)
 
                 Amp_chi_square = A_optimal_nnls.reshape(FLUX_SHAPE_3D)
 
@@ -234,6 +251,7 @@ class SpectralExtractChi(BasePrimitive):
                     wave_info=wave_info)
 
                 self.action.args.ccddata.header['HISTORY'] = (f'chi_square extraction performed using {os.path.basename(rmat_chi)}')
+                self.action.args.ccddata.header['HISTORY'] = (f"chi_square per-lenslet solver: {solver['method']}")
                 self.action.args.ccddata.header['HISTORY'] = 'WCS keywords updated (purely linear).'
 
                 chi_rslt = CCDData(

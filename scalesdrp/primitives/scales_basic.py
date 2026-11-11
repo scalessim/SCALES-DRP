@@ -1181,13 +1181,17 @@ def solve_weighted_lsq_per_lenslet(
     tolerance: float = 1e-10,
     maxiter: int = 100000,
     return_diagnostics: bool = False,
-    logger: logging.Logger = None):
+    logger: logging.Logger = None,
+    method: str = 'lsmr',
+    n_workers=1,
+    chunk_size: int = None,
+    blocks=None):
     """
     Weighted, unbounded linear least squares solved one lenslet at a time.
 
     Alternative to solve_bounded_weighted_nnls with the same flat
     (N_fluxes,) output that reshapes to flux_shape_3d. Differences:
-      - no bounds (plain linear least squares, solved with scipy lsmr)
+      - no bounds (plain linear least squares)
       - each lenslet's nlam columns of R are fit independently, using only
         the detector pixels that lenslet touches.
       - takes the TOTAL per-pixel variance (e.g. the L1 UNCERT plane
@@ -1197,104 +1201,71 @@ def solve_weighted_lsq_per_lenslet(
     Column ordering of R matches flux_shape_3d = (nlam, ny, nx)
     in C order, i.e. column = x + y*nx + lam*nx*ny.
 
+    The work is done by scalesdrp.core.lenslet_solve in four steps (gather
+    blocks, weight, solve chunks of lenslets, assemble); see that module.
+
     Args:
         R_matrix: The (N_pixels, N_fluxes) sparse rectification matrix.
+            Not read if `blocks` is given.
         data_vector: The (N_pixels,) or (H, W) input data.
         variance_vector: The (N_pixels,) or (H, W) total 1-sigma variance
             of each pixel. Pixels with non-finite or <= 0 variance are
             excluded from the fit.
         A_guess: Initial guess (N_fluxes,), e.g. from optimal extraction.
-            Used as lsmr's warm start (x0); it changes iteration count,
-            not the converged answer. Pass None to start from zero.
+            Used as the warm start x0. It changes lsmr's iteration count,
+            not the converged answer, except along directions the data don't
+            constrain (e.g. wavelengths with no pixels), which stay at x0
+            with either method. Pass None to start from zero.
         flux_shape_3d: (nlam, ny, nx) shape of the output cube.
         bad_pixel_mask: Optional (N_pixels,) or (H, W) bool, True = exclude.
         fill_value: Value for lenslets with no usable pixels or that failed.
-        tolerance: lsmr atol/btol.
-        maxiter: lsmr iteration limit per lenslet.
+        tolerance: lsmr atol/btol (ignored by 'dense').
+        maxiter: lsmr iteration limit per lenslet (ignored by 'dense').
         return_diagnostics: If True, also return a dict of per-lenslet
-            (ny, nx) arrays: chi2_per_dof, n_dof, istop, n_iters,
-            failed, fail_msg.
+            (ny, nx) arrays: chi2_per_dof, n_dof, istop, n_iters (lsmr),
+            rank, cond (dense), failed, fail_msg; and 'method', 'n_workers'.
         logger: Logger for progress messages (e.g. the primitive's
             self.logger). Defaults to this module's logger.
+        method: Solver kernel, a key of lenslet_solve.KERNELS:
+            'lsmr' (iterative, sparse) or 'dense' (direct SVD least squares).
+        n_workers: Worker processes; 1 = serial in this process, 'auto' =
+            os.cpu_count() - 1.
+        chunk_size: Lenslets per task; default is a few tasks per worker.
+        blocks: Precomputed lenslet_solve.LensletBlocks for R (e.g. from
+            lenslet_block_cache.get_lenslet_blocks); built here if None.
     Returns:
         Best-fit amplitude vector (N_fluxes,)
         [, diagnostics dict if return_diagnostics]
     """
-    from scipy.sparse.linalg import lsmr
+    from scalesdrp.core import lenslet_solve as ls
 
     logger = logger or logging.getLogger(__name__)
-    logger.info("\nSolving with per-lenslet weighted linear least squares...")
-    nlam, ny, nx = flux_shape_3d
-    n_flux = nlam * ny * nx
-    if R_matrix.shape[1] != n_flux:
-        raise ValueError(
-            f"R_matrix has {R_matrix.shape[1]} columns but flux_shape_3d "
-            f"{tuple(flux_shape_3d)} implies {n_flux}.")
-
-    data_vector = np.asarray(data_vector, dtype=np.float64).ravel()
-    variance = np.asarray(variance_vector, dtype=np.float64).ravel()
-
-    good = np.isfinite(data_vector) & np.isfinite(variance) & (variance > 0)
-    weights = np.zeros_like(variance)
-    weights[good] = 1.0 / np.sqrt(variance[good])
-    if bad_pixel_mask is not None:
-        good &= ~np.asarray(bad_pixel_mask, dtype=bool).ravel()
-
-    R_csc = R_matrix.tocsc()
-    A_guess_cube = None
-    if A_guess is not None:
-        A_guess_cube = np.nan_to_num(np.asarray(A_guess, dtype=np.float64)
-                                     ).reshape(flux_shape_3d)
-
-    flux_cube = np.full(flux_shape_3d, fill_value, dtype=np.float64)
-    chi2_per_dof = np.full((ny, nx), np.nan)
-    n_dof = np.zeros((ny, nx), dtype=int)
-    istop_arr = np.zeros((ny, nx), dtype=int)
-    n_iters = np.zeros((ny, nx), dtype=int)
-    failed = np.zeros((ny, nx), dtype=bool)
-    fail_msg = np.empty((ny, nx), dtype=object)
-
-    lam_offsets = np.arange(nlam) * (nx * ny)
+    n_workers = ls.resolve_n_workers(n_workers)
+    plural = 's' if n_workers > 1 else ''
+    logger.info(f"\nSolving with per-lenslet weighted linear least squares "
+                f"({method}, {n_workers} worker{plural})...")
     start_time = time.time()
-    for yy in range(ny):
-        for xx in range(nx):
-            cols = xx + yy * nx + lam_offsets
-            R_cut = R_csc[:, cols]
-            # unique: a pixel hit by several wavelength columns of this
-            # lenslet must only count once
-            rows = np.unique(R_cut.indices)
-            rows = rows[good[rows]]
-            if len(rows) == 0:
-                continue
-            try:
-                w = weights[rows]
-                R_fit = sp.diags(w) @ R_cut.tocsr()[rows]
-                d_fit = data_vector[rows] * w
-                x0 = A_guess_cube[:, yy, xx] if A_guess_cube is not None else None
-                x, istop, itn, *_ = lsmr(R_fit, d_fit, x0=x0, atol=tolerance,
-                                         btol=tolerance, maxiter=maxiter)
-                flux_cube[:, yy, xx] = x
-                istop_arr[yy, xx] = istop
-                n_iters[yy, xx] = itn
-                dof = len(rows) - nlam
-                n_dof[yy, xx] = dof
-                if dof > 0:
-                    resid = R_fit @ x - d_fit
-                    chi2_per_dof[yy, xx] = np.sum(resid**2) / dof
-            except Exception as e:
-                failed[yy, xx] = True
-                fail_msg[yy, xx] = f"{type(e).__name__}: {e}"
+    flux_vector, diag = ls.solve_per_lenslet(
+        R_matrix, data_vector, variance_vector, A_guess, flux_shape_3d,
+        bad_pixel_mask=bad_pixel_mask, fill_value=fill_value,
+        tolerance=tolerance, maxiter=maxiter, method=method,
+        n_workers=n_workers, chunk_size=chunk_size, blocks=blocks)
 
     t = (time.time() - start_time) / 60.0
-    logger.info(f"Per-lenslet lsmr finished in {t:.4f} mins "
-          f"({failed.sum()} lenslets failed).")
+    n_failed = int(diag['failed'].sum())
+    logger.info(f"Per-lenslet solve ({diag['method']}, {n_workers} worker{plural}) "
+                f"finished in {t:.4f} mins ({n_failed} lenslets failed).")
+    if n_failed:
+        logger.warning(f"{n_failed} lenslets failed and were set to {fill_value}.")
+    if diag['method'] == 'lsmr':
+        n_maxit = int((diag['istop'] == 7).sum())
+        if n_maxit:
+            logger.warning(f"{n_maxit} lenslets hit maxiter={maxiter} before converging.")
 
-    flux_vector = flux_cube.ravel()
     if return_diagnostics:
-        diag = dict(chi2_per_dof=chi2_per_dof, n_dof=n_dof, istop=istop_arr,
-                    n_iters=n_iters, failed=failed, fail_msg=fail_msg)
         return flux_vector, diag
     return flux_vector
+
 
     ############### chi sqaure error estimation #########################
 def calculate_error_flux_cube(
