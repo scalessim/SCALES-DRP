@@ -1866,6 +1866,200 @@ class ProcessMonochrom(BasePrimitive):
         return interp_arr
 
 
+    def estimate_spectral_resolution(self, fitarr, lams, mono_fwhm_nm=0.0,
+                                     poly_deg=3, min_spots=5,
+                                     fwhm_pix_range=(0.5, 8.0)):
+        """
+        Estimate the spectral resolution R = lambda / FWHM_lambda of every
+        lenslet at every monochromator wavelength, from the Gaussian fits to
+        the lenslet spots (fit_gauss_spots).
+
+        For each spot, the fitted 2D Gaussian covariance is projected onto the
+        local dispersion direction, giving the FWHM of the line spread
+        function in detector pixels along the trace. The local dispersion
+        (px/um) and its direction come from the derivative of a polynomial
+        fit to that lenslet's spot positions vs wavelength. Then
+            FWHM_lambda = FWHM_along_trace / (ds/dlambda),  R = lambda / FWHM_lambda.
+
+        The monochromator line width is not removed unless mono_fwhm_nm > 0,
+        in which case it is subtracted in quadrature from FWHM_lambda; without
+        it, R is a lower limit on the instrument resolution.
+
+        Args:
+            fitarr: (nlam, ny, nx, >=6) [amp, x, y, x_std, y_std, theta, ...]
+            lams: (nlam,) wavelengths in um
+            mono_fwhm_nm: monochromator line FWHM in nm (0 = no correction)
+            poly_deg: degree of the per-lenslet x(lambda), y(lambda) fits
+            min_spots: minimum good spots for a lenslet to be used
+            fwhm_pix_range: accepted range of along-trace FWHM (px)
+
+        A second estimate, R_xdisp, uses the FWHM perpendicular to the trace
+        instead (assuming a round monochromatic spot). It does not depend on
+        the monochromator line width, so it is the one to use for MedRes,
+        where the line is wide and its width unknown.
+
+        Returns:
+            dict of (nlam, ny, nx) arrays: R, fwhm_nm, fwhm_disp_pix,
+            R_xdisp, fwhm_xdisp_nm, fwhm_xdisp_pix, disp_px_per_um; and
+            per-wavelength summaries R_pct, R_xdisp_pct (nlam, 3) =
+            16/50/84th percentiles, nspots, nspots_xdisp (nlam,).
+        """
+        lams = np.asarray(lams, dtype=float)
+        nl, ny, nx = fitarr.shape[:3]
+        amp, xm, ym, sx, sy, th = [fitarr[..., i] for i in range(6)]
+        good = (np.isfinite(amp) & (amp > 0) & np.isfinite(xm) & np.isfinite(ym)
+                & np.isfinite(sx) & np.isfinite(sy) & np.isfinite(th))
+
+        # covariance of the fitted Gaussian (astropy Gaussian2D convention)
+        c, s = np.cos(th), np.sin(th)
+        sxx = c**2 * sx**2 + s**2 * sy**2
+        syy = s**2 * sx**2 + c**2 * sy**2
+        sxy = c * s * (sx**2 - sy**2)
+
+        # local trace direction and dispersion from per-lenslet polynomials
+        dxdl = np.full((nl, ny, nx), np.nan)
+        dydl = np.full((nl, ny, nx), np.nan)
+        for j in range(ny):
+            for i in range(nx):
+                g = good[:, j, i]
+                if g.sum() < max(min_spots, poly_deg + 2):
+                    continue
+                lmin_g, lmax_g = lams[g].min(), lams[g].max()
+                px = np.polyfit(lams[g], xm[g, j, i], poly_deg)
+                py = np.polyfit(lams[g], ym[g, j, i], poly_deg)
+                # only evaluate inside the range the lenslet's spots cover
+                inr = (lams >= lmin_g) & (lams <= lmax_g)
+                dxdl[inr, j, i] = np.polyval(np.polyder(px), lams[inr])
+                dydl[inr, j, i] = np.polyval(np.polyder(py), lams[inr])
+
+        with np.errstate(invalid='ignore', divide='ignore'):
+            disp = np.hypot(dxdl, dydl)                  # px / um
+            ux, uy = dxdl / disp, dydl / disp
+            sig_d = np.sqrt(ux**2 * sxx + 2 * ux * uy * sxy + uy**2 * syy)
+            sig_x = np.sqrt(uy**2 * sxx - 2 * ux * uy * sxy + ux**2 * syy)
+            fwhm_d = 2.0 * np.sqrt(2.0 * np.log(2.0)) * sig_d
+            fwhm_x = 2.0 * np.sqrt(2.0 * np.log(2.0)) * sig_x
+
+            base = good & np.isfinite(disp) & (disp > 0)
+            ok = (base & np.isfinite(fwhm_d)
+                  & (fwhm_d > fwhm_pix_range[0]) & (fwhm_d < fwhm_pix_range[1]))
+            ok_x = (base & np.isfinite(fwhm_x)
+                    & (fwhm_x > fwhm_pix_range[0]) & (fwhm_x < fwhm_pix_range[1]))
+            fwhm_nm = fwhm_d / disp * 1e3
+            if mono_fwhm_nm and mono_fwhm_nm > 0:
+                fwhm_nm = np.sqrt(fwhm_nm**2 - mono_fwhm_nm**2)
+                ok &= np.isfinite(fwhm_nm)
+            # cross-dispersion estimate: assumes the monochromatic spot is
+            # round, so the spatial FWHM perpendicular to the trace stands in
+            # for the instrumental FWHM along it. Independent of the
+            # monochromator line width (used for MedRes, where that is unknown).
+            fwhm_nm_x = fwhm_x / disp * 1e3
+            fwhm_d[~ok] = np.nan
+            fwhm_nm[~ok] = np.nan
+            fwhm_x[~ok_x] = np.nan
+            fwhm_nm_x[~ok_x] = np.nan
+            disp[~(ok | ok_x)] = np.nan
+            R = lams[:, None, None] * 1e3 / fwhm_nm
+            R_x = lams[:, None, None] * 1e3 / fwhm_nm_x
+
+        def pct(arr, mask):
+            n = mask.reshape(nl, -1).sum(axis=1)
+            p = np.full((nl, 3), np.nan)
+            for k in range(nl):
+                if n[k] > 0:
+                    p[k] = np.nanpercentile(arr[k], [16, 50, 84])
+            return p, n
+
+        R_pct, nspots = pct(R, ok)
+        R_x_pct, nspots_x = pct(R_x, ok_x)
+        return dict(R=R, fwhm_nm=fwhm_nm, fwhm_disp_pix=fwhm_d,
+                    R_xdisp=R_x, fwhm_xdisp_nm=fwhm_nm_x,
+                    fwhm_xdisp_pix=fwhm_x, disp_px_per_um=disp,
+                    R_pct=R_pct, nspots=nspots,
+                    R_xdisp_pct=R_x_pct, nspots_xdisp=nspots_x)
+
+    def write_spectral_resolution(self, res, lams, scmode, output_dir, plot_dir,
+                                  mono_fwhm_nm=0.0):
+        """Save the estimate_spectral_resolution outputs to
+        {scmode}_resolution.fits and a summary plot, and log a per-wavelength table."""
+        hdr = pyfits.Header()
+        hdr['IFSMODE'] = scmode
+        hdr['MEDR'] = (float(np.nanmedian(res['R'])), 'median R (along-trace FWHM)')
+        hdr['MEDRX'] = (float(np.nanmedian(res['R_xdisp'])), 'median R (cross-trace FWHM)')
+        hdr['MONOFWHM'] = (float(mono_fwhm_nm or 0.0),
+                           'mono line FWHM removed in quadrature (nm)')
+        hdr['COMMENT'] = 'R = lambda / FWHM_lambda from Gaussian spot fits'
+        hdr['COMMENT'] = 'projected onto the local trace direction.'
+        hdr['COMMENT'] = 'R_XDISP uses the FWHM perpendicular to the trace instead'
+        hdr['COMMENT'] = '(round-spot assumption; independent of the mono line width).'
+        if not mono_fwhm_nm:
+            hdr['COMMENT'] = 'Monochromator width not removed: R is a lower limit.'
+        hdus = [pyfits.PrimaryHDU(res['R'].astype(np.float32), header=hdr)]
+        for name, key, unit in [('FWHM_NM', 'fwhm_nm', 'nm'),
+                                ('FWHM_DISP_PIX', 'fwhm_disp_pix', 'pix'),
+                                ('R_XDISP', 'R_xdisp', ''),
+                                ('FWHM_XDISP_NM', 'fwhm_xdisp_nm', 'nm'),
+                                ('FWHM_XDISP_PIX', 'fwhm_xdisp_pix', 'pix'),
+                                ('DISPERSION', 'disp_px_per_um', 'pix/um')]:
+            h = pyfits.ImageHDU(res[key].astype(np.float32), name=name)
+            h.header['BUNIT'] = unit
+            hdus.append(h)
+        cols = [pyfits.Column(name='LAMBDA', format='D', unit='um', array=np.asarray(lams, float)),
+                pyfits.Column(name='R_P16', format='D', array=res['R_pct'][:, 0]),
+                pyfits.Column(name='R_MED', format='D', array=res['R_pct'][:, 1]),
+                pyfits.Column(name='R_P84', format='D', array=res['R_pct'][:, 2]),
+                pyfits.Column(name='NSPOTS', format='J', array=res['nspots']),
+                pyfits.Column(name='RX_P16', format='D', array=res['R_xdisp_pct'][:, 0]),
+                pyfits.Column(name='RX_MED', format='D', array=res['R_xdisp_pct'][:, 1]),
+                pyfits.Column(name='RX_P84', format='D', array=res['R_xdisp_pct'][:, 2]),
+                pyfits.Column(name='NSPOTS_X', format='J', array=res['nspots_xdisp'])]
+        hdus.append(pyfits.BinTableHDU.from_columns(cols, name='SUMMARY'))
+        pyfits.HDUList(hdus).writeto(output_dir + '/' + scmode + '_resolution.fits',
+                                     overwrite=True)
+
+        self.logger.info(f"{scmode} spectral resolution: median R = {hdr['MEDR']:.1f} "
+                         f"(along trace), {hdr['MEDRX']:.1f} (cross trace)")
+        self.logger.info("  lambda(um) | along trace: R_p16  R_med  R_p84 | cross trace: R_p16  R_med  R_p84")
+        for k in range(len(lams)):
+            p, q = res['R_pct'][k], res['R_xdisp_pct'][k]
+            self.logger.info(f"  {lams[k]:9.4f} | {p[0]:12.1f} {p[1]:6.1f} {p[2]:6.1f} "
+                             f"| {q[0]:12.1f} {q[1]:6.1f} {q[2]:6.1f}")
+
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)
+                rmap = np.nanmedian(res['R'], axis=0)
+                rmap_x = np.nanmedian(res['R_xdisp'], axis=0)
+                ratio = np.nanmedian(res['R_xdisp'] / res['R'], axis=0)
+            fig, ax = plt.subplots(1, 4, figsize=(22, 4.5))
+            for pc, lab, col in [(res['R_pct'], 'along trace', 'C0'),
+                                 (res['R_xdisp_pct'], 'cross trace', 'C1')]:
+                ax[0].fill_between(lams, pc[:, 0], pc[:, 2], alpha=0.25, color=col)
+                ax[0].plot(lams, pc[:, 1], 'o-', ms=3, color=col, label=lab + ' (median, 16-84%)')
+            ax[0].set_xlabel('wavelength (um)')
+            ax[0].set_ylabel('R = lambda / FWHM')
+            ax[0].set_title(scmode + (' (mono width not removed)' if not mono_fwhm_nm else ''))
+            ax[0].legend()
+            allr = np.concatenate([rmap[np.isfinite(rmap)], rmap_x[np.isfinite(rmap_x)]])
+            vmin, vmax = np.percentile(allr, [2, 98]) if allr.size else (0, 1)
+            for a, m, t in [(ax[1], rmap, 'median R per lenslet (along trace)'),
+                            (ax[2], rmap_x, 'median R per lenslet (cross trace)')]:
+                im = a.imshow(m, origin='lower', vmin=vmin, vmax=vmax)
+                a.set_title(t)
+                a.set_xlabel('lenslet x'); a.set_ylabel('lenslet y')
+                fig.colorbar(im, ax=a)
+            im = ax[3].imshow(ratio, origin='lower', cmap='RdBu_r', vmin=0.7, vmax=1.3)
+            ax[3].set_title('median R_cross / R_along')
+            ax[3].set_xlabel('lenslet x'); ax[3].set_ylabel('lenslet y')
+            fig.colorbar(im, ax=ax[3])
+            fig.tight_layout()
+            os.makedirs(plot_dir, exist_ok=True)
+            fig.savefig(os.path.join(plot_dir, scmode + '_resolution.png'), dpi=120)
+            plt.close(fig)
+        except Exception as e:
+            self.logger.info(f"resolution plot failed: {e}")
+
+
     def gen_sparse_inds(self,xs,ys,xe,ye,ypix=2048,xpix=2048):
         """
         Function to take 2d x,y pixel coordinates and turn them into flattened
@@ -2527,6 +2721,14 @@ class ProcessMonochrom(BasePrimitive):
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_cropped_spotgaussres_arr.fits',np.array(resim_arr),
                                 overwrite=True)
+
+                self.logger.info("estimating spectral resolution from spot FWHMs")
+                mono_fwhm_nm = float(self.config.instrument.mono_fwhm_nm or 0.0)
+                res = self.estimate_spectral_resolution(np.array(fitarr), lams,
+                                                        mono_fwhm_nm=mono_fwhm_nm,
+                                                        fwhm_pix_range=(0.5, csize))
+                self.write_spectral_resolution(res, lams, scmode, output_dir, plot_dir,
+                                               mono_fwhm_nm=mono_fwhm_nm)
 
 
                 if scmode.split('-')[0] == 'LowRes':
