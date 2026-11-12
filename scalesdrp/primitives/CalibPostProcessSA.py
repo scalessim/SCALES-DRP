@@ -24,7 +24,7 @@ class CalibPostProcessSA(BasePrimitive):
 
     """
     This function correct a raw read for channel bias, alternative column noise, and 1/f noise.
-    The core of this function is `import scalesdrp.primitives.reference as reference`. 
+    The core of this function is `import scalesdrp.primitives.reference as reference`.
     No external calibration files are involved.
         Args:
             data_image: The (N,H,W) input ramp cube.
@@ -45,7 +45,7 @@ class CalibPostProcessSA(BasePrimitive):
         plot_dir = self.config.instrument.plot_directory
         package = __name__.split('.')[0]
         calibfilepath = self.context.calib_file_path
-        calib_dir = str(get_resource_path(package, calibfilepath))+'/'    
+        calib_dir = str(get_resource_path(package, calibfilepath))+'/'
         create_linearity = bool(self.config.instrument.create_linearity_coeff)
         create_sat = bool(self.config.instrument.create_sat_map)
         create_bpm = bool(self.config.instrument.create_bpm)
@@ -79,12 +79,12 @@ class CalibPostProcessSA(BasePrimitive):
                 exptime = group["params"]["exptime"]
                 filenames = group["filenames"]
                 paths = group["paths"]
-                
+
                 lin_data = []
                 hdrm=None
                 for filename, filepath in zip(filenames, paths):
                     #filepath = os.path.join(output_dir,filename)
-                    
+
                     if not os.path.isfile(filepath):
                         msg = (
                             f"L11 file listed in processing table "
@@ -104,15 +104,15 @@ class CalibPostProcessSA(BasePrimitive):
                             hdrm = hdul[0].header.copy()
 
                         lin_data.append(data)
-                
+
                 lin_data = np.stack(lin_data,axis=0)
-                
+
                 self.logger.info(
                     f"Creating linearity coefficients from {len(filenames)} "
                     f"L11 ramps: CAMERA={camera}, "
                     f"MCLOCK={mclock}, EXPTIME={exptime}:"
                     "WAIT WAIT WAIT")
-                
+
                 if camera=='IFS':
                     bpm = self.context.bpm_ifs
                     master_bpm = fits.getdata(calib_dir+bpm)
@@ -159,7 +159,7 @@ class CalibPostProcessSA(BasePrimitive):
                 with fits.open(calib_dir+sat_map_file) as hdul:
                     sat_map = np.asarray(hdul["SATURATION"].data, dtype=float)
                 lin_output_path = os.path.join(calib_dir,lin_filename)
-                
+
                 results = linearity_create.run_linearity_calibration(
                     ramps=lin_data,
                     saturation_map=sat_map,
@@ -235,12 +235,12 @@ class CalibPostProcessSA(BasePrimitive):
                 exptime = group["params"]["exptime"]
                 filenames = group["filenames"]
                 paths = group["paths"]
-                
+
                 sat_data = []
                 hdrm=None
                 for filename, filepath in zip(filenames, paths):
                     #filepath = os.path.join(output_dir,filename)
-                    
+
                     if not os.path.isfile(filepath):
                         msg = (
                             f"L11 file listed in processing table "
@@ -260,9 +260,9 @@ class CalibPostProcessSA(BasePrimitive):
                             hdrm = hdul[0].header.copy()
 
                         sat_data.append(data)
-                
+
                 sat_data = np.stack(sat_data,axis=0)
-                
+
                 self.logger.info(
                     f"Creating saturation map from {len(filenames)} "
                     f"L11 ramps: CAMERA={camera}, "
@@ -374,7 +374,7 @@ class CalibPostProcessSA(BasePrimitive):
                     flat_headers.append(header)
                 bpm_dark = np.stack(bpm_dark, axis=0)
                 bpm_flat = np.stack(bpm_flat, axis=0)
-                
+
                 self.logger.info(f"DARK stack shape: {bpm_dark.shape}")
                 self.logger.info(f"FLAT stack shape: {bpm_flat.shape}")
 
@@ -550,7 +550,7 @@ class CalibPostProcessSA(BasePrimitive):
                     flat_min_frames_bad_spatial=flat_params["min_frames_bad_spatial"],
                     save_pdf=False)
                 self.logger.info(f"BPM diagnostics saved: {diagnostics['png_path']}")
-                plt.close(diagnostics["figure"])                
+                plt.close(diagnostics["figure"])
                 self.logger.info(f"Finished Creating Im bad pixel map: "f"{bpm_output_path}")
 
         #---------------------------------------------------------------------------------------------
@@ -562,21 +562,21 @@ class CalibPostProcessSA(BasePrimitive):
                 min_reads=self.config.instrument.min_rn_reads,
                 min_files=self.config.instrument.minimum_rn_ramps,
                 suffix="_L13")
-            
+
             self.logger.info("Started creating the readnoise map")
-            
+
             for group in readnoise_files:
                 camera = group["params"]["camera"]
                 mclock = group["params"]["mclock"]
                 exptime = group["params"]["exptime"]
                 filenames = group["filenames"]
                 paths = group["paths"]
-                
+
                 rn_data = []
                 hdrm=None
                 for filename, filepath in zip(filenames, paths):
                     #filepath = os.path.join(output_dir,filename)
-                    
+
                     if not os.path.isfile(filepath):
                         msg = (
                             f"L13 file listed in processing table "
@@ -596,9 +596,9 @@ class CalibPostProcessSA(BasePrimitive):
                             hdrm = hdul[0].header.copy()
 
                         rn_data.append(data)
-                
+
                 rn_data = np.stack(rn_data,axis=0)
-                
+
                 self.logger.info(
                     f"Creating readnoise map from {len(filenames)} "
                     f"L13 ramps: CAMERA={camera}, "
@@ -662,7 +662,30 @@ class CalibPostProcessSA(BasePrimitive):
 
 
         #----------------------------------------------------------------------------------------------
-        if create_rectmat:
+        # skip_mcal_generation = True (with clobber = False): don't build the *_mcalunit.fits
+        # masters; ProcessMonochrom then uses the masters already in output_directory.
+        # clobber = True supersedes it: the masters are rebuilt and overwritten (with a warning).
+        # False (or missing): build them as usual (existing masters are kept unless clobber = True).
+        skip_mcal = bool(self.config.instrument.skip_mcal_generation)
+        if create_rectmat and skip_mcal and self.context.clobber:
+            self.logger.warning(
+                "skip_mcal_generation = True is ignored because clobber = True: the "
+                f"*_mcalunit.fits masters in {output_dir} will be rebuilt and overwritten.")
+            skip_mcal = False
+        if create_rectmat and skip_mcal:
+            existing_mcal = sorted(f for f in os.listdir(output_dir)
+                                   if f.endswith("_mcalunit.fits"))
+            self.logger.info(
+                "skip_mcal_generation = True: not building CALUNIT masters; "
+                f"ProcessMonochrom will use the {len(existing_mcal)} existing "
+                f"*_mcalunit.fits files in {output_dir}.")
+            if len(existing_mcal) == 0:
+                self.logger.warning(
+                    "skip_mcal_generation = True but no *_mcalunit.fits files were "
+                    f"found in {output_dir}: ProcessMonochrom will find nothing to "
+                    "process. Set skip_mcal_generation = False to build them.")
+
+        elif create_rectmat:
             l1_dt = scbasic.get_proc_entries(proctab,suffix="_L1")
             if len(l1_dt) == 0:
                 msg = (
@@ -701,14 +724,14 @@ class CalibPostProcessSA(BasePrimitive):
                             f"{existing_master}. "
                             "Skipping master creation.")
                         continue
-                
+
                 self.logger.info(
                     f"Building master calibration "
                     f"{group_index}/{len(l1_groups)} "
                     f"from {len(filenames)} L1 files.")
                 self.logger.info(
                     f"Group parameters: {params}")
-                
+
                 data_stack = []
                 uncert_stack = []
                 chisq_stack = []
@@ -718,7 +741,7 @@ class CalibPostProcessSA(BasePrimitive):
 
                 for filename in filenames:
                     filepath = os.path.join(output_dir,filename)
-                    
+
                     if not os.path.isfile(filepath):
                         msg = (
                             f"L1 file listed in processing table "
@@ -749,7 +772,7 @@ class CalibPostProcessSA(BasePrimitive):
                                 f"match DATA shape {data.shape} in "
                                 f"{filename}.")
                         uncert_stack.append(uncert)
-                        
+
                         if "CHISQ" not in hdul:
                             raise RuntimeError(
                                 f"CHISQ extension missing from "
@@ -795,7 +818,7 @@ class CalibPostProcessSA(BasePrimitive):
                     dq_stack = np.stack(dq_stack,axis=0)
                     dq_history = "DQ propagated using bitwise OR of input L1 DQ maps"
                 n_slopes = data_stack.shape[0]
-                
+
                 self.logger.info(f"Master input stack shape: {data_stack.shape}")
                 combine_method = self.config.instrument.master_comb_met
 
