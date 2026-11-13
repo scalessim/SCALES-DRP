@@ -18,6 +18,7 @@ from scipy.optimize import curve_fit
 import os
 import matplotlib.pyplot as plt
 from scipy.ndimage import median_filter, gaussian_filter, shift
+from scipy.ndimage import map_coordinates, convolve as nd_convolve
 from skimage.feature import peak_local_max
 from scipy.ndimage import gaussian_filter
 from scipy.spatial import KDTree, cKDTree
@@ -1031,6 +1032,11 @@ class ProcessMonochrom(BasePrimitive):
                         xe = np.min([int(x+cropsize/2),len(ims_cal[k])])
                         ys = np.max([0,int(y-cropsize/2)])
                         ye = np.min([int(y+cropsize/2),len(ims_cal[k])])
+                        # spot window entirely off the detector: a negative
+                        # xe/ye would wrap around in the slice below, so
+                        # leave this spot empty
+                        if xe <= xs or ye <= ys:
+                            continue
                         posarr[k,i+diffy,j+diffx] = [x,xs,xe,y,ys,ye,intens]
 
                         cropped = np.zeros(ims_cal[k,ys:ye,xs:xe].shape)
@@ -1567,6 +1573,459 @@ class ProcessMonochrom(BasePrimitive):
 
 
 
+    # ------------------------------------------------------------------
+    # Anderson & King (2000, PASP 112, 1360) effective PSFs for LowRes.
+    #
+    # LowRes spots are only ~2-3 px FWHM, so a single spot cannot give its
+    # FWHM without assuming a profile. Many spots of nearly the same PSF
+    # (same wavelength, nearby in the field) sample it at different sub-pixel
+    # phases; stacking them on an oversampled grid recovers the effective PSF
+    # (PSF convolved with the pixel response) without a profile model.
+    #
+    # Unlike AnK_spot_model_2 (one PSF per wavelength from all lenslets, the
+    # clipped crops and nearest-cell placement), these build one ePSF per
+    # wavelength *and field region* from unclipped stamps cut from ims_cal,
+    # each spot normalised by its own flux, iterating as in Anderson & King:
+    # stack sigma-clipped residuals from the current ePSF, smooth with a
+    # shape-preserving quartic kernel, recentre, then refit every spot's
+    # centre and flux with the new ePSF.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _AnK_smoothing_kernel(size=5, degree=4):
+        """2D Savitzky-Golay kernel: least-squares polynomial of total degree
+        <= degree over a size x size window, evaluated at the centre. It
+        smooths noise without broadening structure that the polynomial can
+        follow (degree 4 is the 'quartic' kernel used for A&K ePSFs)."""
+        h = size // 2
+        yy, xx = np.mgrid[-h:h + 1, -h:h + 1]
+        terms = [xx.ravel()**a * yy.ravel()**b
+                 for a in range(degree + 1) for b in range(degree + 1 - a)]
+        A = np.array(terms, dtype=float).T
+        return np.linalg.pinv(A)[0].reshape(size, size)
+
+    def AnK_extract_stamps(self, image, xs, ys, half=6, bkg_rin=4.5):
+        """
+        Cut (2*half+1)^2 stamps from an image around spots at (xs, ys), with
+        each stamp's local background (median of pixels further than bkg_rin
+        from the spot) removed.
+
+        Returns:
+            stamps (n, S, S), cx, cy (spot centre in stamp pixels), noise
+            (robust std of the background pixels), ok (bool, len(xs): which
+            spots were fully on the image; the other outputs only cover these)
+        """
+        xs = np.asarray(xs, dtype=float); ys = np.asarray(ys, dtype=float)
+        S = 2 * half + 1
+        xi = np.round(xs).astype(int); yi = np.round(ys).astype(int)
+        ok = ((xi - half >= 0) & (yi - half >= 0)
+              & (xi + half < image.shape[1]) & (yi + half < image.shape[0]))
+        off = np.arange(-half, half + 1)
+        rows = yi[ok, None, None] + off[None, :, None]
+        cols = xi[ok, None, None] + off[None, None, :]
+        stamps = np.asarray(image[rows, cols], dtype=float)
+        cx = xs[ok] - (xi[ok] - half)
+        cy = ys[ok] - (yi[ok] - half)
+        yy, xx = np.mgrid[:S, :S]
+        ring = np.hypot(xx[None] - cx[:, None, None], yy[None] - cy[:, None, None]) > bkg_rin
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            bpix = np.where(ring, stamps, np.nan)
+            bkg = np.nanmedian(bpix, axis=(1, 2))
+            noise = 1.4826 * np.nanmedian(np.abs(bpix - bkg[:, None, None]), axis=(1, 2))
+        stamps = stamps - bkg[:, None, None]
+        return stamps, cx, cy, noise, ok
+
+    def _AnK_recentre(self, epsf, oversamp, radius=1.5, max_iter=5):
+        """Shift the ePSF so its flux centroid within `radius` detector px of
+        the grid centre sits on the grid centre."""
+        G = epsf.shape[0]; c0 = G // 2
+        yy, xx = np.mgrid[:G, :G]
+        r = np.hypot(xx - c0, yy - c0) / oversamp
+        for _ in range(max_iter):
+            w = np.where((r <= radius) & (epsf > 0), epsf, 0.0)
+            if w.sum() <= 0:
+                break
+            mx = (w * xx).sum() / w.sum() - c0
+            my = (w * yy).sum() / w.sum() - c0
+            if np.hypot(mx, my) < 1e-3:
+                break
+            epsf = shift(epsf, (-my, -mx), order=3, mode='constant', cval=0.0)
+        return epsf
+
+    def _AnK_refit(self, stamps, cx, cy, flux, epsf, oversamp, fit_radius=3.5, n_steps=2,
+                   max_step=0.5):
+        """Gauss-Newton refit of each spot's (flux, x, y) with the ePSF as the
+        model, vectorised over spots. Pixels within fit_radius are used."""
+        G = epsf.shape[0]; c0 = G // 2
+        dEy, dEx = np.gradient(epsf)
+        S = stamps.shape[1]
+        yy, xx = np.mgrid[:S, :S]
+        finite = np.isfinite(stamps)
+        data = np.where(finite, stamps, 0.0)
+        for _ in range(n_steps):
+            gx = (xx[None] - cx[:, None, None]) * oversamp + c0
+            gy = (yy[None] - cy[:, None, None]) * oversamp + c0
+            coords = [gy.ravel(), gx.ravel()]
+            E = map_coordinates(epsf, coords, order=3, mode='constant').reshape(stamps.shape)
+            Ex = map_coordinates(dEx, coords, order=3, mode='constant').reshape(stamps.shape) * oversamp
+            Ey = map_coordinates(dEy, coords, order=3, mode='constant').reshape(stamps.shape) * oversamp
+            w = (finite & (np.hypot(xx[None] - cx[:, None, None],
+                                    yy[None] - cy[:, None, None]) <= fit_radius)).astype(float)
+            J = np.stack([E, -flux[:, None, None] * Ex, -flux[:, None, None] * Ey], axis=-1)
+            J *= w[..., None]
+            res = (data - flux[:, None, None] * E) * w
+            JTJ = np.einsum('nijk,nijl->nkl', J, J)
+            JTr = np.einsum('nijk,nij->nk', J, res)
+            JTJ += 1e-12 * np.eye(3)[None]
+            try:
+                step = np.linalg.solve(JTJ, JTr[..., None])[..., 0]
+            except np.linalg.LinAlgError:
+                step = np.stack([np.linalg.lstsq(a, b, rcond=None)[0] for a, b in zip(JTJ, JTr)])
+            step[:, 1:] = np.clip(step[:, 1:], -max_step, max_step)
+            flux = flux + step[:, 0]; cx = cx + step[:, 1]; cy = cy + step[:, 2]
+        return cx, cy, flux
+
+    def AnK_build_epsf(self, stamps, cx, cy, oversamp=4, n_iter=5, norm_radius=3.0,
+                       fit_radius=3.5, clip_sigma=3.0, smooth=True):
+        """
+        Anderson & King effective PSF from background-subtracted stamps.
+
+        Args:
+            stamps: (n, S, S) background-subtracted spot stamps (S odd)
+            cx, cy: (n,) initial spot centres in stamp pixels
+            oversamp: ePSF grid points per detector pixel
+            n_iter: build / refit iterations
+            norm_radius: aperture radius (px) for the initial flux normalisation
+            fit_radius: radius (px) used when refitting spot centres and fluxes
+            clip_sigma: sigma clip applied to the samples in each ePSF grid cell
+            smooth: smooth each iteration with the quartic SG kernel
+
+        Returns:
+            epsf: (G, G) with G = (S-1)*oversamp + 1; grid point k is an offset
+                of (k - G//2)/oversamp detector px from the spot centre. Values
+                are detector-pixel samples of a spot normalised to unit
+                aperture flux.
+            info: dict with the final cx, cy, flux, nstars and resid_pct (median
+                over spots of the RMS residual within fit_radius, in % of the
+                spot's model peak)
+        """
+        n, S, _ = stamps.shape
+        half = S // 2
+        G = 2 * half * oversamp + 1
+        c0 = G // 2
+        yy, xx = np.mgrid[:S, :S]
+        cx = np.asarray(cx, float).copy(); cy = np.asarray(cy, float).copy()
+        r = np.hypot(xx[None] - cx[:, None, None], yy[None] - cy[:, None, None])
+        flux = np.nansum(np.where(r <= norm_radius, stamps, 0.0), axis=(1, 2))
+        keep = flux > 0
+        stamps, cx, cy, flux = stamps[keep], cx[keep], cy[keep], flux[keep]
+        kern = self._AnK_smoothing_kernel(5, 4) if smooth else None
+        epsf = np.zeros((G, G))
+        for it in range(n_iter):
+            gx = (xx[None] - cx[:, None, None]) * oversamp + c0
+            gy = (yy[None] - cy[:, None, None]) * oversamp + c0
+            model = map_coordinates(epsf, [gy.ravel(), gx.ravel()], order=3,
+                                    mode='constant').reshape(stamps.shape)
+            resid = stamps / flux[:, None, None] - model
+            ix = np.round(gx).astype(int); iy = np.round(gy).astype(int)
+            valid = np.isfinite(resid) & (ix >= 0) & (ix < G) & (iy >= 0) & (iy < G)
+            cell = (iy * G + ix)[valid]; v = resid[valid]
+            cnt = np.bincount(cell, minlength=G * G)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                mean = np.bincount(cell, v, G * G) / cnt
+                sd = np.sqrt(np.maximum(np.bincount(cell, v * v, G * G) / cnt - mean**2, 0))
+            keep_s = np.abs(v - mean[cell]) <= clip_sigma * sd[cell] + 1e-30
+            cnt2 = np.bincount(cell[keep_s], minlength=G * G)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                delta = np.where(cnt2 > 0, np.bincount(cell[keep_s], v[keep_s], G * G) / cnt2, 0.0)
+            epsf = epsf + delta.reshape(G, G)
+            if smooth:
+                epsf = nd_convolve(epsf, kern, mode='constant', cval=0.0)
+            epsf = self._AnK_recentre(epsf, oversamp)
+            if it < n_iter - 1:
+                cx, cy, flux = self._AnK_refit(stamps, cx, cy, flux, epsf, oversamp, fit_radius)
+                good = np.isfinite(flux) & (flux > 0) & np.isfinite(cx) & np.isfinite(cy)
+                stamps, cx, cy, flux = stamps[good], cx[good], cy[good], flux[good]
+
+        # residual quality of the final ePSF
+        gx = (xx[None] - cx[:, None, None]) * oversamp + c0
+        gy = (yy[None] - cy[:, None, None]) * oversamp + c0
+        model = flux[:, None, None] * map_coordinates(
+            epsf, [gy.ravel(), gx.ravel()], order=3, mode='constant').reshape(stamps.shape)
+        inr = np.hypot(xx[None] - cx[:, None, None], yy[None] - cy[:, None, None]) <= fit_radius
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            rms = np.sqrt(np.nanmean(np.where(inr, stamps - model, np.nan)**2, axis=(1, 2)))
+            resid_pct = float(np.nanmedian(rms / (flux * epsf.max())) * 100)
+        return epsf, dict(cx=cx, cy=cy, flux=flux, nstars=len(stamps), resid_pct=resid_pct)
+
+    def AnK_epsf_fwhm(self, epsf, oversamp, ux=1.0, uy=0.0, step=0.02, window=3.0):
+        """
+        FWHMs (detector px) of an ePSF along the unit vector (ux, uy) and
+        perpendicular to it.
+
+        Returns (marg_along, marg_across, slice_along, slice_across):
+            marg_*: FWHM of the marginal profile (ePSF summed across the other
+                direction, within +/- window px of the centre). marg_along is
+                the line spread function an extraction that sums across the
+                trace sees; it is the quantity to compare with the
+                Gaussian-fit FWHMs. Limiting the sum to +/- window px keeps it
+                from being widened by a small residual background pedestal
+                (summed over the whole stamp, a 0.4%-of-peak pedestal widened
+                LowRes-L marginals by ~1-2%). None sums the whole ePSF.
+            slice_*: FWHM of the profile on a line through the ePSF centre.
+        """
+        G = epsf.shape[0]; c0 = G // 2
+        R = c0 / oversamp
+        s = np.arange(-R, R + 1e-9, step)
+        n = np.hypot(ux, uy); ux, uy = ux / n, uy / n
+        vx, vy = -uy, ux
+        S_, T_ = np.meshgrid(s, s, indexing='ij')           # S_ along u, T_ along v
+        gx = c0 + oversamp * (S_ * ux + T_ * vx)
+        gy = c0 + oversamp * (S_ * uy + T_ * vy)
+        rot = map_coordinates(epsf, [gy.ravel(), gx.ravel()], order=3,
+                              mode='constant').reshape(S_.shape)
+        mid = len(s) // 2
+
+        def halfmax(p):
+            if not np.all(np.isfinite(p)):
+                return np.nan
+            pk = int(np.argmax(p)); h = p[pk] / 2.0
+            l = pk
+            while l > 0 and p[l] > h:
+                l -= 1
+            r = pk
+            while r < len(p) - 1 and p[r] > h:
+                r += 1
+            if p[l] > h or p[r] > h:
+                return np.nan
+            xl = s[l] + (h - p[l]) / (p[l + 1] - p[l]) * step
+            xr = s[r - 1] + (h - p[r - 1]) / (p[r] - p[r - 1]) * step
+            return xr - xl
+
+        if window is None:
+            marg_a, marg_c = rot.sum(axis=1), rot.sum(axis=0)
+        else:
+            marg_a = np.where(np.abs(T_) <= window, rot, 0.0).sum(axis=1)
+            marg_c = np.where(np.abs(S_) <= window, rot, 0.0).sum(axis=0)
+        return (halfmax(marg_a), halfmax(marg_c),
+                halfmax(rot[:, mid]), halfmax(rot[mid, :]))
+
+    def AnK_lowres_psfs(self, ims_cal, fitarr, lams, nreg=3, oversamp=4, half=6,
+                        n_iter=5, snr_min=20.0, max_spots=1500, min_spots=50, seed=0):
+        """
+        Anderson & King ePSFs for LowRes spots, one per wavelength and field
+        region, and their FWHMs along / across the trace.
+
+        The lenslet grid is split into nreg x nreg regions with equal numbers
+        of lenslets per row / column band (field-dependent PSF shape is then
+        resolved at that scale). Spots come from the Gaussian fits (fitarr,
+        used only for the initial centres and to select spots); a spot is used
+        if its stamp is on the detector and its aperture S/N >= snr_min.
+
+        Args:
+            ims_cal: (nlam, 2048, 2048) background-subtracted masters
+            fitarr: (nlam, ny, nx, >=6) Gaussian spot fits (fit_gauss_spots)
+            lams: (nlam,) wavelengths in um
+            nreg: field regions per axis
+            oversamp, n_iter: passed to AnK_build_epsf
+            half: stamp half-width (stamps are 2*half+1 px; neighbouring
+                lenslet spots at one wavelength are >= ~19 px apart)
+            snr_min, max_spots, min_spots: spot selection per region
+
+        Returns a dict with
+            epsf (nlam, nreg, nreg, G, G), and (nlam, nreg, nreg) arrays:
+            fwhm_along, fwhm_across (marginal ePSF FWHM, px),
+            slice_along, slice_across, gauss_along, gauss_across (median
+            Gaussian-fit marginal FWHM of the same spots), disp (median px/um),
+            R_along, R_across (lambda / FWHM_lambda from the ePSF FWHMs),
+            nspots, resid_pct, ux, uy (median trace direction), xdet, ydet
+            (median detector position); region_y, region_x (lenslet index
+            bounds per region) and oversamp, half.
+        """
+        lams = np.asarray(lams, dtype=float)
+        rng = np.random.default_rng(seed)
+        nl, ny, nx = fitarr.shape[:3]
+        dxdl, dydl, good = self.trace_derivatives(fitarr, lams)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            disp = np.hypot(dxdl, dydl)
+            ux, uy = dxdl / disp, dydl / disp
+        xm, ym = fitarr[..., 1], fitarr[..., 2]
+        gal, gac = self.gauss_fwhm_along_across(fitarr[..., 3], fitarr[..., 4], fitarr[..., 5], ux, uy)
+
+        # region bounds: quantiles of the occupied lenslet rows / columns
+        jj, ii = np.nonzero(good.any(axis=0))
+        yb = np.unique(np.round(np.percentile(jj, np.linspace(0, 100, nreg + 1))).astype(int))
+        xb = np.unique(np.round(np.percentile(ii, np.linspace(0, 100, nreg + 1))).astype(int))
+        yb[-1] += 1; xb[-1] += 1
+        nry, nrx = len(yb) - 1, len(xb) - 1
+        yreg = np.full(ny, -1); xreg = np.full(nx, -1)
+        for k in range(nry):
+            yreg[yb[k]:yb[k + 1]] = k
+        for k in range(nrx):
+            xreg[xb[k]:xb[k + 1]] = k
+
+        G = 2 * half * oversamp + 1
+        shp = (nl, nry, nrx)
+        out = {k: np.full(shp, np.nan) for k in
+               ['fwhm_along', 'fwhm_across', 'slice_along', 'slice_across', 'gauss_along',
+                'gauss_across', 'disp', 'R_along', 'R_across', 'resid_pct', 'ux', 'uy',
+                'xdet', 'ydet']}
+        out['nspots'] = np.zeros(shp, dtype=int)
+        out['epsf'] = np.full(shp + (G, G), np.nan)
+        npix_ap = np.pi * 3.0**2
+        for l in range(nl):
+            img = ims_cal[l]
+            for ry in range(nry):
+                for rx in range(nrx):
+                    sel = (good[l] & np.isfinite(ux[l]) & (yreg[:, None] == ry)
+                           & (xreg[None, :] == rx))
+                    if sel.sum() < min_spots:
+                        continue
+                    stamps, cx, cy, noise, ok = self.AnK_extract_stamps(
+                        img, xm[l][sel], ym[l][sel], half=half)
+                    S = stamps.shape[1]
+                    yy, xx = np.mgrid[:S, :S]
+                    ap = np.hypot(xx[None] - cx[:, None, None], yy[None] - cy[:, None, None]) <= 3.0
+                    with np.errstate(invalid='ignore', divide='ignore'):
+                        snr = np.nansum(np.where(ap, stamps, 0), axis=(1, 2)) / (noise * np.sqrt(npix_ap))
+                    use = np.isfinite(snr) & (snr >= snr_min)
+                    if use.sum() < min_spots:
+                        continue
+                    use = np.nonzero(use)[0]
+                    if len(use) > max_spots:
+                        use = np.sort(rng.choice(use, max_spots, replace=False))
+                    epsf, info = self.AnK_build_epsf(stamps[use], cx[use], cy[use],
+                                                     oversamp=oversamp, n_iter=n_iter)
+                    idx = tuple(a[ok][use] for a in np.nonzero(sel))
+                    u = np.array([np.nanmedian(ux[l][idx]), np.nanmedian(uy[l][idx])])
+                    fa, fx, sa, sx_ = self.AnK_epsf_fwhm(epsf, oversamp, *u)
+                    d = np.nanmedian(disp[l][idx])
+                    o = (l, ry, rx)
+                    out['epsf'][o] = epsf
+                    out['fwhm_along'][o], out['fwhm_across'][o] = fa, fx
+                    out['slice_along'][o], out['slice_across'][o] = sa, sx_
+                    out['gauss_along'][o] = np.nanmedian(gal[l][idx])
+                    out['gauss_across'][o] = np.nanmedian(gac[l][idx])
+                    out['disp'][o] = d
+                    out['R_along'][o] = lams[l] * d / fa
+                    out['R_across'][o] = lams[l] * d / fx
+                    out['nspots'][o] = info['nstars']
+                    out['resid_pct'][o] = info['resid_pct']
+                    out['ux'][o], out['uy'][o] = u / np.hypot(*u)
+                    out['xdet'][o] = np.nanmedian(xm[l][idx])
+                    out['ydet'][o] = np.nanmedian(ym[l][idx])
+        out['region_y'] = np.array([yb[:-1], yb[1:]]).T
+        out['region_x'] = np.array([xb[:-1], xb[1:]]).T
+        out['oversamp'] = oversamp
+        out['half'] = half
+        return out
+
+    def write_AnK_lowres_psfs(self, res, lams, scmode, output_dir, plot_dir):
+        """Save AnK_lowres_psfs outputs to {scmode}_ank_epsf.fits (ePSF cube +
+        per wavelength / region table) and {scmode}_ank_epsf.png, and log the
+        median FWHMs and R per wavelength."""
+        lams = np.asarray(lams, dtype=float)
+        nl, nry, nrx = res['fwhm_along'].shape
+        hdr = pyfits.Header()
+        hdr['IFSMODE'] = scmode
+        hdr['OVERSAMP'] = (int(res['oversamp']), 'ePSF grid points per detector px')
+        hdr['STAMPHW'] = (int(res['half']), 'stamp half-width (px)')
+        hdr['NREGY'] = nry; hdr['NREGX'] = nrx
+        hdr['COMMENT'] = 'Anderson & King effective PSFs, axes (lam, region y, region x, gy, gx).'
+        hdr['COMMENT'] = 'Grid centre = spot centre; values are px samples of a unit-flux spot.'
+        hdus = [pyfits.PrimaryHDU(res['epsf'].astype(np.float32), header=hdr)]
+        L, RY, RX = np.meshgrid(np.arange(nl), np.arange(nry), np.arange(nrx), indexing='ij')
+        cols = [pyfits.Column(name='LAMBDA', format='D', unit='um', array=lams[L.ravel()]),
+                pyfits.Column(name='REG_Y', format='J', array=RY.ravel()),
+                pyfits.Column(name='REG_X', format='J', array=RX.ravel()),
+                pyfits.Column(name='LENS_Y0', format='J', array=res['region_y'][RY.ravel(), 0]),
+                pyfits.Column(name='LENS_Y1', format='J', array=res['region_y'][RY.ravel(), 1]),
+                pyfits.Column(name='LENS_X0', format='J', array=res['region_x'][RX.ravel(), 0]),
+                pyfits.Column(name='LENS_X1', format='J', array=res['region_x'][RX.ravel(), 1]),
+                pyfits.Column(name='NSPOTS', format='J', array=res['nspots'].ravel())]
+        for name, key, unit in [('XDET', 'xdet', 'pix'), ('YDET', 'ydet', 'pix'),
+                                ('FWHM_ALONG', 'fwhm_along', 'pix'),
+                                ('FWHM_ACROSS', 'fwhm_across', 'pix'),
+                                ('SLICE_ALONG', 'slice_along', 'pix'),
+                                ('SLICE_ACROSS', 'slice_across', 'pix'),
+                                ('GAUSS_ALONG', 'gauss_along', 'pix'),
+                                ('GAUSS_ACROSS', 'gauss_across', 'pix'),
+                                ('DISP', 'disp', 'pix/um'), ('R_ALONG', 'R_along', ''),
+                                ('R_ACROSS', 'R_across', ''), ('RESID_PCT', 'resid_pct', '%'),
+                                ('UX', 'ux', ''), ('UY', 'uy', '')]:
+            cols.append(pyfits.Column(name=name, format='D', unit=unit, array=res[key].ravel()))
+        hdus.append(pyfits.BinTableHDU.from_columns(cols, name='REGIONS'))
+        pyfits.HDUList(hdus).writeto(output_dir + '/' + scmode + '_ank_epsf.fits', overwrite=True)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            med = {k: np.nanmedian(res[k].reshape(nl, -1), axis=1) for k in
+                   ['fwhm_along', 'fwhm_across', 'gauss_along', 'gauss_across', 'R_along',
+                    'R_across', 'resid_pct']}
+        self.logger.info(f"{scmode} AnK ePSFs ({nry}x{nrx} field regions, median over regions)")
+        self.logger.info("  lambda(um) | ePSF FWHM along across | Gauss FWHM along across | "
+                         "R_along R_across | resid%")
+        for l in range(nl):
+            self.logger.info(f"  {lams[l]:9.4f} | {med['fwhm_along'][l]:9.2f} {med['fwhm_across'][l]:6.2f} "
+                             f"| {med['gauss_along'][l]:10.2f} {med['gauss_across'][l]:6.2f} "
+                             f"| {med['R_along'][l]:7.1f} {med['R_across'][l]:8.1f} "
+                             f"| {med['resid_pct'][l]:5.1f}")
+
+        try:
+            ov, hw = int(res['oversamp']), int(res['half'])
+            ext = (-hw - 0.5 / ov, hw + 0.5 / ov, -hw - 0.5 / ov, hw + 0.5 / ov)
+            cy_, cx_ = nry // 2, nrx // 2
+            have = np.nonzero(np.isfinite(res['fwhm_along'][:, cy_, cx_]))[0]
+            if len(have) == 0:
+                have = np.arange(nl)
+            ls = np.unique(have[np.linspace(0, len(have) - 1, 3).astype(int)])
+            fig = plt.figure(figsize=(4 * max(nrx, len(ls)) + 8, 4 * (nry + 1)))
+            gs = fig.add_gridspec(nry + 1, max(nrx, len(ls)) + 2)
+            for k, l in enumerate(ls):           # top row: central region at 3 wavelengths
+                ax = fig.add_subplot(gs[0, k])
+                e = res['epsf'][l, cy_, cx_]
+                if np.isfinite(e).any():
+                    ax.imshow(np.arcsinh(e / (0.02 * np.nanmax(e))), origin='lower', cmap='magma', extent=ext)
+                    ax.contour(e, [0.5 * np.nanmax(e)], colors='c', extent=ext, origin='lower')
+                    ax.annotate('', xy=(3 * res['ux'][l, cy_, cx_], 3 * res['uy'][l, cy_, cx_]),
+                                xytext=(0, 0), arrowprops=dict(arrowstyle='->', color='lime'))
+                ax.set_xlim(-4, 4); ax.set_ylim(-4, 4)
+                ax.set_title(f"centre region, {lams[l]:.3f} um\nFWHM along/across "
+                             f"{res['fwhm_along'][l, cy_, cx_]:.2f}/{res['fwhm_across'][l, cy_, cx_]:.2f} px",
+                             fontsize=9)
+            lm = nl // 2                          # grid: every region at the middle wavelength
+            for ry in range(nry):
+                for rx in range(nrx):
+                    ax = fig.add_subplot(gs[nry - ry, rx])
+                    e = res['epsf'][lm, ry, rx]
+                    if np.isfinite(e).any():
+                        ax.imshow(np.arcsinh(e / (0.02 * np.nanmax(e))), origin='lower', cmap='magma', extent=ext)
+                        ax.contour(e, [0.5 * np.nanmax(e)], colors='c', extent=ext, origin='lower')
+                    ax.set_xlim(-4, 4); ax.set_ylim(-4, 4)
+                    ax.set_title(f"region ({ry},{rx}) {lams[lm]:.3f} um, N={res['nspots'][lm, ry, rx]}\n"
+                                 f"along/across {res['fwhm_along'][lm, ry, rx]:.2f}/"
+                                 f"{res['fwhm_across'][lm, ry, rx]:.2f} px", fontsize=9)
+            ax = fig.add_subplot(gs[1:(nry + 1) // 2 + 1, -2:])
+            for key, col, lab in [('fwhm_along', 'C0', 'ePSF along'), ('fwhm_across', 'C1', 'ePSF across')]:
+                ax.plot(lams, med[key], '-', color=col, label=lab)
+            ax.plot(lams, med['gauss_along'], '--', color='C0', label='Gaussian fit along')
+            ax.plot(lams, med['gauss_across'], '--', color='C1', label='Gaussian fit across')
+            ax.set(xlabel='wavelength (um)', ylabel='FWHM (px), median over regions'); ax.legend(fontsize=8)
+            ax = fig.add_subplot(gs[(nry + 1) // 2 + 1:, -2:])
+            ax.plot(lams, med['R_along'], '-', color='C0', label='R along (ePSF)')
+            ax.plot(lams, med['R_across'], '-', color='C1', label='R across (ePSF)')
+            ax.set(xlabel='wavelength (um)', ylabel='R, median over regions'); ax.legend(fontsize=8)
+            fig.suptitle(f'{scmode}: Anderson & King ePSFs (asinh stretch, cyan = half max, '
+                         f'green = trace direction +lambda; bottom grid laid out as on the detector)')
+            fig.tight_layout()
+            os.makedirs(plot_dir, exist_ok=True)
+            fig.savefig(os.path.join(plot_dir, scmode + '_ank_epsf.png'), dpi=100)
+            plt.close(fig)
+        except Exception as e:
+            self.logger.info(f"AnK ePSF plot failed: {e}")
+
     def fit_gauss_spots_2(self, calims, posarr, show_plots=False, fix_theta=False, cropsize=10):
         """
         Modified version of the original fit_gauss_spots.
@@ -1866,6 +2325,54 @@ class ProcessMonochrom(BasePrimitive):
         return interp_arr
 
 
+    def trace_derivatives(self, fitarr, lams, poly_deg=3, min_spots=5):
+        """
+        Local trace direction and dispersion from the Gaussian spot fits.
+
+        Fits x(lambda) and y(lambda) of each lenslet's fitted spot centres with
+        polynomials and differentiates them. Derivatives are only evaluated
+        inside the wavelength range that lenslet's good spots cover.
+
+        Returns:
+            dxdl, dydl: (nlam, ny, nx) dx/dlambda, dy/dlambda in px/um
+            good: (nlam, ny, nx) bool, spots with a usable Gaussian fit
+        """
+        lams = np.asarray(lams, dtype=float)
+        nl, ny, nx = fitarr.shape[:3]
+        amp, xm, ym, sx, sy, th = [fitarr[..., i] for i in range(6)]
+        good = (np.isfinite(amp) & (amp > 0) & np.isfinite(xm) & np.isfinite(ym)
+                & np.isfinite(sx) & np.isfinite(sy) & np.isfinite(th))
+        dxdl = np.full((nl, ny, nx), np.nan)
+        dydl = np.full((nl, ny, nx), np.nan)
+        for j in range(ny):
+            for i in range(nx):
+                g = good[:, j, i]
+                if g.sum() < max(min_spots, poly_deg + 2):
+                    continue
+                px = np.polyfit(lams[g], xm[g, j, i], poly_deg)
+                py = np.polyfit(lams[g], ym[g, j, i], poly_deg)
+                inr = (lams >= lams[g].min()) & (lams <= lams[g].max())
+                dxdl[inr, j, i] = np.polyval(np.polyder(px), lams[inr])
+                dydl[inr, j, i] = np.polyval(np.polyder(py), lams[inr])
+        return dxdl, dydl, good
+
+    @staticmethod
+    def gauss_fwhm_along_across(sx, sy, th, ux, uy):
+        """
+        FWHM of a 2D Gaussian (astropy Gaussian2D x_stddev, y_stddev, theta)
+        projected onto the unit vector (ux, uy) and onto the perpendicular,
+        i.e. the FWHMs of its marginal profiles along and across that direction.
+        """
+        c, s = np.cos(th), np.sin(th)
+        sxx = c**2 * sx**2 + s**2 * sy**2
+        syy = s**2 * sx**2 + c**2 * sy**2
+        sxy = c * s * (sx**2 - sy**2)
+        k = 2.0 * np.sqrt(2.0 * np.log(2.0))
+        with np.errstate(invalid='ignore'):
+            along = k * np.sqrt(ux**2 * sxx + 2 * ux * uy * sxy + uy**2 * syy)
+            across = k * np.sqrt(uy**2 * sxx - 2 * ux * uy * sxy + ux**2 * syy)
+        return along, across
+
     def estimate_spectral_resolution(self, fitarr, lams, mono_fwhm_nm=0.0,
                                      poly_deg=3, min_spots=5,
                                      fwhm_pix_range=(0.5, 8.0)):
@@ -1905,40 +2412,15 @@ class ProcessMonochrom(BasePrimitive):
             16/50/84th percentiles, nspots, nspots_xdisp (nlam,).
         """
         lams = np.asarray(lams, dtype=float)
-        nl, ny, nx = fitarr.shape[:3]
-        amp, xm, ym, sx, sy, th = [fitarr[..., i] for i in range(6)]
-        good = (np.isfinite(amp) & (amp > 0) & np.isfinite(xm) & np.isfinite(ym)
-                & np.isfinite(sx) & np.isfinite(sy) & np.isfinite(th))
-
-        # covariance of the fitted Gaussian (astropy Gaussian2D convention)
-        c, s = np.cos(th), np.sin(th)
-        sxx = c**2 * sx**2 + s**2 * sy**2
-        syy = s**2 * sx**2 + c**2 * sy**2
-        sxy = c * s * (sx**2 - sy**2)
-
-        # local trace direction and dispersion from per-lenslet polynomials
-        dxdl = np.full((nl, ny, nx), np.nan)
-        dydl = np.full((nl, ny, nx), np.nan)
-        for j in range(ny):
-            for i in range(nx):
-                g = good[:, j, i]
-                if g.sum() < max(min_spots, poly_deg + 2):
-                    continue
-                lmin_g, lmax_g = lams[g].min(), lams[g].max()
-                px = np.polyfit(lams[g], xm[g, j, i], poly_deg)
-                py = np.polyfit(lams[g], ym[g, j, i], poly_deg)
-                # only evaluate inside the range the lenslet's spots cover
-                inr = (lams >= lmin_g) & (lams <= lmax_g)
-                dxdl[inr, j, i] = np.polyval(np.polyder(px), lams[inr])
-                dydl[inr, j, i] = np.polyval(np.polyder(py), lams[inr])
+        nl = fitarr.shape[0]
+        sx, sy, th = fitarr[..., 3], fitarr[..., 4], fitarr[..., 5]
+        dxdl, dydl, good = self.trace_derivatives(fitarr, lams, poly_deg=poly_deg,
+                                                  min_spots=min_spots)
 
         with np.errstate(invalid='ignore', divide='ignore'):
             disp = np.hypot(dxdl, dydl)                  # px / um
             ux, uy = dxdl / disp, dydl / disp
-            sig_d = np.sqrt(ux**2 * sxx + 2 * ux * uy * sxy + uy**2 * syy)
-            sig_x = np.sqrt(uy**2 * sxx - 2 * ux * uy * sxy + ux**2 * syy)
-            fwhm_d = 2.0 * np.sqrt(2.0 * np.log(2.0)) * sig_d
-            fwhm_x = 2.0 * np.sqrt(2.0 * np.log(2.0)) * sig_x
+            fwhm_d, fwhm_x = self.gauss_fwhm_along_across(sx, sy, th, ux, uy)
 
             base = good & np.isfinite(disp) & (disp > 0)
             ok = (base & np.isfinite(fwhm_d)
@@ -2607,7 +3089,7 @@ class ProcessMonochrom(BasePrimitive):
 
         self.logger.info("############ started Processing Monochromator Images #############")
         df = fits_headers_to_dataframe(output_dir,pattern="*mcalunit.fits")
-        if not df.empty:
+        if not (df.empty or ("IFSMODE" in df.columns)):
             df["IFSMODE"] = df.apply(
                 lambda row: scbasic.select_ifsmode(
                     row["MODSLNAM"],
@@ -2729,6 +3211,15 @@ class ProcessMonochrom(BasePrimitive):
                                                         fwhm_pix_range=(0.5, csize))
                 self.write_spectral_resolution(res, lams, scmode, output_dir, plot_dir,
                                                mono_fwhm_nm=mono_fwhm_nm)
+
+                # Anderson & King ePSFs per wavelength and field region (LowRes),
+                # for profile-independent FWHMs; on unless the config turns it off
+                ank_flag = self.config.instrument.lowres_ank_epsf
+                if scmode.split('-')[0] == 'LowRes' and (ank_flag is None or ank_flag):
+                    self.logger.info("building Anderson & King ePSFs for LowRes spots")
+                    nreg = int(self.config.instrument.lowres_ank_nregions or 3)
+                    ank_res = self.AnK_lowres_psfs(ims_cal, np.array(fitarr), lams, nreg=nreg)
+                    self.write_AnK_lowres_psfs(ank_res, lams, scmode, output_dir, plot_dir)
 
 
                 if scmode.split('-')[0] == 'LowRes':
