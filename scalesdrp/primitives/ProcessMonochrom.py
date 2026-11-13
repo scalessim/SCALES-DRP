@@ -65,6 +65,38 @@ class ProcessMonochrom(BasePrimitive):
         ims = np.array(ims)
         return ims, lams/1000.0
 
+    def apply_wave_range(self,ims,lams,scmode,wave_range):
+        """
+        Keep only the masters whose monochromator wavelength is inside a range,
+        e.g. to drop band-edge masters with no or faint spots, which otherwise
+        add thousands of noise tracks and can bias the background subtraction.
+
+        Args:
+            ims: stack of masters, sorted by wavelength (from parse_files)
+            lams: their wavelengths in um
+            scmode: mode name, e.g. 'LowRes-L'
+            wave_range: None (keep all); (min, max) in um, applied to every mode;
+                or a dict {scmode: (min, max)} (modes not listed keep all masters).
+                Limits are inclusive.
+
+        Returns:
+            ims, lams with only the masters inside the range
+        """
+        if isinstance(wave_range, dict):
+            wave_range = wave_range.get(scmode)
+        if wave_range is None or len(ims) == 0:
+            return ims, lams
+        lams = np.asarray(lams)
+        wmin, wmax = wave_range
+        keep = (lams >= wmin) & (lams <= wmax)
+        if (~keep).any():
+            self.logger.info(
+                f"{scmode}: mono_wave_range ({wmin}, {wmax}) um drops {(~keep).sum()} of "
+                f"{len(lams)} masters, at {np.round(lams[~keep], 4).tolist()} um")
+        if not keep.any():
+            self.logger.warning(f"{scmode}: no masters inside mono_wave_range ({wmin}, {wmax}) um")
+        return ims[keep], lams[keep]
+
     def monochrom_bksub(self,ims,method='mean'):
         if method=='mean':
             meanim = np.nanmean(ims,axis=0)
@@ -338,95 +370,65 @@ class ProcessMonochrom(BasePrimitive):
         indices that correspond to specific lenslets,
         and find spots that fall
         on common traces. Spots on the same trace are consolidated.
+
+        Each partial track's position at the band centre is predicted from its
+        first spot (trace model below); tracks whose predicted positions are
+        within maxdist px are merged, greedily and in track order. Neighbours
+        are found with a KD-tree, which gives the same result as comparing every
+        pair of tracks but scales to tens of thousands of partial tracks (e.g.
+        noise peaks from masters without monochromator light).
         """
-
-
-        #define dictionary for unique traces
+        #full-length tracks correspond to one lenslet each and are kept as they are;
+        #the rest are fragments that may share a trace
         spots_u = {}
-        #define dictionary for spot tracks that may
-        #duplicate traces
-        spots_d = {}
-
-        uc = 0
-        dc = 0
+        spots_d = []
         for i in range(len(spot_tracks)):
-            #if a spot track has locations for every wavelength
-            #it corresponds to one lenslet and does not need to
-            #be consolidated
             if len(spot_tracks[i]) == len(lams_u):
-                spots_u[uc] = spot_tracks[i]
-                uc += 1
-            #if not, add this set of spot positions to the list
-            #that may duplicate traces
+                spots_u[len(spots_u)] = spot_tracks[i]
             else:
-                spots_d[dc] = spot_tracks[i]
-                dc += 1
+                spots_d.append(spot_tracks[i])
+        if len(spots_d) == 0:
+            return spots_u
 
-        #start looking for lists of spot positions that can
-        #be consolidated (because they fall on one trace)
+        if medres==True:
+            if mfilt=='imgK':
+                chy=1
+                lmin=1.95
+                lmax=2.45
+                length=1822
+            if mfilt=='imgLp':
+                chy=1
+                lmin=3.44805
+                lmax=4.09241
+                length=878
+        lam = 0.5*(lmin+lmax)
 
-        #define list of spot track indices that are duplicates
-        rem = []
-        for i in range(len(spots_d)):
-            keys = list(spots_d[i].keys())
-            #grab spot's first x,y position and first wavelength
-            x0,y0 = spots_d[i][keys[0]][0],spots_d[i][keys[0]][1]
-            lam0 = spots_d[i][keys[0]][3]
-            #get average wavelength and calculate expected x,y position
-            #at that wavelength
-
-            ####need to add a new get trace pos function for medium-res mode!!!
+        #predicted band-centre position of each fragment, from its first spot
+        pos = np.zeros((len(spots_d), 2))
+        for i, track in enumerate(spots_d):
+            first = track[list(track.keys())[0]]
+            x0, y0, lam0 = first[0], first[1], first[3]
             if medres==False:
-                lam = 0.5*(lmin+lmax)
-                xi,yi = self.get_trace_pos(lam,x0,y0,lam0,chx,chy,lmin,lmax)
+                pos[i] = self.get_trace_pos(lam,x0,y0,lam0,chx,chy,lmin,lmax)
+            else:
+                yi,ymin,ymax = self.get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
+                pos[i] = (x0, yi)
 
-            if medres==True:
-                if mfilt=='imgK':
-                    chy=1
-                    lmin=1.95
-                    lmax=2.45
-                    length=1822
-                if mfilt=='imgLp':
-                    chy=1
-                    lmin=3.44805
-                    lmax=4.09241
-                    length=878
-                xi = x0
-                lam = 0.5*(lmin+lmax)
-                yi,ymin,ymax=self.get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
-            #if my track isn't already flagged as a duplicate
-            if i not in rem:
-                merged = spots_d[i]
-                #loop through all other tracks
-                for j in range(len(spots_d)):
-                    if i != j:
-                        #if the other track isn't a duplicate
-                        if j not in rem:
-                            #get the other track's position at the central wavelegnth
-                            keys = list(spots_d[j].keys())
-                            x0,y0 = spots_d[j][keys[0]][0],spots_d[j][keys[0]][1]
-                            lam0 = spots_d[j][keys[0]][3]
-                            lam = 0.5*(lmin+lmax)
-                            if medres==False:
-                                xj,yj = self.get_trace_pos(lam,x0,y0,lam0,chx,chy,lmin,lmax)
-
-                            if medres==True:
-                                xj = x0
-                                yj,ymin,ymax=self.get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
-                            #get the distance between the other spot's central wavelength
-                            #position and the original one
-                            dist = np.sqrt((xi-xj)**2+(yi-yj)**2)
-                            #if the distance between the two central wavelength positions
-                            #is smaller than the maximum allowed, then they're the same
-                            if dist < maxdist:
-                                #append j index to list to be removed
-                                rem.append(j)
-                                merged = merged | spots_d[j]
-                #append merged track to dictionary containing unique lenslet tracks
-                spots_u[uc] = merged
-                uc += 1
-                #append i in dex to list to be removed
-                rem.append(i)
+        #greedy merge: each fragment not yet merged absorbs every other unmerged
+        #fragment whose predicted position is closer than maxdist
+        tree = cKDTree(pos)
+        rem = set()
+        for i in range(len(spots_d)):
+            if i in rem:
+                continue
+            merged = spots_d[i]
+            for j in sorted(tree.query_ball_point(pos[i], maxdist)):
+                #query_ball_point includes distance == maxdist; the merge needs < maxdist
+                if j != i and j not in rem and np.hypot(*(pos[i]-pos[j])) < maxdist:
+                    rem.add(j)
+                    merged = merged | spots_d[j]
+            spots_u[len(spots_u)] = merged
+            rem.add(i)
         return spots_u
 
     def get_trace_pos(self,lam,x0,y0,lam0,chx,chy,lmin,lmax,length=54,tilt=18):
@@ -1388,7 +1390,7 @@ class ProcessMonochrom(BasePrimitive):
             for xind in range(nx):
                 centroid = centroids[ll, yind, xind]
                 if np.any(np.isnan(centroid)):
-                    self.logger.info(yind,xind,' cent is nan')
+                    #empty grid cell (no lenslet, or no spot at this wavelength): nothing to model
                     continue
                 xcen, ycen = centroid
 
@@ -1468,13 +1470,13 @@ class ProcessMonochrom(BasePrimitive):
         for ll in range(len(spots)):
             combined = self.build_oversampled_2(ll, spots, centroids, oversamp, ny, nx, npix=16)
             fwhm_x = self.halfmax_fwhm_x(combined, oversamp)
-            self.logger.info("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
+            self.logger.info(f"FWHM_x (direct half-max crossing, oversampled image) = {fwhm_x}")
 
             raws, models, residuals, scales, modim = self.downsample_model_and_residuals_2(ll, spots, centroids, combined, oversamp,
                                                                                       ny, nx, posarr,npix=16,normtype='sum')
             good = ~np.isnan(residuals).any(axis=(2,3))
             rms = np.sqrt(np.nanmean(residuals[good]**2))
-            self.logger.info("n spots:", good.sum(), "  overall RMS residual:", rms)
+            self.logger.info(f"n spots: {good.sum()}  overall RMS residual: {rms}")
             per_spot_rms_pct, overall_rms_pct = self.residual_rms_pct_2(raws, residuals)
             self.logger.info("overall RMS residual (%% of peak, pooled) = %.2f%%" % overall_rms_pct)
 
@@ -1485,12 +1487,12 @@ class ProcessMonochrom(BasePrimitive):
             filt = gauss(xx,yy)
             combined2 = combined*filt
             fwhm_x = self.halfmax_fwhm_x(combined2, oversamp)
-            self.logger.info("FWHM_x (direct half-max crossing, filtered oversampled image) =", fwhm_x)
+            self.logger.info(f"FWHM_x (direct half-max crossing, filtered oversampled image) = {fwhm_x}")
             raws, models_sym, residuals_sym, scales_sym, modim_sym = self.downsample_model_and_residuals_2(ll, spots, centroids, combined2, oversamp,
                                                                                               ny, nx, posarr,npix=16,normtype='max')
             good = ~np.isnan(residuals_sym).any(axis=(2,3))
             rms = np.sqrt(np.nanmean(residuals_sym[good]**2))
-            self.logger.info("n spots:", good.sum(), "  overall RMS residual (filtered):", rms)
+            self.logger.info(f"n spots: {good.sum()}  overall RMS residual (filtered): {rms}")
             per_spot_rms_pct_sym, overall_rms_pct_sym = self.residual_rms_pct_2(raws, residuals_sym)
             self.logger.info("overall RMS residual (%% of peak, pooled, filtered) = %.2f%%" % overall_rms_pct_sym)
 
@@ -1548,7 +1550,7 @@ class ProcessMonochrom(BasePrimitive):
         for ll in range(len(spots)):
             combined = self.build_oversampled(ll, centroids, spots, nx, ny, oversamp, npix=npix)
             fwhm_x = self.halfmax_fwhm_x(combined, oversamp)
-            self.logger.info("FWHM_x (direct half-max crossing, oversampled image) =", fwhm_x)
+            self.logger.info(f"FWHM_x (direct half-max crossing, oversampled image) = {fwhm_x}")
             raws, models, residuals, scales, models_stampsize, residuals_stampsize = self.downsample_model_and_residuals(combined, spots, centroids, oversamp, ll, npix=npix)
             modim = np.zeros([2048,2048])
             resim = np.zeros([2048,2048])
@@ -1572,7 +1574,7 @@ class ProcessMonochrom(BasePrimitive):
             resims.append(resim)
             good = ~np.isnan(residuals).any(axis=(1,2))
             rms = np.sqrt(np.nanmean(residuals[good]**2))
-            self.logger.info("n spots:", good.sum(), "  overall RMS residual:", rms)
+            self.logger.info(f"n spots: {good.sum()}  overall RMS residual: {rms}")
             per_spot_rms_pct, overall_rms_pct = self.residual_rms_pct(raws, residuals)
             self.logger.info("overall RMS residual (%% of peak, pooled) = %.2f%%" % overall_rms_pct)
         return model_arr, resid_arr, np.array(modims), np.array(resims)
@@ -2529,7 +2531,13 @@ class ProcessMonochrom(BasePrimitive):
             ax[0].set_title(scmode + (' (mono width not removed)' if not mono_fwhm_nm else ''))
             ax[0].legend()
             allr = np.concatenate([rmap[np.isfinite(rmap)], rmap_x[np.isfinite(rmap_x)]])
-            vmin, vmax = np.percentile(allr, [2, 98]) if allr.size else (0, 1)
+            # robust colour range: faint, noisy lenslets at the field edges can have very high R
+            # and would otherwise stretch a percentile-based range
+            if allr.size:
+                mid = np.median(allr); sc = 1.4826 * np.median(np.abs(allr - mid))
+                vmin, vmax = mid - 4 * sc, mid + 4 * sc
+            else:
+                vmin, vmax = 0, 1
             for a, m, t in [(ax[1], rmap, 'median R per lenslet (along trace)'),
                             (ax[2], rmap_x, 'median R per lenslet (cross trace)')]:
                 im = a.imshow(m, origin='lower', vmin=vmin, vmax=vmax)
@@ -3112,6 +3120,9 @@ class ProcessMonochrom(BasePrimitive):
             self.scmode=scmode
             self.logger.info("Parsing files for "+str(self.scmode))
             ims, lams = self.parse_files(df,scmode,output_dir)
+            #optional: only use masters inside a wavelength range (key may be absent)
+            wave_range = getattr(self.config.instrument, 'mono_wave_range', None)
+            ims, lams = self.apply_wave_range(ims, lams, scmode, wave_range)
 
             if len(ims) > 0:
                 self.set_lamlimits(scmode)
