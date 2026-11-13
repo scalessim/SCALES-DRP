@@ -45,6 +45,36 @@ import scalesdrp.primitives.scales_basic as scbasic
 AFFINE_X0 = AFFINE_Y0 = 1024.0
 
 
+KNOWN_IFSMODES = ("LowRes-K", "LowRes-KL", "LowRes-KLM", "LowRes-Ls",
+                  "LowRes-L", "LowRes-M", "MedRes-K", "MedRes-L", "MedRes-M")
+
+
+def ifsmode_of(hdr, logger=None, name=""):
+    """
+    IFS mode of a header (or dataframe row): the IFSMODE keyword when it is a
+    known mode, else derived from MODSLNAM / DSPRSNAM / FILTER with
+    select_ifsmode. Warns when both are available and disagree.
+    """
+    raw = hdr.get("IFSMODE")
+    raw = None if raw is None else str(raw).strip()
+    from_kw = None
+    if raw and raw.lower() not in ("nan", "none", "unknown"):
+        from_kw = {m.upper(): m for m in KNOWN_IFSMODES}.get(
+            raw.upper().replace("_", "-"))
+        if from_kw is None and logger is not None:
+            logger.warning(f"{name}: IFSMODE = {raw!r} is not a known mode; "
+                           "using MODSLNAM/DSPRSNAM instead.")
+    derived = scbasic.select_ifsmode(
+        hdr.get("MODSLNAM"), hdr.get("DSPRSNAM"), hdr.get("FILTER"))
+    if from_kw is not None:
+        if derived is not None and derived != from_kw and logger is not None:
+            logger.warning(
+                f"{name}: IFSMODE = {from_kw} but MODSLNAM/DSPRSNAM give "
+                f"{derived}; using IFSMODE.")
+        return from_kw
+    return derived
+
+
 def _cfg(inst, name, default):
     """Config value, or default when the key is missing or None."""
     val = getattr(inst, name, None)
@@ -66,10 +96,18 @@ class RmatShift(ProcessMonochrom):
         wavelength closest to monowave (nm). Raises if none is within tol_nm.
         """
         df = fits_headers_to_dataframe(scan_dir, pattern="*mcalunit.fits")
-        df["IFSMODE"] = df.apply(
-            lambda row: scbasic.select_ifsmode(
-                row.get("MODSLNAM"), row.get("DSPRSNAM"), row.get("FILTER")),
-            axis=1)
+        # warn about IFSMODE/MODSLNAM disagreements once, not per file
+        modes = df.apply(lambda row: ifsmode_of(row), axis=1)
+        if "IFSMODE" in df.columns:
+            known = {m.upper() for m in KNOWN_IFSMODES}
+            raw = set(df["IFSMODE"].astype(str).str.strip())
+            bad = sorted(v for v in raw - {"nan", "None", ""}
+                         if v.upper().replace("_", "-") not in known)
+            if bad:
+                self.logger.warning(
+                    f"Scan IFSMODE values {bad} were not used as given "
+                    "(unknown mode names); fell back to MODSLNAM/DSPRSNAM.")
+        df["IFSMODE"] = modes
         df = df[df["IFSMODE"] == scmode]
         if df.empty:
             raise RuntimeError(
@@ -491,12 +529,12 @@ class RmatShift(ProcessMonochrom):
             hdr = hdul[0].header.copy()
         stem = os.path.basename(l1_path).replace("_L1.fits", "")
 
-        scmode = scbasic.select_ifsmode(
-            hdr.get("MODSLNAM"), hdr.get("DSPRSNAM"), hdr.get("FILTER"))
+        scmode = ifsmode_of(hdr, self.logger, stem)
         if scmode is None:
             raise RuntimeError(
                 f"Could not determine the IFS mode of {stem} "
-                f"(MODSLNAM={hdr.get('MODSLNAM')}, DSPRSNAM={hdr.get('DSPRSNAM')}).")
+                f"(IFSMODE={hdr.get('IFSMODE')}, MODSLNAM={hdr.get('MODSLNAM')}, "
+                f"DSPRSNAM={hdr.get('DSPRSNAM')}).")
         monowave = float(hdr["MONOWAVE"])
         self.scmode = scmode
         self.logger.info(
