@@ -1385,11 +1385,14 @@ def proctab_update_sa(
     suffix,frame=None,proctab=None,
     proctab_path=None,newtype=None):
 
-    redux_output_dir = get_base_output_dir(output_dir)
+    # The proctab lives in output_dir itself, next to the products, which is
+    # where its readers look (CalibPostProcessSA, find_existing_proc_file).
+    # get_base_output_dir() would move it up a level when output_dir is
+    # 'redux/', and CalibPostProcessSA then finds no products.
+    redux_output_dir = os.path.abspath(output_dir)
     base_name = os.path.basename(input_filename)
     file_root, file_ext = os.path.splitext(base_name)
     output_filename = f"{file_root}{suffix}{file_ext}"
-    #redux_output_dir = os.path.join(output_dir, "redux")
     os.makedirs(redux_output_dir, exist_ok=True)
     output_path = os.path.join(redux_output_dir, output_filename)
 
@@ -1909,11 +1912,16 @@ def build_master_from_stack(
         axis=0
     )
 
+    # Never require more samples than there are frames: a stack of one
+    # frame (e.g. a single monochromator exposure per wavelength) would
+    # otherwise give an all-NaN master.
+    n_required = max(1, min(int(min_valid), N))
+    if n_required < int(min_valid):
+        print(f"Master built from {N} frame(s), fewer than min_valid="
+              f"{int(min_valid)}; requiring {n_required} valid sample(s) per pixel.")
+
     good_pix = (
-        n_eff >= max(
-            1,
-            int(min_valid)
-        )
+        n_eff >= n_required
     )
 
 
