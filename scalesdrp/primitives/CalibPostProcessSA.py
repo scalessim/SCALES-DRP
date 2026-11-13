@@ -666,37 +666,37 @@ class CalibPostProcessSA(BasePrimitive):
         # masters; ProcessMonochrom then uses the masters already in output_directory.
         # clobber = True supersedes it: the masters are rebuilt and overwritten (with a warning).
         # False (or missing): build them as usual (existing masters are kept unless clobber = True).
+        # The masters are built whenever there are CALUNIT L1 products, whatever create_rectmat
+        # is; create_rectmat only controls whether ProcessMonochrom then makes rectmats from them.
         skip_mcal = bool(self.config.instrument.skip_mcal_generation)
-        if create_rectmat and skip_mcal and self.context.clobber:
+        if skip_mcal and self.context.clobber:
             self.logger.warning(
                 "skip_mcal_generation = True is ignored because clobber = True: the "
                 f"*_mcalunit.fits masters in {output_dir} will be rebuilt and overwritten.")
             skip_mcal = False
-        if create_rectmat and skip_mcal:
+        if skip_mcal:
             existing_mcal = sorted(f for f in os.listdir(output_dir)
                                    if f.endswith("_mcalunit.fits"))
             self.logger.info(
                 "skip_mcal_generation = True: not building CALUNIT masters; "
-                f"ProcessMonochrom will use the {len(existing_mcal)} existing "
-                f"*_mcalunit.fits files in {output_dir}.")
-            if len(existing_mcal) == 0:
+                f"{len(existing_mcal)} existing *_mcalunit.fits files in {output_dir}.")
+            if len(existing_mcal) == 0 and create_rectmat:
                 self.logger.warning(
                     "skip_mcal_generation = True but no *_mcalunit.fits files were "
                     f"found in {output_dir}: ProcessMonochrom will find nothing to "
                     "process. Set skip_mcal_generation = False to build them.")
 
-        elif create_rectmat:
+        else:
             l1_dt = scbasic.get_proc_entries(proctab,suffix="_L1")
             if len(l1_dt) == 0:
-                msg = (
-                    "No L1 products were found in the processing table. "
-                    "Cannot create master calibration products.")
-                self.logger.error(msg)
-                raise RuntimeError(msg)
+                #no CALUNIT frames in this run (e.g. only darks/flats): nothing to combine
+                self.logger.info(
+                    "No CALUNIT L1 products in the processing table: "
+                    "no *_mcalunit.fits masters to build.")
+            else:
+                l1_groups = scbasic.group_files_by_header(l1_dt)
 
-            l1_groups = scbasic.group_files_by_header(l1_dt)
-
-            if len(l1_groups) == 0:
+            if len(l1_dt) > 0 and len(l1_groups) == 0:
                 msg = (
                     "L1 products were found, but no valid "
                     "calibration groups could be created.")
@@ -880,7 +880,8 @@ class CalibPostProcessSA(BasePrimitive):
                         show=False)
                     self.logger.info(f"Master calibration diagnostic saved to {plot_path}")
 
-        if not (create_linearity or create_sat or create_bpm or create_readnoise or create_rectmat):
+        if not (create_linearity or create_sat or create_bpm or create_readnoise or create_rectmat
+                or len(l1_groups) > 0):
             self.logger.info("+++++++++++ All calibration process are turned off nothing to process +++++++++++")
             return self.action.args
 

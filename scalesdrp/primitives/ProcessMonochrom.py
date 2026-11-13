@@ -3098,7 +3098,8 @@ class ProcessMonochrom(BasePrimitive):
         create_rectmat = bool(self.config.instrument.create_rectmat)
 
         if not create_rectmat:
-            self.logger.info("Skipping rectification matrix generation.")
+            self.logger.info("create_rectmat = False: stopping after the CALUNIT masters; "
+                             "not making rectification matrices.")
             return self.action.args
 
         self.logger.info("############ started Processing Monochromator Images #############")

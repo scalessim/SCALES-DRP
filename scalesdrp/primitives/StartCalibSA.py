@@ -92,7 +92,6 @@ class StartCalibSA(BasePrimitive):
         create_sat = bool(self.config.instrument.create_sat_map)
         create_bpm = bool(self.config.instrument.create_bpm)
         create_rn = bool(self.config.instrument.create_readnoise)
-        create_rectmat = bool(self.config.instrument.create_rectmat)
 
         if obsmode =='Im':
             rmat1 = sparse.load_npz(calib_path+self.context.bpmat_img)
@@ -213,7 +212,9 @@ class StartCalibSA(BasePrimitive):
             requested_suffixes.append("_L12")
         if imtype == "DARK" and create_rn:
             requested_suffixes.append("_L13")
-        if imtype == "CALUNIT" and create_rectmat:
+        #CALUNIT frames are always ramp-fitted (L1), so the *_mcalunit.fits masters can be
+        #built; create_rectmat only controls whether ProcessMonochrom then runs on them
+        if imtype == "CALUNIT":
             requested_suffixes.append("_L1")
 
         if not requested_suffixes:
