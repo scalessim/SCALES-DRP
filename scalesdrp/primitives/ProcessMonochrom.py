@@ -1028,10 +1028,16 @@ class ProcessMonochrom(BasePrimitive):
                     tofill = list(spot_tracks_u[lind].keys())
                     for k in tofill:
                         x,y,intens = spot_tracks_u[lind][k][:3]
-                        xs = np.max([0,int(x-cropsize/2)])
-                        xe = np.min([int(x+cropsize/2),len(ims_cal[k])])
-                        ys = np.max([0,int(y-cropsize/2)])
-                        ye = np.min([int(y+cropsize/2),len(ims_cal[k])])
+                        # window start, then end = start + cropsize, so the
+                        # crop is never larger than cropsize (int(y+c/2) and
+                        # int(y-c/2) can differ by c+1 when y is a hair below
+                        # an integer, e.g. y = 4.999999999999999)
+                        x0 = int(np.floor(x-cropsize/2))
+                        y0 = int(np.floor(y-cropsize/2))
+                        xs = max(0, x0)
+                        xe = min(x0+cropsize, ims_cal.shape[2])
+                        ys = max(0, y0)
+                        ye = min(y0+cropsize, ims_cal.shape[1])
                         # spot window entirely off the detector: a negative
                         # xe/ye would wrap around in the slice below, so
                         # leave this spot empty
