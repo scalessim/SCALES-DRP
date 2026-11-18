@@ -97,6 +97,45 @@ class ProcessMonochrom(BasePrimitive):
             self.logger.warning(f"{scmode}: no masters inside mono_wave_range ({wmin}, {wmax}) um")
         return ims[keep], lams[keep]
 
+    def apply_exclude_waves(self,ims,lams,scmode,exclude_waves,tol=0.001):
+        """
+        Drop the masters at specific monochromator wavelengths, e.g. inside
+        atmospheric absorption bands (H2O at 2.737 um, CO2 at 4.260 um in
+        LowRes-KLM), where almost no light gets through.
+
+        Args:
+            ims: stack of masters (from parse_files / apply_wave_range)
+            lams: their wavelengths in um
+            scmode: mode name, e.g. 'LowRes-KLM'
+            exclude_waves: None (drop none); a list of wavelengths in um, applied
+                to every mode; or a dict {scmode: [wavelengths]} (modes not
+                listed drop none)
+            tol: a master is dropped if it is within tol um of a listed
+                wavelength (default 1 nm, as in the notebook)
+
+        Returns:
+            ims, lams without the excluded masters
+        """
+        if isinstance(exclude_waves, dict):
+            exclude_waves = exclude_waves.get(scmode)
+        if exclude_waves is None or len(ims) == 0:
+            return ims, lams
+        excl = np.atleast_1d(np.asarray(exclude_waves, dtype=float))
+        if excl.size == 0:
+            return ims, lams
+        lams = np.asarray(lams)
+        drop = np.any(np.abs(lams[:, None] - excl[None, :]) < tol, axis=1)
+        unmatched = [w for w in excl if not np.any(np.abs(lams - w) < tol)]
+        if drop.any():
+            self.logger.info(
+                f"{scmode}: mono_exclude_waves drops {drop.sum()} of {len(lams)} "
+                f"masters, at {np.round(lams[drop], 4).tolist()} um")
+        if unmatched:
+            self.logger.warning(
+                f"{scmode}: no master within {tol} um of mono_exclude_waves "
+                f"{unmatched} um; nothing dropped there")
+        return ims[~drop], lams[~drop]
+
     def monochrom_bksub(self,ims,method='mean'):
         if method=='mean':
             meanim = np.nanmean(ims,axis=0)
@@ -3124,6 +3163,9 @@ class ProcessMonochrom(BasePrimitive):
             #optional: only use masters inside a wavelength range (key may be absent)
             wave_range = getattr(self.config.instrument, 'mono_wave_range', None)
             ims, lams = self.apply_wave_range(ims, lams, scmode, wave_range)
+            #optional: drop masters at single wavelengths (key may be absent)
+            exclude_waves = getattr(self.config.instrument, 'mono_exclude_waves', None)
+            ims, lams = self.apply_exclude_waves(ims, lams, scmode, exclude_waves)
 
             if len(ims) > 0:
                 self.set_lamlimits(scmode)
