@@ -1,0 +1,10 @@
+{% extends "!layout.html" %}
+
+{% block sidebartitle %}
+    {{ super() }}
+
+    <div class="scales-sidebar-logo">
+        <img src="{{ pathto('_static/scales.png', 1) }}"
+             alt="SCALES Logo">
+    </div>
+{% endblock %}
