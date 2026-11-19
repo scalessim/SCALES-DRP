@@ -282,7 +282,18 @@ class ProcessMonochrom(BasePrimitive):
         return spots
 
 
-    def track_sequentially(self,spots,max_match_distance=3):
+    def medres_trace_params(self,mfilt):
+        """
+        MedRes trace model (as in find_all_spots / remove_spot_dups): trace y moves
+        by chy*length px over lmin..lmax um. Returns y0, lam0, chy, lmin, lmax, length.
+        """
+        if mfilt=='imgK':
+            return dict(y0=180,lam0=2.0248,chy=1,lmin=1.95,lmax=2.45,length=1822)
+        if mfilt=='imgLp':
+            return dict(y0=975,lam0=3.44805,chy=1,lmin=3.44805,lmax=4.09241,length=878)
+        raise ValueError(f"No MedRes trace model for mfilt={mfilt}")
+
+    def track_sequentially(self,spots,max_match_distance=3,lams=None,dispersion=None):
         """
         Track spots sequentially forward through images.
 
@@ -293,12 +304,24 @@ class ProcessMonochrom(BasePrimitive):
 
         This allows tracking diagonal motion and handles appearing/disappearing spots.
 
+        If dispersion = (dx/dlam, dy/dlam) in px/um is given (with lams, the
+        wavelength of each image), each previous spot is first moved to where the
+        trace model puts it at the next wavelength, so max_match_distance only has
+        to cover the model error, not the wavelength step. Without it, spots are
+        matched at their previous positions (so the step must move them less than
+        max_match_distance).
+
         Returns:
         --------
-        tracking_df : DataFrame
-            DataFrame with tracking results
+        spot_tracks : dict
+            spot_tracks[spot_id] = {image_idx: (x, y, intensity, lam), ...}
         """
         n_images = len(spots)
+        if dispersion is not None:
+            if lams is None:
+                raise ValueError("track_sequentially: dispersion needs lams")
+            lams = np.asarray(lams, dtype=float)
+            dispersion = np.asarray(dispersion, dtype=float)
 
 
         self.logger.info(f"\nSequential tracking through {n_images} images...")
@@ -350,7 +373,12 @@ class ProcessMonochrom(BasePrimitive):
             tree = KDTree(curr_coords)
 
             # Find nearest spot in current image for each spot in previous image
-            distances, indices = tree.query(prev_coords)
+            # (moved along the trace to this image's wavelength, if a dispersion is given)
+            if dispersion is not None:
+                pred_coords = prev_coords + (lams[img_idx]-lams[img_idx-1])*dispersion
+            else:
+                pred_coords = prev_coords
+            distances, indices = tree.query(pred_coords)
 
             # Track which current spots have been matched
             matched_curr_indices = set()
@@ -1324,8 +1352,10 @@ class ProcessMonochrom(BasePrimitive):
         centroids = np.zeros([spots.shape[0],spots.shape[1],spots.shape[2],2])
         centroids[:] = np.nan
         for ll in range(len(spots)):
-            for yind in range(len(spots[0])):
-                for xind in range(len(spots[1])):
+            #spots is (n_lam, ny, nx, crop, crop): loop over ny and nx (MedRes is 17 x 18,
+            #so len(spots[0]) / len(spots[1]), both ny, skipped the last lenslet column)
+            for yind in range(spots.shape[1]):
+                for xind in range(spots.shape[2]):
                     if True not in np.isnan(spots[ll,yind,xind]):
                         if len(np.unique(spots[ll,yind,xind]))!=1:
                             xc, yc, info = self.adaptive_centroid(spots[ll,yind,xind], x0=8, y0=8, box_size=16, min_box_size = 3)
@@ -2908,67 +2938,209 @@ class ProcessMonochrom(BasePrimitive):
         rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(calims[0].shape),np.prod(interp_arr.shape[:3]),))
         return rmat
 
-    def get_medres_lensarr_xy(self,avgs,show_plots=True):
+    def medres_row_slots(self,x,nslot=17,nscol=6,xpix=2048):
+        """
+        Give each trace in one MedRes detector row its slot (0 .. nscol*nslot-1).
+
+        A row is nscol supercolumns of nslot lenslets. Within a supercolumn the
+        traces are one pitch p apart; between supercolumns the gap is about 2p.
+        A missing lenslet inside a supercolumn also leaves a 2p gap, so gaps alone
+        can't place the traces. Instead:
+          1. p = typical spacing of neighbouring traces.
+          2. Anchors = runs of exactly nslot traces, each one pitch from the next
+             (complete supercolumns). Their first x fixes the supercolumn period P
+             and the start of each supercolumn (a straight line through the anchor
+             starts predicts the others, which are then refined on their own traces).
+          3. Each trace goes to the nearest slot (start + k*p) if within 0.3p;
+             anything else (spurious traces at the detector edge or between
+             supercolumns) is left out.
+          4. Which nscol consecutive supercolumns are the real ones: the choice that
+             places the most traces, then leaves the fewest empty on-detector slots.
+             So supercolumns cut by the left or right edge are found without any x
+             threshold.
+
+        Returns slots (-1 = not assigned) and an info dict.
+        """
+        x = np.asarray(x, dtype=float)
+        slots = np.full(len(x), -1, dtype=int)
+        info = dict(pitch=np.nan, period=np.nan, n_anchor=0, n_assigned=0,
+                    n_rejected=len(x), partial={})
+        if len(x) < nslot:
+            self.logger.warning(f"MedRes row with {len(x)} traces: too few to register")
+            return slots, info
+        order = np.argsort(x)
+        xs = x[order]
+        dx = np.diff(xs)
+        p = np.median(dx)
+        p = np.median(dx[np.abs(dx-p) < 0.25*p])
+        tol = 0.3*p
+
+        #anchors: runs of exactly nslot traces spaced by one pitch. A run of nslot+1 or
+        #nslot+2 is a complete supercolumn plus a stray trace about a pitch from one end;
+        #those are kept aside and resolved against the clean anchors below
+        adj = np.abs(dx-p) < tol
+        clean, ambig = [], []
+        i = 0
+        while i < len(xs):
+            j = i
+            while j < len(dx) and adj[j]:
+                j += 1
+            nrun = j-i+1
+            if nrun == nslot:
+                clean.append(xs[i])
+            elif nslot < nrun <= nslot+2:
+                ambig.append(xs[i:i+nrun-nslot+1])   #possible first traces
+            i = j+1
+        info['pitch'] = p
+        P_nom = (nslot+1)*p   #supercolumn gap is about 2p
+
+        def fit_line(a):
+            #start of supercolumn r = coef[0]*r + coef[1], r counted from the first anchor
+            a = np.sort(np.asarray(a))
+            r = np.round((a-a[0])/P_nom).astype(int)
+            if len(a) > 1 and len(np.unique(r)) > 1:
+                return np.polyfit(r, a, 1), r, a
+            return np.array([P_nom, a[0]]), r, a
+
+        if len(clean) == 0 and len(ambig) > 0:
+            #no clean anchor: fall back on the most evenly spaced window of each ambiguous run
+            for cand in ambig:
+                k0 = np.searchsorted(xs, cand[0])
+                dev = np.abs(dx[k0:k0+len(cand)+nslot-2]-p)
+                w = np.argmin([dev[s:s+nslot-1].max() for s in range(len(cand))])
+                clean.append(cand[w])
+            ambig = []
+        if len(clean) == 0:
+            self.logger.warning("MedRes row has no complete supercolumn: can't register it")
+            return slots, info
+        coef, ra, anchors = fit_line(clean)
+        #drop anchors that disagree with the others (a stray trace can complete a
+        #17-run in place of a missing lenslet, shifting it by a pitch); refit
+        if len(anchors) >= 3:
+            res = np.abs(anchors - np.polyval(coef, ra))
+            if np.any(res > 0.5*p) and np.sum(res <= 0.5*p) >= 2:
+                coef, ra, anchors = fit_line(anchors[res <= 0.5*p])
+        #ambiguous runs: take the start closest to the line, if it is close
+        for cand in ambig:
+            r = np.round((cand-coef[1])/coef[0])
+            res = np.abs(cand-np.polyval(coef, r))
+            if res.min() < 0.5*p:
+                anchors = np.append(anchors, cand[np.argmin(res)])
+        coef, ra, anchors = fit_line(anchors)
+        P = coef[0]
+        info['period'] = P
+        info['n_anchor'] = len(anchors)
+        r_lo = int(np.floor((xs[0]-coef[1])/P))-1
+        r_hi = int(np.ceil((xs[-1]-coef[1])/P))+1
+        starts = {}
+        for r in range(r_lo-nscol, r_hi+nscol+1):
+            if r in ra:
+                starts[r] = anchors[np.where(ra==r)[0][0]]
+                continue
+            s = np.polyval(coef, r)
+            #refine on this supercolumn's own traces (twice: the first pass can be a few px off)
+            for _ in range(2):
+                w = (x > s-0.5*p) & (x < s+(nslot-0.5)*p)
+                if not np.any(w):
+                    break
+                k = np.round((x[w]-s)/p)
+                good = np.abs(x[w]-s-k*p) < tol
+                if not np.any(good):
+                    break
+                s = np.median(x[w][good]-k[good]*p)
+            starts[r] = s
+
+        #nearest slot of every trace
+        rr = np.full(len(x), np.nan)
+        kk = np.full(len(x), -1, dtype=int)
+        resid = np.full(len(x), np.inf)
+        for r, s in starts.items():
+            k = np.round((x-s)/p)
+            res = np.abs(x-s-k*p)
+            ok = (k >= 0) & (k < nslot) & (res < tol) & (res < resid)
+            rr[ok] = r
+            kk[ok] = k[ok].astype(int)
+            resid[ok] = res[ok]
+        #one trace per slot: keep the closest
+        for key in set(zip(rr[np.isfinite(rr)], kk[np.isfinite(rr)])):
+            same = np.where((rr == key[0]) & (kk == key[1]))[0]
+            if len(same) > 1:
+                drop = same[np.argsort(resid[same])[1:]]
+                rr[drop] = np.nan
+
+        #which nscol consecutive supercolumns are the real ones
+        best = None
+        for o in range(r_lo-nscol, r_hi+1):
+            inwin = np.isfinite(rr) & (rr >= o) & (rr < o+nscol)
+            nempty = 0
+            for r in range(o, o+nscol):
+                sx = starts[r] + p*np.arange(nslot)
+                ondet = (sx > 0) & (sx < xpix-1)
+                filled = np.zeros(nslot, bool)
+                filled[kk[inwin & (rr == r)]] = True
+                nempty += np.sum(ondet & ~filled)
+            score = (np.sum(inwin), -nempty)
+            if best is None or score > best[0]:
+                best = (score, o)
+        o = best[1]
+        inwin = np.isfinite(rr) & (rr >= o) & (rr < o+nscol)
+        slots[inwin] = ((rr[inwin]-o)*nslot + kk[inwin]).astype(int)
+        info['n_assigned'] = int(np.sum(inwin))
+        info['n_rejected'] = int(len(x)-np.sum(inwin))
+        for s in range(nscol):
+            n = int(np.sum((slots >= s*nslot) & (slots < (s+1)*nslot)))
+            if n < nslot:
+                info['partial'][s] = n
+        return slots, info
+
+    def get_medres_lensarr_xy(self,avgs,show_plots=True,nslot=17,nscol=6,dist=26):
+        """
+        Register MedRes traces to lenslets. avgs are the trace positions at the band
+        centre. They are split into the 3 detector rows (clusters in y separated by
+        more than dist px; the 3 most populated are kept), then each row is placed on
+        its 6 x 17 slot lattice by medres_row_slots, and supercolumns are mapped to
+        lenslet columns with scol_map.
+        """
+        avgs = np.asarray(avgs)
         inds0 = np.array(range(len(avgs)),dtype='int')
-        dist=26
-        row1 = avgs[np.where(avgs[:,1] < np.min(avgs[:,1]) + dist)]
-        row1inds = inds0[np.where(avgs[:,1] < np.min(avgs[:,1]) + dist)]
-        rem = np.delete(avgs,np.where(avgs[:,1] < np.min(avgs[:,1]) + dist),axis=0)
-        indsrem = np.delete(inds0,np.where(avgs[:,1] < np.min(avgs[:,1]) + dist),axis=0)
-        row2 = rem[np.where(rem[:,1] < np.min(rem[:,1])+dist)]
-        row2inds = indsrem[np.where(rem[:,1] < np.min(rem[:,1])+dist)]
-        row3 = np.delete(rem,np.where(rem[:,1] < np.min(rem[:,1])+dist),axis=0)
-        row3inds = np.delete(indsrem,np.where(rem[:,1] < np.min(rem[:,1])+dist),axis=0)
+        nrowslot = nslot*nscol
+
+        #detector rows: clusters in y
+        ysort = np.argsort(avgs[:,1])
+        breaks = np.where(np.diff(avgs[ysort,1]) > dist)[0]+1
+        clusters = np.split(ysort, breaks)
+        if len(clusters) < 3:
+            raise ValueError(f"MedRes registration: found {len(clusters)} rows of traces, expected 3")
+        if len(clusters) > 3:
+            sizes = [len(c) for c in clusters]
+            self.logger.warning(f"MedRes registration: {len(clusters)} groups of traces in y "
+                                f"(sizes {sizes}); keeping the 3 largest")
+            keep = sorted(np.argsort(sizes)[-3:])
+            clusters = [clusters[k] for k in keep]
+
+        posns_idx = np.zeros([3,nrowslot,3])
+        posns_idx[:,:,:] = np.nan
+        posns_pix = np.zeros([3,nrowslot,5])
+        posns_pix[:,:,:] = np.nan
 
         if show_plots==True:
             f = plt.figure(clear=True)
-            plt.scatter(row1[:,0],row1[:,1],label=str(len(row1)))
-            plt.scatter(row2[:,0],row2[:,1],label=str(len(row2)))
-            plt.scatter(row3[:,0],row3[:,1],label=str(len(row3)))
+            for c in clusters:
+                plt.scatter(avgs[c,0],avgs[c,1],label=str(len(c)))
             plt.legend()
             plt.show()
-        #stop
 
-        posns_idx = np.zeros([3,102,3])
-        posns_idx[:,:,:] = np.nan
-        posns_pix = np.zeros([3,102,5])
-        posns_pix[:,:,:] = np.nan
-
-
-        row1sortx = row1[np.argsort(row1[:,0])]
-        row1indsortx = row1inds[np.argsort(row1[:,0])]
-        row2sortx = row2[np.argsort(row2[:,0])]
-        row2indsortx = row2inds[np.argsort(row2[:,0])]
-        row3sortx = row3[np.argsort(row3[:,0])]
-        row3indsortx = row3inds[np.argsort(row3[:,0])]
-
-
-        for yc,rowarr,rowind in [[0,row1sortx,row1indsortx],
-                                 [1,row2sortx,row2indsortx],
-                                 [2,row3sortx,row3indsortx]]:
-            if len(rowarr) == 102:
-                for i in range(len(row1sortx)):
-                    posns_idx[yc,i] = [i,yc,rowind[i]]
-                    posns_pix[yc,i] = [i,yc,rowarr[i,0],rowarr[i,1],rowind[i]]
-            if len(rowarr) < 102:
-
-                minx = np.min(rowarr)
-                maxx = np.max(rowarr)
-                if minx < 50 and maxx < 1998:
-                    #print('spots are off on the left!')
-                    for i in range(102-len(rowarr),102):
-                        posns_idx[yc,i] = [i,yc,rowind[i-(102-len(rowarr))]]
-                        posns_pix[yc,i] = [i,yc,
-                                            rowarr[i-(102-len(rowarr)),0],
-                                            rowarr[i-(102-len(rowarr)),1],
-                                            rowind[i-(102-len(rowarr))]]
-                elif minx > 50 and maxx > 1998:
-                    #print('spots are off on the right!')
-                    for i in range(len(rowarr)):
-                        posns_idx[yc,i] = [i,yc,rowind[i]]
-                        posns_pix[yc,i] = [i,yc,rowarr[i,0],rowarr[i,1],rowind[i]]
-                else:
-                    self.logger.info('Uh oh I cant tell which direction we lost a spot!!')
+        for yc, c in enumerate(clusters):
+            slots, info = self.medres_row_slots(avgs[c,0], nslot=nslot, nscol=nscol)
+            self.logger.info(f"MedRes row {yc}: {len(c)} traces, {info['n_assigned']} registered, "
+                             f"{info['n_rejected']} left out; pitch {info['pitch']:.2f} px, "
+                             f"supercolumn period {info['period']:.1f} px, {info['n_anchor']} complete "
+                             f"supercolumns; partial supercolumns (index: traces) {info['partial']}")
+            for t, i in zip(c, slots):
+                if i < 0:
+                    continue
+                posns_idx[yc,i] = [i,yc,inds0[t]]
+                posns_pix[yc,i] = [i,yc,avgs[t,0],avgs[t,1],inds0[t]]
 
         if show_plots==True:
             f = plt.figure(clear=True)
@@ -3205,7 +3377,13 @@ class ProcessMonochrom(BasePrimitive):
                 if scmode.split('-')[0] == 'MedRes':
                     csize=16
                     spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=70.0,sigma=1.2,medres=True,mfilt=self.mfilt)
-                    spot_tracks = self.track_sequentially(spots, max_match_distance=13)
+                    #follow each spot along its trace model (y moves ~3.6 px/nm in K), so steps
+                    #of any size (3.5 nm steps, gaps left by mono_exclude_waves) track the same;
+                    #6 px covers the model error (<3 px) and is well below the 19 px pitch
+                    tp = self.medres_trace_params(self.mfilt)
+                    disp = (0.0, tp['chy']*tp['length']/(tp['lmax']-tp['lmin']))
+                    spot_tracks = self.track_sequentially(spots, max_match_distance=6,
+                                                          lams=lams, dispersion=disp)
                     self.logger.info("removing duplicates and silos")
                     spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,lmin=self.lmin,lmax=self.lmax,medres=True)
                     avgs = self.find_avg_spotpos_model(spot_tracks_u,self.lmin,self.lmax,medres=True,show_plots=False)
