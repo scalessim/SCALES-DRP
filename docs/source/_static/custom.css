@@ -1,0 +1,28 @@
+/* Keck logo */
+.wy-side-nav-search img.logo {
+    width: 85%;
+    max-width: 280px;
+    height: auto;
+    background: transparent;
+    border-radius: 0;
+}
+
+/* SCALES logo */
+.scales-sidebar-logo {
+    text-align: center;
+    margin: 5px auto 15px;
+    padding: 0 15px;
+    background: transparent;
+}
+
+.scales-sidebar-logo img {
+    display: block;
+    width: 90%;
+    max-width: 260px;
+    height: auto;
+    margin: 0 auto;
+    padding: 0;
+    background: transparent !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}

@@ -1,13 +1,18 @@
 
 
-Welcome to SCALES-DRP :)
+Welcome to SCALES-DRP !
 ===========================
-SCALES (Slicer Combined with Array of Lenslets for Exoplanet Spectroscopy) is a next-generation thermal infrared coronagraphic imager and integral field spectrograph (IFS) for the W. M. Keck Observatory.
-SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has been developed by the SCALES team 2024 and supported by the W. M. Keck Observatory.
+SCALES (Slicer Combined with Array of Lenslets for Exoplanet Spectroscopy) is a
+next-generation thermal infrared coronagraphic imager and integral field spectrograph
+(IFS) for the W. M. Keck Observatory.
+
+SCALES-DRP is an official data reduction pipeline (DRP) for SCALES.
+This DRP has been developed by the SCALES team 2024 and supported by the W. M. Keck Observatory.
 
 The SCALES-DRP takes raw SCALES images and turns them into spectrally-dispersed datacubes.
 
-The SCALES-DRP is parallelized, implemented in Python within the Keck-DRP framework, and openly available on `GitHub <https://github.com/scalessim/SCALES-DRP>`_.
+The SCALES-DRP is parallelized, implemented in Python within the Keck-DRP
+framework, and openly available on `GitHub <https://github.com/scalessim/SCALES-DRP>`_.
 
 To know more about SCALES
 -------------------------
@@ -60,7 +65,6 @@ The latest version of 1.0.1 of the SCALES-DRP includes:
    Primitives
    Configuration_Parameters
    calib_products
-   Running_the_SCALES-DRP_Pipeline
    Data_Products
    Support
    Versions

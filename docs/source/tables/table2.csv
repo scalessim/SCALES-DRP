@@ -1,4 +1,3 @@
-qramp,DN/px,Quicklook slope image
 L1,DN/px,Science-grade slope image after detector level corrections
 mcalunit,DN/px,Master monochromatic calibration
 mbias,DN/px,Master bias
