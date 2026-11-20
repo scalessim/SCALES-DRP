@@ -848,6 +848,8 @@ The ramp-fitting routine performs the following operations:
 2. **Dynamic masking:** The ``good_read_mask`` is combined
    with the finite-read mask. A consecutive-read difference
    is usable only when both contributing reads are valid.
+   Pixels without at least one valid consecutive-read pair
+   are excluded from fitting.
 
 3. **Initial slope estimation:** An initial count-rate
    estimate is obtained using ``fitramp`` when sufficient
@@ -867,15 +869,238 @@ The ramp-fitting routine performs the following operations:
 
 6. **Fallback fitting:** Pixels for which GLS fitting
    fails or cannot be performed are processed using
-   an OLS fallback.
+   an OLS fallback. The fallback uses only valid,
+   uncontaminated reads and strictly preserves the
+   saturation and jump-rejection masks.
 
-The current implementation applies the dynamic mask only
-when at least one valid consecutive-read difference remains.
-If the mask would remove all such differences, the fitter
-reverts to the finite-read mask for that pixel.
-Consequently, the current fallback behavior does not
-guarantee exclusion of saturated reads for pixels with
-insufficient pre-saturation data.
+7. **Failed-fit handling:** Pixels without sufficient
+   valid data, or for which both fitting approaches
+   fail, are assigned predefined sentinel values
+   rather than being fitted using rejected reads.
+
+Both GLS and OLS fitting require sufficient valid data
+to estimate the detector count rate. The dynamic
+read-validity mask is strictly enforced throughout
+the fitting procedure. In particular, saturated reads
+and reads rejected because of neighboring saturation
+are never restored when the likelihood solution fails.
+
+Pixels with no valid consecutive-read pair are marked
+as failed fits. The corresponding slope and pedestal
+are set to zero, the uncertainty is set to
+``1e30``, and the chi-square is set to ``-1``.
+These values prevent the propagation of non-finite
+results while preserving an explicit indication of
+unsuccessful ramp fitting.
+
+
+Ramp-Fit Quality Assessment
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Following ramp fitting and jump rejection, the SCALES DRP
+evaluates the quality of the resulting slope image to determine
+whether the exposure satisfies the configured quality criteria.
+
+The assessment is performed using ``assess_ramp_fit_quality()``,
+which takes the fitted slope, uncertainty, chi-square,
+detector quality map (``quality_map``), and three-dimensional
+read-validity mask (``good_read_mask``) as inputs.
+
+The routine evaluates the fraction of successfully fitted pixels,
+identifies failed fits, and examines the goodness-of-fit statistics
+where sufficient degrees of freedom are available. The results
+are recorded in the FITS header for subsequent quality screening.
+
+**Identification of failed fits**
+
+A ramp fit is considered unsuccessful when insufficient valid
+consecutive reads remain after saturation masking and jump
+rejection, or when neither the GLS nor OLS fitting procedure
+produces a valid solution.
+
+Failed fits are assigned the following sentinel values:
+
+.. code-block:: text
+
+   Slope       = 0.0
+   Pedestal    = 0.0
+   Uncertainty = 1e30
+   Chi-square  = -1.0
+
+These values prevent the propagation of non-finite results
+while allowing failed pixels to be identified explicitly.
+
+The assessment distinguishes pixels flagged in the master
+bad-pixel map (BPM) from the remaining detector pixels.
+
+By default, master-BPM pixels are excluded from the
+exposure-level quality assessment because they are handled
+separately during bad-pixel correction. Nevertheless, failed
+fits among master-BPM pixels are counted independently.
+
+The total number of failed fits is therefore
+
+.. math::
+
+   N_{\mathrm{failed,total}}
+   =
+   N_{\mathrm{failed,assessed}}
+   +
+   N_{\mathrm{failed,BPM}}.
+
+**Valid-fit fraction**
+
+The primary quality metric is the fraction of successfully
+fitted pixels:
+
+.. math::
+
+   f_{\mathrm{valid}}
+   =
+   \frac{N_{\mathrm{valid}}}
+   {N_{\mathrm{assessed}}},
+
+where :math:`N_{\mathrm{assessed}}` is the number of detector
+pixels included in the quality assessment, excluding
+master-BPM pixels by default, and :math:`N_{\mathrm{valid}}`
+is the number of those pixels with successful ramp fits.
+
+The corresponding failed-fit fraction is
+
+.. math::
+
+   f_{\mathrm{failed}} = 1 - f_{\mathrm{valid}}.
+
+The default minimum acceptable valid-fit fraction is 0.95,
+corresponding to at least 95% successful ramp fits among
+the assessed detector pixels.
+
+This threshold is configurable and can be adjusted for
+different observing modes and detector conditions.
+
+**Chi-square assessment**
+
+For exposures with sufficient degrees of freedom, the
+goodness of fit is evaluated using the reduced chi-square:
+
+.. math::
+
+   \chi_{\nu}^{2} = \frac{\chi^{2}}{\nu},
+
+where :math:`\nu` is the effective number of residual
+degrees of freedom.
+
+The routine evaluates the median reduced chi-square and
+the fraction of assessed pixels exceeding a configurable
+chi-square threshold.
+
+These diagnostics can identify systematic deviations from
+the assumed noise model or poor ramp-fitting performance.
+
+For two-read correlated double sampling (CDS) exposures,
+a conventional two-parameter linear fit has no residual
+degrees of freedom. Consequently, reduced chi-square
+cannot be meaningfully evaluated.
+
+In this case, the chi-square assessment is marked as
+not applicable:
+
+.. code-block:: text
+
+   RMPCHST = 'N/A'
+
+The exposure is evaluated using the remaining applicable
+quality criteria, including the valid-fit fraction.
+
+For multi-read exposures, reduced chi-square is evaluated
+where sufficient degrees of freedom are available. Its
+interpretation depends on the number of valid differences
+retained after saturation masking and jump rejection.
+
+**Exposure-level quality flag**
+
+The overall ramp-fitting quality is recorded in the FITS
+header using the Boolean keyword ``RAMPGOOD``.
+
+* ``RAMPGOOD = True`` indicates that the exposure satisfies
+  all applicable ramp-fitting quality criteria.
+
+* ``RAMPGOOD = False`` indicates that one or more applicable
+  quality criteria have failed.
+
+The quality flag provides an exposure-level assessment
+rather than a guarantee that every detector pixel has
+a valid fitted slope.
+
+Individual failed pixels remain identifiable through
+their fit-status values and detector quality flags.
+
+**FITS header keywords**
+
+The quality-assessment routine records the following
+diagnostic quantities in the FITS header:
+
+.. list-table:: Ramp-fitting quality assessment keywords
+   :header-rows: 1
+   :widths: 25 15 65
+
+   * - Keyword
+     - Type
+     - Description
+
+   * - ``RAMPGOOD``
+     - Boolean
+     - Overall ramp-fitting quality flag.
+
+   * - ``RMPVFRAC``
+     - Float
+     - Fraction of successfully fitted assessed pixels.
+
+   * - ``RMPFFRAC``
+     - Float
+     - Fraction of failed assessed pixels.
+
+   * - ``RMPNFAIL``
+     - Integer
+     - Number of failed fits among assessed pixels,
+       excluding master-BPM pixels by default.
+
+   * - ``RMPCHI``
+     - Float
+     - Median reduced chi-square when applicable.
+
+   * - ``RMPHCHI``
+     - Float
+     - Fraction of assessed pixels with reduced
+       chi-square above the configured threshold.
+
+   * - ``RMPCHST``
+     - String
+     - Chi-square assessment status
+       (``N/A`` if insufficient degrees of freedom).
+
+   * - ``RMPCLUST``
+     - Integer
+     - Size of the largest connected cluster of
+       failed assessed pixels.
+
+   * - ``RMPQCWHY``
+     - String
+     - Summary of the exposure-quality assessment.
+
+Additional diagnostic statistics distinguish failed fits
+among master-BPM pixels from failed fits among the
+remaining detector pixels.
+
+These metrics support automated exposure-quality
+screening and monitoring of detector performance.
+
+A successful exposure-level assessment does not imply
+that every detector pixel is scientifically usable.
+Pixel-level quality information must still be considered
+during subsequent bad-pixel correction and spectral
+extraction.
+
 
 Output
 ^^^^^^
@@ -884,26 +1109,47 @@ The ramp-fitting routine returns four two-dimensional
 detector images:
 
 * **Slope:** Fitted detector count rate in DN/s.
+  Pixels with unsuccessful fits are assigned zero.
 
 * **Pedestal:** Estimated detector signal offset
-  associated with the fitted ramp.
+  associated with the fitted ramp. Failed fits
+  are assigned zero.
 
 * **Uncertainty:** Estimated uncertainty of the
   fitted count rate, incorporating the noise model
-  used by the fitting method.
+  used by the fitting method. Failed fits are
+  assigned an uncertainty of ``1e30``.
 
 * **Chi-square:** Goodness-of-fit statistic for the
-  fitted detector ramp.
+  fitted detector ramp. Failed fits are identified
+  using a value of ``-1``.
 
 The saturation-masking stage additionally provides:
 
-* ``quality_map``: Two-dimensional detector quality flags.
+* ``quality_map``: Two-dimensional detector quality flags,
+  identifying bad pixels, saturated pixels, pixels affected
+  by neighboring saturation, and invalid saturation thresholds.
 
 * ``good_read_mask``: Three-dimensional Boolean mask
   identifying the reads available for ramp fitting.
 
+The ramp-fit quality assessment additionally provides:
+
+* ``RAMPGOOD``: Boolean FITS header keyword indicating
+  whether the exposure satisfies the configured
+  ramp-fitting quality criteria.
+
+* **Quality metrics:** Valid-fit fraction, failed-fit
+  statistics, and applicable chi-square diagnostics.
+
+* **FITS header diagnostics:** Quality-assessment
+  statistics recorded in the output FITS header,
+  including ``RMPVFRAC``, ``RMPFFRAC``, ``RMPNFAIL``,
+  and ``RMPCHST``.
+
 These products support subsequent detector calibration,
-quality assessment, and bad-pixel correction.
+exposure-quality screening, bad-pixel correction,
+and spectral extraction.
 
 .. figure:: /_static/plots/slope_example.png
    :width: 600px
@@ -920,6 +1166,7 @@ The related codes can be found here:
    SCALES-DRP/scalesdrp/Primitives/rampfit.py
    SCALES-DRP/scalesdrp/Primitives/scales_basic.py
    SCALES-DRP/scalesdrp/Primitives/saturation_correct.py
+
 
 
 .. _bpmcorrect:
