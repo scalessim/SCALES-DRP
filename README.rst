@@ -1,15 +1,23 @@
 SCALES-DRP: The SCALES Data Reduction Pipeline
 ==============================================
-SCALES (Slicer Combined with Array of Lenslets for Exoplanet Spectroscopy) is a next-generation thermal infrared coronagraphic imager and integral field spectrograph (IFS) for W. M. Keck Observatory. SCALES-DRP is an official data reduction pipeline (DRP) for SCALES. This DRP has been developed by the SCALES team 2024 and supported by the W. M. Keck Observatory.
+SCALES (Slicer Combined with Array of Lenslets for Exoplanet Spectroscopy)
+is a next-generation thermal-infrared coronagraphic imager and integral field
+spectrograph (IFS) for the W. M. Keck Observatory. SCALES-DRP is the data
+reduction pipeline for SCALES, developed by the SCALES team with support
+from the W. M. Keck Observatory.
 
-The SCALES-DRP takes raw SCALES images and turns them into spectrally-dispersed datacubes.
 
-The SCALES-DRP is parallelized, implemented in Python within the Keck-DRP framework, and openly available on GitHub.
+SCALES-DRP processes raw SCALES exposures to produce calibrated
+slope images for both the imager and IFS, and additionally generates
+spectrally resolved datacubes for IFS observations.
+It is implemented in Python using the Keck DRP framework, supports
+parallel processing, and is openly available on GitHub.
+
 
 Installation
 ............
 
-The following steps will create and activate a conda environment named
+The following commands create and activate a ``conda`` environment named
 ``scalesdrp``:
 
 ::
@@ -25,138 +33,202 @@ Clone the repository and install the package in editable mode:
     cd SCALES-DRP
     pip install -e .
 
-Alternatively, you can install the released version directly from PyPI:
+Alternatively, install the published package directly from PyPI:
 
 ::
 
     pip install scalesdrp
 
 
-Running the Pipeline
-....................
+Quick Start
+............
 
-The SCALES-DRP consists of three main modules:
+This Quick Start guide explains how to run SCALES-DRP after installation.
 
-1. **Calibration module**
-2. **Quicklook module**
-3. **Science-grade module**
-
-
-Quicklook Module
-................
-
-The quicklook module is designed for rapid, automated execution during
-observations. It allows users to interactively visualize individual
-exposures and final 3D IFS data cubes using graphical user interfaces
-(GUIs) in near real time.
-
-This module continuously searches for newly arrived files in a specified
-directory and performs minimal data processing within a fraction of a
-second.
-
-- **Imaging mode**: produces a bad-pixel-corrected slope image.
-- **IFS mode**: produces both a bad-pixel-corrected slope image and an
-  optimally extracted 3D IFS cube for science input data.
-
-To execute the quicklook module:
-
-::
-
-    start_scales_quicklook -d FULL_PATH
-
-Here, ``-d`` specifies the directory containing the input data.
-
-This module creates the following output directories:
-
-- ``redux_ql/`` — quicklook reduction outputs
-- ``log/`` — log files containing execution details
-
-
-Calibration Module
-..................
-
-The calibration module is the core of SCALES-DRP. It automatically processes
-daily afternoon calibration data required for science-grade data reduction.
-
-This module performs detailed processing for:
-
-- Darks
-- Bias reads
-- Detector flats
-- Lenslet flats
-- Monochromatic calibration data
-
-The outputs include:
-
-- Master calibration files for darks, bias, and detector flats (for both
-  Imaging and IFS modes)
-- Wavelength-binned master files from monochromatic calibrations
-- Rectification matrices required by the science-grade pipeline
-- Lenslet flat master files and lenslet flat cubes
-
-To execute the calibration module:
-
-::
-
-    start_scales_calib -d FULL_PATH
-
-Here, ``-d`` specifies the directory containing the calibration data.
-
-This module creates the following directories:
-
-- ``redux/`` — calibration reduction outputs
-- ``log/`` — detailed log files
-- ``plot/`` — diagnostic and quality-control plots
+The examples assume that the ``scalesdrp`` conda environment has been
+created and that ``data_folder`` contains SCALES FITS files, such as
+``file_name.fits``. Multiple exposures can also be specified in a text
+file (``list.txt``), with one FITS filename per line.
 
 
 Science-Grade Module
-....................
+--------------------
 
-The science-grade module performs the most detailed data reduction on
-science observations.
+The Science-Grade Module processes science exposures using the
+configured reduction steps. Processing options can be
+customized through the configuration parameters,
+defined in ``scalesdrp/configs/scales.cfg``.
 
-- **Imaging mode**: produces a fully corrected slope image with all
-  detector-level corrections applied.
-- **IFS mode**: produces a fully reduced 3D IFS cube using one or more
-  spectral extraction methods.
+Activate the ``scalesdrp`` conda environment and navigate to
+the directory containing the SCALES data:
 
-For all outputs, associated uncertainty maps and data-quality masks are
-also generated.
+.. code-block:: bash
 
-To run the science-grade module on a single file
-(make sure you are in the data directory):
+    conda activate scalesdrp
+    cd data_folder
 
-::
+Run the pipeline using one of the following options:
 
-    start_scales_reduce -f filename.fits
+**1. Process a single FITS file**
 
-To process all files in a directory:
+Use the ``-f`` option to process an individual FITS file:
 
-::
+.. code-block:: bash
 
-    start_scales_reduce -d FULL_PATH
+   start_scales_reduce -f file_name.fits
 
-To process a specific list of files
-(make sure you are in the data directory):
+**2. Process multiple FITS files from a list**
 
-::
+Use the ``-l`` option to process multiple FITS files specified
+in a text file (``list.txt``), with one filename per line:
 
-    start_scales_reduce -l list.txt
+.. code-block:: bash
 
-The science-grade module creates the following directories:
+   start_scales_reduce -l list.txt
 
-- ``redux/`` — calibration reduction outputs
-- ``log/`` — detailed log files
-- ``plot/`` — diagnostic and quality-control plots
+**3. Process all FITS files in a directory**
+
+Use the ``-d`` option to process FITS files located in a
+specified directory:
+
+.. code-block:: bash
+
+   start_scales_reduce -d /full/path/to/data_folder
+
+
+Output Directories
+^^^^^^^^^^^^^^^^^^
+
+The pipeline uses the following output directories and processing table:
+
+* ``redux/``: Stores the reduced data products.
+
+* ``logs/``: Stores log files for the DRP framework
+  and SCALES-DRP.
+
+* ``plots/``: Stores diagnostic plots generated during processing.
+
+* ``scales.proc``: Tracks input files and data products.
+
+
+Calibration Module-I
+--------------------
+
+Calibration Module-I processes dark, detector-flat, bias, and monochromatic
+calibration exposures to generate master calibration products.
+Processing options can be
+customized through the configuration parameters,
+defined in ``scalesdrp/configs/scales_calib.cfg``.
+
+Activate the ``scalesdrp`` conda environment and navigate to
+the directory containing the SCALES data:
+
+.. code-block:: bash
+
+   conda activate scalesdrp
+   cd data_folder
+
+Run the pipeline using one of the following options:
+
+**1. Process multiple FITS files from a list**
+
+Use the ``-l`` option to process multiple FITS files specified
+in a text file (``list.txt``), with one filename per line:
+
+.. code-block:: bash
+
+   start_scales_calib -l list.txt
+
+**2. Process all FITS files in a directory**
+
+Use the ``-d`` option to process FITS files located in a
+specified directory:
+
+.. code-block:: bash
+
+   start_scales_calib -d /full/path/to/data_folder
+
+
+
+Output Directories
+^^^^^^^^^^^^^^^^^^
+
+The pipeline uses the following output directories and processing table:
+
+* ``redux/``: Stores the reduced data products.
+
+* ``logs/``: Stores log files for the DRP framework
+  and SCALES-DRP.
+
+* ``plots/``: Stores diagnostic plots generated during processing.
+
+* ``scales.proc``: Tracks input files and the data products.
+
+
+Calibration Module-II
+----------------------
+
+Calibration Module-II generates supporting detector calibration products
+used by Calibration Module-I and the Science-Grade Module.
+Processing options can be
+customized through the configuration parameters,
+defined in ``scalesdrp/configs/scales_calib_sa.cfg``.
+
+Activate the ``scalesdrp`` conda environment and navigate to
+the directory containing the SCALES data:
+
+.. code-block:: bash
+
+   conda activate scalesdrp
+   cd data_folder
+
+Run the pipeline using one of the following options:
+
+**1. Process multiple FITS files from a list**
+
+Use the ``-l`` option to process multiple FITS files specified
+in a text file (``list.txt``), with one filename per line:
+
+.. code-block:: bash
+
+   start_scales_calib_sa -l list.txt
+
+**2. Process all FITS files in a directory**
+
+Use the ``-d`` option to process FITS files located in a
+specified directory:
+
+.. code-block:: bash
+
+   start_scales_calib_sa -d /full/path/to/data_folder
+
+
+
+Output Directories
+^^^^^^^^^^^^^^^^^^
+
+The pipeline uses the following output directories and processing table:
+
+* ``calib_sa/output/``: Stores the reduced data products.
+
+* ``calib_sa/logs/``: Stores log files for the DRP framework
+  and SCALES-DRP.
+
+* ``calib_sa/plots/``: Stores diagnostic plots generated during processing.
+
+* ``calib_sa/scales_calib_sa.proc``: Tracks input files and the data products.
+
 
 Further Documentation
 .....................
 
-More detailed documentation, including pipeline architecture, algorithms,
-and advanced usage, can be found on the SCALES Read the Docs page.
+Detailed documentation covering pipeline architecture, calibration
+algorithms, configuration parameters, and advanced usage is available
+on the SCALES-DRP Read the Docs website.
 
 
-Acknowledgement
-.....................
+Acknowledgements
+................
 
-If you use SCALES-DRP for your research, please cite Unni et al. 2025. (https://doi.org/10.1117/12.3064542)
+If you use SCALES-DRP in your research, please cite
+`Unni et al. (2025) <https://doi.org/10.1117/12.3064542>`_.
