@@ -2,9 +2,10 @@
 Measure the spot shift between a single monochromator frame and an existing
 monochromator scan, and write shifted interpolated rectmats.
 
-The single frame's L1 (made by StartCalibSA) is compared with the master
-calunit image at the same wavelength in the scan directory. The shift is
-measured in two steps:
+The single frame's L1 (made by StartCalibSA), minus the L1 of a background
+frame taken with it (required; e.g. the monochromator at a wavelength
+>~200 nm away), is compared with the scan's background-subtracted image at
+the same wavelength. The shift is measured in two steps:
 
 1. Cross-correlation of the two high-passed images, with the peak searched
    in a box around (rmat_shift_guess_dx, rmat_shift_guess_dy) just under
@@ -172,9 +173,38 @@ class RmatShift(ProcessMonochrom):
             cal = self.masked_row_destripe(cal)[0]
         return cal
 
+    def background_spot_separation(self, scan_dir, scmode, lams, monowave,
+                                   bkg_waves):
+        """
+        Median distance (px) between the spots at monowave and those at the
+        nearest background-frame wavelength, from the scan's spot fits.
+        None when no background frame has a MONOWAVE (e.g. monochromator
+        off), so there are no background spots.
+        """
+        waves = [w for w in bkg_waves if w is not None and np.isfinite(w)]
+        if not waves:
+            return None
+        sp = pyfits.getdata(os.path.join(scan_dir, f"{scmode}_gauss_spotpars.fits"))
+        lnm = np.asarray(lams, dtype=float) * 1000.0
+        i0 = int(np.argmin(np.abs(lnm - monowave)))
+        seps = []
+        for w in waves:
+            i1 = int(np.argmin(np.abs(lnm - w)))
+            d = np.hypot(sp[i1][..., 1] - sp[i0][..., 1],
+                         sp[i1][..., 2] - sp[i0][..., 2])
+            sep = float(np.nanmedian(d))
+            if not lnm.min() <= w <= lnm.max():
+                # outside the scan: extrapolate linearly in wavelength
+                sep *= abs(w - monowave) / max(abs(lnm[i1] - monowave), 1e-6)
+            seps.append(sep)
+        return min(seps)
+
     def load_background(self, bkg_frames, output_dir, hdr):
-        """Mean of the background frames' L1 images."""
-        ims = []
+        """
+        Mean of the background frames' L1 images, and their MONOWAVE values
+        (None where missing).
+        """
+        ims, waves = [], []
         for b in bkg_frames:
             path = scbasic.get_l1_path_from_raw(b, output_dir)
             if not os.path.isfile(path):
@@ -184,12 +214,17 @@ class RmatShift(ProcessMonochrom):
             with pyfits.open(path, memmap=False) as hdul:
                 ims.append(np.asarray(hdul[0].data, dtype=float))
                 bh = hdul[0].header
-            for key in ("EXPTIME", "MCLOCK", "MODSLNAM", "DSPRSNAM"):
+            try:
+                waves.append(float(bh["MONOWAVE"]))
+            except (KeyError, TypeError, ValueError):
+                waves.append(None)
+            for key in ("EXPTIME", "MCLOCK", "IFSMODE", "MODSLNAM", "DSPRSNAM"):
                 if str(bh.get(key)).strip() != str(hdr.get(key)).strip():
                     self.logger.warning(
                         f"Background {os.path.basename(path)} has {key}="
                         f"{bh.get(key)}, frame has {hdr.get(key)}.")
-        return np.nanmean(ims, axis=0) if len(ims) > 1 else ims[0]
+        im = np.nanmean(ims, axis=0) if len(ims) > 1 else ims[0]
+        return im, waves
 
     @staticmethod
     def load_scan_calim(scan_dir, scmode, ll):
@@ -445,6 +480,188 @@ class RmatShift(ProcessMonochrom):
         return (coef[0, 0] + coef[0, 1] * xc + coef[0, 2] * yc,
                 coef[1, 0] + coef[1, 1] * xc + coef[1, 2] * yc)
 
+    # ------------------------------------------------------------------
+    # shifted rectmats
+    # ------------------------------------------------------------------
+    # every rectmat ProcessMonochrom writes, and the shifted file names
+    RECTMAT_KINDS = {
+        "OPT_intp": "{m}_OPT_intp_rectmat_{t}.npz",   # Gaussian fits, 27 channels
+        "C2_intp": "{m}_C2_intp_rectmat_{t}.npz",
+        "AnK_intp": "{m}_AnK_intp_rectmat_{t}.npz",   # A&K ePSFs (LowRes)
+        "OPT": "{m}_OPT_rectmat_{t}.npz",             # scan images, one channel
+        "C2": "{m}_C2_rectmat_{t}.npz",               # per scan wavelength
+    }
+
+    def requested_rectmats(self, inst, scmode):
+        """Rectmat kinds to write: rmat_shift_rectmats in the config ('all',
+        or a list of RECTMAT_KINDS keys). The AnK and scan-image (OPT, C2)
+        rectmats exist for LowRes only, as in ProcessMonochrom."""
+        req = _cfg(inst, "rmat_shift_rectmats", "all")
+        if isinstance(req, str):
+            req = (list(self.RECTMAT_KINDS) if req.strip().lower() == "all"
+                   else [s.strip() for s in req.strip("[]() ").split(",")])
+        bad = [k for k in req if k not in self.RECTMAT_KINDS]
+        if bad:
+            raise RuntimeError(f"Unknown rmat_shift_rectmats {bad}; use 'all' or "
+                               f"some of {list(self.RECTMAT_KINDS)}.")
+        if not scmode.startswith("LowRes"):
+            req = [k for k in req if k in ("OPT_intp", "C2_intp")]
+        return req
+
+    @staticmethod
+    def shift_offsets(x, y, shift, coef):
+        """(ox, oy) added to positions x, y: the affine model coef if given,
+        else the constant shift (dx, dy)."""
+        if coef is not None:
+            return RmatShift.apply_affine(x, y, coef)
+        return np.full_like(x, shift[0], dtype=float), np.full_like(y, shift[1], dtype=float)
+
+    def write_shifted_rectmats(self, scan_dir, scmode, out_dir, tag, shift, coef,
+                               kinds, fluxcut, nsub=10):
+        """
+        Write shifted versions of the scan's rectmats. Spot shapes come from
+        the scan; only positions move (by `shift`, or by the affine model
+        `coef` evaluated at each spot). Returns {kind: path} of what was
+        written; kinds whose scan inputs are missing are skipped with a
+        warning.
+        """
+        path = lambda k: os.path.join(out_dir, self.RECTMAT_KINDS[k].format(m=scmode, t=tag))
+        scan = lambda name: os.path.join(scan_dir, name.format(m=scmode))
+        written = {}
+
+        def save(kind, rmat, cube_shape):
+            scbasic.save_rectmat(path(kind), rmat, cube_shape=tuple(cube_shape))
+            self.logger.info(f"wrote {path(kind)}")
+            written[kind] = path(kind)
+
+        # Gaussian interpolated rectmats: move the interpolated spot centres
+        if {"OPT_intp", "C2_intp"} & set(kinds):
+            arr = np.array(pyfits.getdata(scan("{m}_gauss_spotpars_interpd.fits")), dtype=float)
+            ox, oy = self.shift_offsets(arr[..., 1], arr[..., 2], shift, coef)
+            arr[..., 1] += ox
+            arr[..., 2] += oy
+            self.logger.info("making shifted interpolated (Gaussian) rectmats")
+            opt = self.gen_QL_rectmat_interpd([np.zeros((2048, 2048))], arr,
+                                              cut=fluxcut, method='optimal')
+            # C2 has the same weights with rows and columns swapped
+            # (gen_c2_rectmat_inds_interpd), i.e. the transpose
+            if "OPT_intp" in kinds:
+                save("OPT_intp", opt, arr.shape[:3])
+            if "C2_intp" in kinds:
+                save("C2_intp", opt.T.tocsr(), arr.shape[:3])
+
+        # A&K interpolated rectmat: ProcessMonochrom.AnK_rectmat with the spot
+        # fits moved. Positions enter AnK_rectmat only through a linear
+        # (cubic-in-lambda) fit, so moving the fits is the same as its own
+        # `shift` argument for a constant shift, and also works for affine.
+        if "AnK_intp" in kinds:
+            need = [scan(n) for n in ("{m}_ank_epsf.fits", "{m}_gauss_spotpars.fits",
+                                      "{m}_lams.fits", "{m}_intp_lams.fits")]
+            missing = [os.path.basename(p) for p in need if not os.path.isfile(p)]
+            if missing:
+                self.logger.warning(f"Not making the shifted AnK rectmat: {missing} "
+                                    "not in the scan directory.")
+            else:
+                ank, lams_ank = self.read_AnK_lowres_psfs(need[0])
+                fit = np.array(pyfits.getdata(need[1]), dtype=float)
+                lams_fit = np.asarray(pyfits.getdata(need[2]), dtype=float)
+                lams_out = np.asarray(pyfits.getdata(need[3]), dtype=float)
+                ox, oy = self.shift_offsets(fit[..., 1], fit[..., 2], shift, coef)
+                fit[..., 1] += ox
+                fit[..., 2] += oy
+                self.logger.info(f"making shifted AnK interpolated rectmat ({nsub} "
+                                 "sub-wavelengths per channel)")
+                rmat, _ = self.AnK_rectmat(ank, lams_ank, lams_out, fit, lams_fit, nsub=nsub)
+                save("AnK_intp", rmat, (len(lams_out),) + fit.shape[1:3])
+
+        # rectmats built from the scan images themselves (one channel per scan
+        # wavelength): shift each background-subtracted scan image and cut the
+        # spots from it at their moved boxes, as gen_QL_rectmat does
+        if {"OPT", "C2"} & set(kinds):
+            pos_p, cal_p = scan("{m}_posarr.fits"), scan("{m}_calim_stack.fits")
+            missing = [os.path.basename(p) for p in (pos_p, cal_p) if not os.path.isfile(p)]
+            if missing:
+                self.logger.warning(f"Not making the shifted OPT/C2 (scan image) rectmats: "
+                                    f"{missing} not in the scan directory.")
+            else:
+                posarr = np.array(pyfits.getdata(pos_p), dtype=float)
+                self.logger.info("making shifted OPT/C2 rectmats from the scan images")
+                opt = self.shifted_posarr_rectmat(cal_p, posarr, shift, coef, fluxcut)
+                if "OPT" in kinds:
+                    save("OPT", opt, posarr.shape[:3])
+                if "C2" in kinds:
+                    # gen_C2_rectmat uses the same weights, transposed
+                    save("C2", opt.T.tocsr(), posarr.shape[:3])
+        return written
+
+    def shifted_posarr_rectmat(self, calim_path, posarr, shift, coef, cut):
+        """
+        OPT rectmat as ProcessMonochrom.gen_QL_rectmat(ims_cal, posarr),
+        with every spot moved by the shift (or affine model).
+
+        Each scan image is resampled (cubic spline) so its content moves by
+        the shift; each spot's box from posarr moves by the shift rounded to
+        whole pixels (clipped to the detector) and its weights are cut from
+        the resampled image exactly as crop_sparse_vals does: pixels below
+        cut * max set to 0, normalised to unit sum, only positive values
+        kept. A spot whose box contains a NaN pixel is dropped, as before.
+        """
+        from scipy.ndimage import shift as nd_shift, map_coordinates
+        nl, ny, nx = posarr.shape[:3]
+        rows, cols, vals = [], [], []
+        if coef is not None:
+            yy, xx = np.mgrid[0:2048, 0:2048].astype(float)
+            fox, foy = self.apply_affine(xx, yy, coef)
+            src = [yy - foy, xx - fox]          # output pixel <- source position
+            del yy, xx
+        with pyfits.open(calim_path, memmap=True) as hdul:
+            for ll in range(nl):
+                img = np.array(hdul[0].section[ll], dtype=float)
+                bad = ~np.isfinite(img)
+                img[bad] = 0.0
+                if coef is None:
+                    w = nd_shift(img, (shift[1], shift[0]), order=3, mode='constant', cval=0.0)
+                    wbad = nd_shift(bad.astype(float), (shift[1], shift[0]), order=1,
+                                    mode='constant', cval=0.0) > 1e-3
+                else:
+                    w = map_coordinates(img, src, order=3, mode='constant', cval=0.0)
+                    wbad = map_coordinates(bad.astype(float), src, order=1,
+                                           mode='constant', cval=0.0) > 1e-3
+                w[wbad] = np.nan
+
+                p = posarr[ll].reshape(ny * nx, -1)
+                lens = np.nonzero(np.isfinite(p[:, 0]))[0]
+                if not len(lens):
+                    continue
+                xc, xs, xe, yc, ys, ye = (p[lens, i] for i in range(6))
+                ox, oy = self.shift_offsets(xc, yc, shift, coef)
+                ix, iy = np.round(ox).astype(int), np.round(oy).astype(int)
+                xs = np.clip(xs.astype(int) + ix, 0, 2048)
+                xe = np.clip(xe.astype(int) + ix, 0, 2048)
+                ys = np.clip(ys.astype(int) + iy, 0, 2048)
+                ye = np.clip(ye.astype(int) + iy, 0, 2048)
+                hw = np.stack([ye - ys, xe - xs], 1)
+                for h, wd in {tuple(s) for s in hw if s[0] > 0 and s[1] > 0}:
+                    sel = (hw[:, 0] == h) & (hw[:, 1] == wd)
+                    jy, jx = np.mgrid[0:h, 0:wd]
+                    Y = ys[sel][:, None, None] + jy
+                    X = xs[sel][:, None, None] + jx
+                    st = w[Y, X]
+                    mx = st.max(axis=(1, 2), keepdims=True)
+                    st = np.where(st < cut * mx, 0.0, st)
+                    with np.errstate(invalid='ignore', divide='ignore'):
+                        st = st / st.sum(axis=(1, 2), keepdims=True)
+                    keep = st > 0
+                    n = keep.sum(axis=(1, 2))
+                    rows.append(np.repeat(lens[sel] + ll * ny * nx, n))
+                    cols.append((Y * 2048 + X)[keep])
+                    vals.append(st[keep])
+        rows = np.concatenate(rows) if rows else np.zeros(0, int)
+        cols = np.concatenate(cols) if cols else np.zeros(0, int)
+        vals = np.concatenate(vals) if vals else np.zeros(0)
+        from scipy import sparse as _sp
+        return _sp.csr_matrix((vals, (rows, cols)), shape=(nl * ny * nx, 2048 * 2048))
+
     def plot_shift(self, info, dx, dy, title, path):
         rows = info["spots"]
         fig, axes = plt.subplots(1, 3, figsize=(15, 4.6))
@@ -559,25 +776,42 @@ class RmatShift(ProcessMonochrom):
         spot_pars = pyfits.getdata(
             os.path.join(scan_dir, f"{scmode}_gauss_spotpars.fits"))[ll]
 
-        # ---- background-subtracted spot images. The raw monochromator L1s
-        # are dominated by continuum; the spots only stand out after it is
-        # removed.
+        # ---- background-subtracted spot image. The raw monochromator L1s are
+        # dominated by the continuum traces and the spots are only faint
+        # bumps on them. Differencing with a background frame taken at the
+        # same time removes the traces exactly, whatever the frame's shift.
+        # Template-free filters (running medians) and the scan's mean image
+        # both failed on the 20261118 scans, so a background frame is required.
+        if not bkg_frames:
+            raise RuntimeError(
+                "No background frame given. Pass one with -b (a frame taken "
+                "with the frame, e.g. the monochromator at a wavelength "
+                ">~200 nm away), or set rmat_background_frames in the config.")
         destripe = bool(_cfg(inst, "apply_destripe", True))
-        if bkg_frames:
-            # difference with the separately measured background frame(s)
-            bkg = self.load_background(bkg_frames, output_dir, hdr)
-            new_cal = np.nan_to_num(new_im - bkg, nan=0.0)
-            if destripe:
-                new_cal = self.masked_row_destripe(new_cal)[0]
-            bkg_method = "background frame: " + ", ".join(
-                os.path.basename(b) for b in bkg_frames)
-            meanim = None
-        else:
-            # as ProcessMonochrom.monochrom_bksub: scaled scan-mean image
-            meanim = self.scan_mean_image(scan_dir, df_mode, scmode, out_dir)
-            new_cal = self.calibrate_like_scan(new_im, meanim, destripe)
-            bkg_method = "scaled scan-mean image"
+        bkg, bkg_waves = self.load_background(bkg_frames, output_dir, hdr)
+        new_cal = np.nan_to_num(new_im - bkg, nan=0.0)
+        if destripe:
+            new_cal = self.masked_row_destripe(new_cal)[0]
+        bkg_method = "background frame: " + ", ".join(
+            os.path.basename(b) for b in bkg_frames)
         self.logger.info(f"Background removal: {bkg_method}")
+
+        # a monochromator background leaves its own (negative) spots in the
+        # difference; they must sit well away from the frame's spots
+        min_sep = float(_cfg(inst, "rmat_bkg_min_sep_px", 7.0))
+        bkg_sep = self.background_spot_separation(
+            scan_dir, scmode, lams, monowave, bkg_waves)
+        bkg_too_close = bkg_sep is not None and bkg_sep < min_sep
+        if bkg_sep is not None:
+            self.logger.info(
+                f"Background spots are {bkg_sep:.1f} px from the frame's spots")
+        if bkg_too_close:
+            self.logger.warning(
+                f"Background frame spots are only {bkg_sep:.1f} px from the "
+                f"frame's spots (need >= {min_sep:.0f} px): its negative spots "
+                "can bias the centroids. Use a background frame at a wavelength "
+                "further away.")
+        meanim = None
 
         # reference: the scan's own background-subtracted image at this
         # wavelength (what the spot fits were made from)
@@ -638,33 +872,17 @@ class RmatShift(ProcessMonochrom):
                    f"_dy{aff['coef'][1, 0]:.2f}")
         else:
             tag = f"dx{dx:.2f}_dy{dy:.2f}"
-        opt_path = os.path.join(out_dir, f"{scmode}_OPT_intp_rectmat_{tag}.npz")
-        c2_path = os.path.join(out_dir, f"{scmode}_C2_intp_rectmat_{tag}.npz")
         if measure_only:
             self.logger.info("rmat_measure_only is set; not writing rectmats.")
-            opt_path = c2_path = ""
+            written = {}
         else:
-            interp_arr = np.array(pyfits.getdata(os.path.join(
-                scan_dir, f"{scmode}_gauss_spotpars_interpd.fits")), dtype=float)
-            if aff is not None:
-                # offsets evaluated at each spot's own (scan) position
-                ox, oy = self.apply_affine(interp_arr[..., 1],
-                                           interp_arr[..., 2], aff["coef"])
-                interp_arr[..., 1] += ox
-                interp_arr[..., 2] += oy
-            else:
-                interp_arr[..., 1] += dx
-                interp_arr[..., 2] += dy
-            self.logger.info("making shifted interpolated optimal rectmat")
-            opt_rmat = self.gen_QL_rectmat_interpd(
-                [new_im], interp_arr, cut=fluxcut, method='optimal')
-            # the C2 rectmat is built from the same weights with rows and
-            # columns swapped (gen_c2_rectmat_inds_interpd), i.e. the transpose
-            c2_rmat = opt_rmat.T.tocsr()
-            cube_shape = interp_arr.shape[:3]
-            scbasic.save_rectmat(opt_path, opt_rmat, cube_shape=cube_shape)
-            scbasic.save_rectmat(c2_path, c2_rmat, cube_shape=cube_shape)
-            self.logger.info(f"wrote {opt_path} and {c2_path}")
+            kinds = self.requested_rectmats(inst, scmode)
+            written = self.write_shifted_rectmats(
+                scan_dir, scmode, out_dir, tag, (dx, dy),
+                None if aff is None else aff["coef"], kinds, fluxcut,
+                nsub=int(_cfg(inst, "ank_rectmat_nsub", 10)))
+        opt_path = written.get("OPT_intp", "")
+        c2_path = written.get("C2_intp", "")
 
         # ---- record
         scatter = (max(aff["dx_std"], aff["dy_std"]) if aff is not None
@@ -680,8 +898,11 @@ class RmatShift(ProcessMonochrom):
             "scan_monowave_nm": ref_wave,
             "quality": ("OK" if info["method"] == "spot_centroids"
                         and scatter <= 0.75
-                        and not info["xcorr_on_edge"] else "CHECK"),
+                        and not info["xcorr_on_edge"]
+                        and not bkg_too_close else "CHECK"),
             "background": bkg_method,
+            "background_spot_sep_px": (None if bkg_sep is None
+                                       else round(bkg_sep, 2)),
             "method": info["method"],
             "model": "affine" if aff is not None else "shift",
             "dx": round(dx, 4), "dy": round(dy, 4),
@@ -696,6 +917,8 @@ class RmatShift(ProcessMonochrom):
             "c2_rectmat": c2_path,
             "plot": plot_path,
         }
+        for kind, path in written.items():
+            summary[f"rectmat_{kind}"] = path
         if "dx_grad" in info:
             summary["dx_grad_per1000px_x_y"] = tuple(round(float(g), 4) for g in info["dx_grad"])
             summary["dy_grad_per1000px_x_y"] = tuple(round(float(g), 4) for g in info["dy_grad"])

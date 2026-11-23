@@ -14,7 +14,10 @@ def plot_rectmat_centroid_diagnostics(
 
     Parameters
     ----------
-    ims_cal : ndarray, shape (nwave, detector_y, detector_x)
+    ims_cal : ndarray, shape (detector_y, detector_x) or (nwave, detector_y, detector_x)
+        Only one frame is shown (panel 1), so this can be just that frame: the
+        background-subtracted master at wavelength index image_index (the middle
+        wavelength by default). A full stack also works; the frame is taken from it.
     posarr : ndarray, shape (nwave, lens_y, lens_x, >=6)
         Columns 0, 3 are predicted detector x/y; columns 1 and 4
         are x/y cutout start positions.
@@ -44,12 +47,15 @@ def plot_rectmat_centroid_diagnostics(
     posarr = np.asarray(posarr)
     centroids = np.asarray(centroids)
     lams = np.asarray(lams, dtype=float).ravel()
-    if ims_cal.ndim != 3 or centroids.ndim != 4 or posarr.ndim != 4:
-        raise ValueError('Expected ims_cal (3D), posarr (4D), centroids (4D).')
+    if ims_cal.ndim not in (2, 3) or centroids.ndim != 4 or posarr.ndim != 4:
+        raise ValueError('Expected ims_cal (2D frame or 3D stack), posarr (4D), centroids (4D).')
     if centroids.shape[-1] != 2 or posarr.shape[-1] < 6:
         raise ValueError('Centroids require x/y; posarr requires cutout offsets.')
-    if not (ims_cal.shape[0] == posarr.shape[0] == centroids.shape[0] == len(lams)):
+    if not (posarr.shape[0] == centroids.shape[0] == len(lams)):
         raise ValueError('Wavelength axis lengths must agree.')
+    if ims_cal.ndim == 3 and ims_cal.shape[0] != len(lams):
+        raise ValueError('ims_cal stack must have one frame per wavelength.')
+    det_ny, det_nx = ims_cal.shape[-2:]
     if posarr.shape[1:3] != centroids.shape[1:3]:
         raise ValueError('Lenslet grid shapes must agree.')
     if len(lams) == 0:
@@ -59,7 +65,7 @@ def plot_rectmat_centroid_diagnostics(
     x = posarr[..., 1] + centroids[..., 0]
     y = posarr[..., 4] + centroids[..., 1]
     valid = np.isfinite(x) & np.isfinite(y) & np.isfinite(lams[:, None, None])
-    valid &= (x >= 0) & (x < ims_cal.shape[2]) & (y >= 0) & (y < ims_cal.shape[1])
+    valid &= (x >= 0) & (x < det_nx) & (y >= 0) & (y < det_ny)
     x = np.where(valid, x, np.nan)
     y = np.where(valid, y, np.nan)
     order = np.argsort(lams)
@@ -75,7 +81,7 @@ def plot_rectmat_centroid_diagnostics(
     idx = nw // 2 if image_index is None else int(image_index)
     if not 0 <= idx < nw:
         raise IndexError('image_index out of range.')
-    image = ims_cal[idx]
+    image = ims_cal[idx] if ims_cal.ndim == 3 else ims_cal
     finite = image[np.isfinite(image)]
     if finite.size:
         lo, hi = np.percentile(finite, [5, 99.5])

@@ -30,6 +30,7 @@ log = logging.getLogger("SCALES")
 from scalesdrp.core.scales_pkg_resources import get_resource_path
 
 
+
 class ProcessMonochrom(BasePrimitive):
     """
     Estimate the psf centroid of all the calib images images and save
@@ -54,7 +55,9 @@ class ProcessMonochrom(BasePrimitive):
 
         det_config = np.unique(df2['MCLOCK'])[0]
         lams = df2['MONOWAVE']
-        names = df2['filename'][np.argsort(lams)]
+        #.iloc: argsort gives positions, but df2 keeps its row labels from the full
+        #table, so [] (a label lookup) fails when another mode's files come first
+        names = df2['filename'].iloc[np.argsort(lams.values)]
 
         lams = np.sort(lams)
         ims = []
@@ -64,6 +67,63 @@ class ProcessMonochrom(BasePrimitive):
             ims.append(image)
         ims = np.array(ims)
         return ims, lams/1000.0
+
+    def get_filenames_and_mean(self,df,scmode,output_dir):
+        """
+        """
+        df2 = df[df['IFSMODE'] == scmode]
+        if len(df2) == 0:
+            return [], [], []
+
+        det_config = np.unique(df2['MCLOCK'])[0]
+        lams = df2['MONOWAVE']
+        #.iloc: argsort gives positions, but df2 keeps its row labels from the full
+        #table, so [] (a label lookup) fails when another mode's files come first
+        names = df2['filename'].iloc[np.argsort(lams.values)]
+
+        lams = np.sort(lams)
+        fullnames = []
+        mean = np.zeros([2048,2048])
+        for name in names:
+            image = pyfits.getdata(output_dir+'/'+name,memmap=False)
+            if True in np.isnan(image): self.logger.info('nan in image')
+            mean+=image
+            fullnames.append(output_dir+'/'+name)
+        mean/=float(len(names))
+        fullnames = np.array(fullnames,dtype=str)
+        return fullnames, lams/1000.0, mean
+
+    def apply_wave_range_names(self,imnames,lams,scmode,wave_range):
+        """
+        Keep only the masters whose monochromator wavelength is inside a range,
+        e.g. to drop band-edge masters with no or faint spots, which otherwise
+        add thousands of noise tracks and can bias the background subtraction.
+
+        Args:
+            imnames: list of master filenames, sorted by wavelength (from parse_files)
+            lams: their wavelengths in um
+            scmode: mode name, e.g. 'LowRes-L'
+            wave_range: None (keep all); (min, max) in um, applied to every mode;
+                or a dict {scmode: (min, max)} (modes not listed keep all masters).
+                Limits are inclusive.
+
+        Returns:
+            imnames, lams with only the masters inside the range
+        """
+        if isinstance(wave_range, dict):
+            wave_range = wave_range.get(scmode)
+        if wave_range is None or len(imnames) == 0:
+            return imnames, lams
+        lams = np.asarray(lams)
+        wmin, wmax = wave_range
+        keep = (lams >= wmin) & (lams <= wmax)
+        if (~keep).any():
+            self.logger.info(
+                f"{scmode}: mono_wave_range ({wmin}, {wmax}) um drops {(~keep).sum()} of "
+                f"{len(lams)} masters, at {np.round(lams[~keep], 4).tolist()} um")
+        if not keep.any():
+            self.logger.warning(f"{scmode}: no masters inside mono_wave_range ({wmin}, {wmax}) um")
+        return imnames[keep], lams[keep]
 
     def apply_wave_range(self,ims,lams,scmode,wave_range):
         """
@@ -96,6 +156,45 @@ class ProcessMonochrom(BasePrimitive):
         if not keep.any():
             self.logger.warning(f"{scmode}: no masters inside mono_wave_range ({wmin}, {wmax}) um")
         return ims[keep], lams[keep]
+
+    def apply_exclude_waves_names(self,imnames,lams,scmode,exclude_waves,tol=0.001):
+        """
+        Drop the masters at specific monochromator wavelengths, e.g. inside
+        atmospheric absorption bands (H2O at 2.737 um, CO2 at 4.260 um in
+        LowRes-KLM), where almost no light gets through.
+
+        Args:
+            imnames: list of master filenames (from parse_files / apply_wave_range)
+            lams: their wavelengths in um
+            scmode: mode name, e.g. 'LowRes-KLM'
+            exclude_waves: None (drop none); a list of wavelengths in um, applied
+                to every mode; or a dict {scmode: [wavelengths]} (modes not
+                listed drop none)
+            tol: a master is dropped if it is within tol um of a listed
+                wavelength (default 1 nm, as in the notebook)
+
+        Returns:
+            ims, lams without the excluded masters
+        """
+        if isinstance(exclude_waves, dict):
+            exclude_waves = exclude_waves.get(scmode)
+        if exclude_waves is None or len(imnames) == 0:
+            return imnames, lams
+        excl = np.atleast_1d(np.asarray(exclude_waves, dtype=float))
+        if excl.size == 0:
+            return imnames, lams
+        lams = np.asarray(lams)
+        drop = np.any(np.abs(lams[:, None] - excl[None, :]) < tol, axis=1)
+        unmatched = [w for w in excl if not np.any(np.abs(lams - w) < tol)]
+        if drop.any():
+            self.logger.info(
+                f"{scmode}: mono_exclude_waves drops {drop.sum()} of {len(lams)} "
+                f"masters, at {np.round(lams[drop], 4).tolist()} um")
+        if unmatched:
+            self.logger.warning(
+                f"{scmode}: no master within {tol} um of mono_exclude_waves "
+                f"{unmatched} um; nothing dropped there")
+        return imnames[~drop], lams[~drop]
 
     def apply_exclude_waves(self,ims,lams,scmode,exclude_waves,tol=0.001):
         """
@@ -147,6 +246,12 @@ class ProcessMonochrom(BasePrimitive):
             bkgs = np.array([medim*meds[x]/np.nanmedian(medim) for x in range(len(meds))])
         ims_sub = ims - bkgs
         return ims_sub
+
+    def monochrom_bksub_sing(self,im,meanim):
+        im_mean = np.nanmean(im)
+        bkg = meanim*im_mean/np.nanmean(meanim)
+        im_sub = im - bkg
+        return im_sub
 
 
     def masked_row_destripe(self,data, sigma_thresh=2.0, dilate_iter=3, n_passes=2):
@@ -218,6 +323,118 @@ class ProcessMonochrom(BasePrimitive):
                     lmin=3.44805
                     lmax=4.09241
                     length=878
+                if mfilt=='L':
+                    #IFS L filter (MedRes-L), fitted to the medres_L_20261117 scan:
+                    #middle of the 3 detector rows (~80 px apart), 1361 px/um
+                    y0=179
+                    lam0=2.9
+                    chy=1
+                    lmin=2.88
+                    lmax=4.17
+                    length=1756
+                ycent,ymin,ymax=self.get_spot_yrange_medres(lams_u[ii],y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
+
+                dy = (ymax-ymin)*0.5
+                im_cal = im_cal[int(ymin):int(ymax)]
+            data_smooth = gaussian_filter(im_cal, sigma=sigma)
+            coords_yx = peak_local_max(
+                data_smooth,
+                min_distance=min_distance,
+                threshold_abs=np.percentile(data_smooth, thresh),
+                exclude_border=5
+            )
+
+
+            if medres==True:
+                #"""
+                todel = []
+                for i in range(len(coords_yx)):
+                    yc,xc = coords_yx[i]
+                    ydiff = coords_yx[:,0]-yc
+                    testrow = ydiff[np.where(np.abs(ydiff) < 15)]
+                    if len(testrow) < 80:
+                        todel.append(i)
+                coords_yx = np.delete(coords_yx,todel,axis=0)
+                #"""
+                coordinates = np.column_stack([coords_yx[:, 1], coords_yx[:, 0]+int(ymin)])
+            else:
+                coordinates = np.column_stack([coords_yx[:, 1], coords_yx[:, 0]])
+            intensities = data_smooth[coords_yx[:, 0], coords_yx[:, 1]]
+
+            self.logger.info(f"Found {len(coords_yx)} spots in image {ii}")
+            spots[ii] = {
+                    'filename': 'blank',
+                    'coordinates': coordinates,
+                    'intensities': intensities,
+                    'lam': lams_u[ii]*np.ones(len(coordinates)),
+                    'n_spots': len(coordinates)
+                }
+            if plot_im == True:
+                f = plt.figure(clear=True)
+                f.add_subplot(121)
+                #plt.imshow(data_smooth)
+                plt.imshow(ims_cal[ii],origin='lower')
+                plt.scatter(coordinates[:,0],coordinates[:,1],c='r',s=2)
+                plt.title('spots in image '+str(ii))
+                f.add_subplot(122)
+                plt.hist(intensities,bins=100)
+                plt.title('spot intensities')
+                plt.show()
+
+                f = plt.figure(clear=True)
+                f.add_subplot(121)
+                #plt.imshow(data_smooth)
+                plt.hist(coordinates[:,0],bins=30)
+                plt.title('xcoords in image '+str(ii))
+                f.add_subplot(122)
+                plt.hist(coordinates[:,1],bins=30)
+                plt.title('ycoords in image '+str(ii))
+                plt.show()
+                #tmp = input('continue?')
+                #stop
+
+        return spots
+
+    def find_all_spots_names(self, names, lams_u, meanim,
+                             min_distance=15, thresh=50,
+                             plot_im=False, sigma=0.8,medres=False,
+                             mfilt='imgK'):
+        spots = {}
+
+        for ii in range(len(names)):
+            #im_cal = ims_cal[ii]
+            fname = names[ii]
+            image = pyfits.getdata(fname,memmap=False)
+            im_cal_tmp = self.monochrom_bksub_sing(image,meanim)
+            if self.config.instrument.apply_destripe==True:
+                im_cal = self.masked_row_destripe(im_cal_tmp)[0]
+            else:
+                im_cal = im_cal_tmp
+
+            if medres==True:
+                if mfilt=='imgK':
+                    y0=180
+                    lam0=2.0248
+                    chy=1
+                    lmin=1.95
+                    lmax=2.45
+                    length=1822
+                if mfilt=='imgLp':
+                    y0=975
+                    lam0=3.44805
+                    chy=1
+                    lmin=3.44805
+                    lmax=4.09241
+                    length=878
+                if mfilt=='L':
+                    #IFS L filter (MedRes-L), fitted to the medres_L_20261117 scan:
+                    #middle of the 3 detector rows (~80 px apart), 1361 px/um
+                    y0=179
+                    lam0=2.9
+                    chy=1
+                    lmin=2.88
+                    lmax=4.17
+                    length=1756
                 ycent,ymin,ymax=self.get_spot_yrange_medres(lams_u[ii],y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
 
                 dy = (ymax-ymin)*0.5
@@ -291,6 +508,8 @@ class ProcessMonochrom(BasePrimitive):
             return dict(y0=180,lam0=2.0248,chy=1,lmin=1.95,lmax=2.45,length=1822)
         if mfilt=='imgLp':
             return dict(y0=975,lam0=3.44805,chy=1,lmin=3.44805,lmax=4.09241,length=878)
+        if mfilt=='L':
+            return dict(y0=179,lam0=2.9,chy=1,lmin=2.88,lmax=4.17,length=1756)
         raise ValueError(f"No MedRes trace model for mfilt={mfilt}")
 
     def track_sequentially(self,spots,max_match_distance=3,lams=None,dispersion=None):
@@ -468,6 +687,11 @@ class ProcessMonochrom(BasePrimitive):
                 lmin=3.44805
                 lmax=4.09241
                 length=878
+            if mfilt=='L':
+                chy=1
+                lmin=2.88
+                lmax=4.17
+                length=1756
         lam = 0.5*(lmin+lmax)
 
         #predicted band-centre position of each fragment, from its first spot
@@ -657,6 +881,11 @@ class ProcessMonochrom(BasePrimitive):
                     lmin=3.44805
                     lmax=4.09241
                     length=878
+                if mfilt=='L':
+                    chy=1
+                    lmin=2.88
+                    lmax=4.17
+                    length=1756
                 lam = 0.5*(lmin+lmax)
                 xj = x0
                 yj,ymin,ymax=self.get_spot_yrange_medres(lam,y0=y0,lam0=lam0,chy=chy,lmin=lmin,lmax=lmax,length=length)
@@ -1133,6 +1362,78 @@ class ProcessMonochrom(BasePrimitive):
                 plt.show()
         return posarr, spotim_arr
 
+
+    def make_posarr_names(self,names,meanim,final_posns,spot_tracks_u,medres=False,show_plots=False,cropsize=10,cut=0.01):
+        maxy = final_posns.shape[0]
+        maxx = final_posns.shape[1]
+        if medres==False:
+            sizex = self.nx
+            sizey = self.ny
+            diffx = sizex-maxx
+            diffy = sizey-maxy
+        if medres==True:
+            sizex=self.nx
+            sizey=self.ny
+            diffx=0
+            diffy=0
+
+        posarr = np.zeros([len(names),sizey,sizex,7])
+        posarr[:,:,:,:] = np.nan
+        spotim_arr = np.zeros([len(names),sizey,sizex,cropsize,cropsize])
+        spotim_arr[:] = np.nan
+        for imind in range(len(names)):
+            self.logger.info('loading image '+str(imind))
+            fname = names[imind]
+            image = pyfits.getdata(fname,memmap=False)
+            im_cal_tmp = self.monochrom_bksub_sing(image,meanim)
+            if self.config.instrument.apply_destripe==True:
+                im_cal = self.masked_row_destripe(im_cal_tmp)[0]
+            else:
+                im_cal = im_cal_tmp
+
+            for i in range(maxy):
+                for j in range(maxx):
+                    xpos,ypos,lind = final_posns[i,j]
+                    if np.isnan(xpos)==False and imind in spot_tracks_u[lind]:
+                        k=imind
+                        x,y,intens = spot_tracks_u[lind][k][:3]
+                        # window start, then end = start + cropsize, so the
+                        # crop is never larger than cropsize (int(y+c/2) and
+                        # int(y-c/2) can differ by c+1 when y is a hair below
+                        # an integer, e.g. y = 4.999999999999999)
+                        x0 = int(np.floor(x-cropsize/2))
+                        y0 = int(np.floor(y-cropsize/2))
+                        xs = max(0, x0)
+                        xe = min(x0+cropsize, im_cal.shape[1])
+                        ys = max(0, y0)
+                        ye = min(y0+cropsize, im_cal.shape[0])
+                        # spot window entirely off the detector: a negative
+                        # xe/ye would wrap around in the slice below, so
+                        # leave this spot empty
+                        if xe <= xs or ye <= ys:
+                            continue
+                        posarr[k,i+diffy,j+diffx] = [x,xs,xe,y,ys,ye,intens]
+
+
+
+                        cropped = np.zeros(im_cal[ys:ye,xs:xe].shape)
+                        cropped[:] = im_cal[ys:ye,xs:xe]
+                        cropped[np.where(cropped<cut*np.max(cropped))] = 0.0
+                        spotim_arr[k,i+diffy,j+diffx,:ye-ys,:xe-xs] = cropped
+
+        if show_plots==True:
+            f = plt.figure(clear=True)
+            if medres==False:
+                for i in range(20,40):
+                    for j in range(40,60):
+                        plt.scatter(posarr[:,i,j,0],posarr[:,i,j,3],c=range(len(posarr)))
+                plt.show()
+            if medres==True:
+                for i in range(17):
+                    for j in range(18):
+                        plt.scatter(posarr[:,i,j,0],posarr[:,i,j,3],c=range(len(posarr)))
+                plt.show()
+        return posarr, spotim_arr
 
     def drop_lowsnr_spots(self,ims_cal,posarr,final_posns,
                           filled_set,spotim_arr,
@@ -2103,6 +2404,209 @@ class ProcessMonochrom(BasePrimitive):
         except Exception as e:
             self.logger.info(f"AnK ePSF plot failed: {e}")
 
+    def read_AnK_lowres_psfs(self, path):
+        """Read a {scmode}_ank_epsf.fits written by write_AnK_lowres_psfs back
+        into the parts of the AnK_lowres_psfs dict that AnK_rectmat needs.
+        Returns (res, lams)."""
+        with pyfits.open(path) as hdul:
+            epsf = np.array(hdul[0].data, dtype=float)
+            hdr = hdul[0].header
+            t = hdul['REGIONS'].data
+            nl, nry, nrx = epsf.shape[:3]
+            lam_col = np.asarray(t['LAMBDA'], float).reshape(nl, nry, nrx)
+            ry0 = np.asarray(t['LENS_Y0']).reshape(nl, nry, nrx)[0, :, 0]
+            ry1 = np.asarray(t['LENS_Y1']).reshape(nl, nry, nrx)[0, :, 0]
+            rx0 = np.asarray(t['LENS_X0']).reshape(nl, nry, nrx)[0, 0, :]
+            rx1 = np.asarray(t['LENS_X1']).reshape(nl, nry, nrx)[0, 0, :]
+            # per wavelength / region measurements (FWHMs, dispersion, ...), e.g. for
+            # estimate_spectral_resolution_AnK
+            tabcols = {name.lower(): np.asarray(t[name]).reshape(nl, nry, nrx)
+                       for name in t.columns.names
+                       if name not in ('LAMBDA', 'REG_Y', 'REG_X', 'LENS_Y0', 'LENS_Y1',
+                                       'LENS_X0', 'LENS_X1')}
+        res = dict(epsf=epsf, oversamp=int(hdr['OVERSAMP']), half=int(hdr['STAMPHW']),
+                   region_y=np.array([ry0, ry1]).T, region_x=np.array([rx0, rx1]).T)
+        for k, v in tabcols.items():
+            res[{'r_along': 'R_along', 'r_across': 'R_across'}.get(k, k)] = v
+        return res, lam_col[:, 0, 0]
+
+    def AnK_rectmat(self, ank, lams_ank, lams_out, fitarr, lams_fit, nsub=10, crop_half=4,
+                    min_frac=1e-3, shift=(0.0, 0.0), npix=(2048, 2048)):
+        """
+        Optimal-extraction rectmat from the regional Anderson & King ePSFs,
+        following the CHARIS pipeline's polychrome templates (Brandt et al. 2017;
+        charis-dep buildmonochrome.make_polychrome):
+
+          - field: each lenslet's ePSF is the bilinear blend of the four nearest
+            field-region ePSFs (regions are bands of the lenslet grid, so the blend
+            is done in lenslet-index space; outside the outermost region centres
+            the edge regions are used as they are, without extrapolation);
+          - wavelength: linear blend of the ePSFs at the two monochromator
+            wavelengths around lam (the nearer one weighted more; outside the
+            scanned range the end ePSF is used);
+          - position: the lenslet's spot centre at lam from the cubic-in-lambda fit
+            to its Gaussian spot centres (interp_gauss_spots), and the blended
+            ePSF is sampled there with cubic-spline interpolation;
+          - channel: each output wavelength is a channel from halfway to the
+            previous to halfway to the next one; its template is the average of
+            the ePSF placed at nsub wavelengths evenly spread across it (CHARIS
+            uses 10; nsub=1 gives monochromatic templates at the channel centres,
+            like the Gaussian OPT_intp rectmat).
+
+        Each template is cut to a (2*crop_half+1)^2 box around the channel-centre
+        position, widened by the spot motion across the channel, negative values
+        and values below min_frac of its peak set to 0, and normalised to unit
+        sum, i.e. the same profile rows as gen_QL_rectmat_interpd (rows
+        lensx + lensy*nx + l*nx*ny, columns = flattened detector pixels), for
+        scbasic.optimal_extract_horne.
+
+        Args:
+            ank: dict from AnK_lowres_psfs (or read_AnK_lowres_psfs) with epsf
+                (nla, nry, nrx, G, G), oversamp, region_y, region_x
+            lams_ank: (nla,) wavelengths of the ePSFs (um)
+            lams_out: (nlam,) channel-centre wavelengths of the rectmat (um)
+            fitarr: (nl, ny, nx, >=6) Gaussian spot fits at lams_fit
+            lams_fit: (nl,) wavelengths of fitarr (um)
+            shift: (dx, dy) px added to every spot position (disperser motion)
+
+        Returns (rmat, info) with info: positions (nlam, ny, nx, 2) of the channel
+        centres, nonzeros per template (nlam, ny, nx), box size.
+        """
+        from scipy.ndimage import spline_filter
+        lams_ank = np.asarray(lams_ank, float)
+        lams_out = np.asarray(lams_out, float)
+        ep = np.array(ank['epsf'], dtype=float)
+        nla, nry, nrx, G, _ = ep.shape
+        ov = int(ank['oversamp']); c0 = G // 2
+        ny, nx = fitarr.shape[1:3]
+        nlam = len(lams_out)
+
+        #regions without an ePSF at some wavelength: use the nearest wavelength that has one
+        have = np.isfinite(ep).all(axis=(3, 4)) & (np.nan_to_num(ep).max(axis=(3, 4)) > 0)
+        for ry in range(nry):
+            for rx in range(nrx):
+                ok = np.nonzero(have[:, ry, rx])[0]
+                for l in np.nonzero(~have[:, ry, rx])[0]:
+                    if len(ok):
+                        ep[l, ry, rx] = ep[ok[np.argmin(np.abs(lams_ank[ok]-lams_ank[l]))], ry, rx]
+        reg_ok = have.any(axis=0)
+        ep = np.nan_to_num(ep)
+        #cubic-spline coefficients (linear in the ePSF, so blends of them are the
+        #coefficients of the blended ePSF, as CHARIS does with spline_filter)
+        coef = np.array([[[spline_filter(ep[l, ry, rx], order=3) for rx in range(nrx)]
+                          for ry in range(nry)] for l in range(nla)])
+
+        #bilinear field weights of each lenslet on the region grid (lenslet-index space)
+        def axis_weights(n, bounds, nreg):
+            cen = 0.5*(bounds[:, 0] + bounds[:, 1] - 1)
+            f = np.interp(np.arange(n), cen, np.arange(nreg))
+            i1 = np.clip(np.floor(f).astype(int), 0, nreg-1)
+            i2 = np.minimum(i1+1, nreg-1)
+            t = f - i1
+            return i1, i2, t
+        jy1, jy2, ty = axis_weights(ny, np.asarray(ank['region_y']), nry)
+        ix1, ix2, tx = axis_weights(nx, np.asarray(ank['region_x']), nrx)
+        W = np.zeros((ny, nx, nry, nrx))
+        J, I = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
+        for (ja, wy) in [(jy1, 1-ty), (jy2, ty)]:
+            for (ia, wx) in [(ix1, 1-tx), (ix2, tx)]:
+                np.add.at(W, (J, I, ja[J], ia[I]), wy[J]*wx[I])
+        W *= reg_ok[None, None]
+        with np.errstate(invalid='ignore', divide='ignore'):
+            W /= W.sum(axis=(2, 3), keepdims=True)
+        W = np.nan_to_num(W).reshape(ny*nx, nry*nrx)
+
+        #channel edges and the sub-wavelengths in each channel
+        if nlam > 1:
+            mid = 0.5*(lams_out[1:] + lams_out[:-1])
+            edges = np.concatenate([[lams_out[0]-(mid[0]-lams_out[0])], mid,
+                                    [lams_out[-1]+(lams_out[-1]-mid[-1])]])
+        else:
+            edges = np.array([lams_out[0], lams_out[0]])
+        if nsub > 1:
+            frac = (np.arange(nsub)+0.5)/nsub
+            lsub = edges[:-1, None] + frac[None]*(edges[1:]-edges[:-1])[:, None]
+        else:
+            lsub = lams_out[:, None]
+        #spot centres at every sub-wavelength and at the channel centres
+        allw = np.concatenate([lams_out, lsub.ravel()])
+        pos = self.interp_gauss_spots(np.asarray(lams_fit, float), allw, fitarr)[..., 1:3]
+        pos_c = pos[:nlam]                                   #(nlam, ny, nx, 2)
+        pos_s = pos[nlam:].reshape(nlam, lsub.shape[1], ny, nx, 2)
+
+        #optional detector shift (as rectmat_xshift / rectmat_yshift)
+        pos_c = pos_c + np.asarray(shift, float)
+        pos_s = pos_s + np.asarray(shift, float)
+
+        #box half-size: crop_half plus half the spot motion across a channel (99.9th
+        #percentile: a few edge lenslets with poor cubic position fits move much more)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            motion = np.nanpercentile(np.hypot(*(pos_s[:, -1]-pos_s[:, 0]).transpose(3, 0, 1, 2)), 99.9)
+        h = crop_half + (int(np.ceil(0.5*motion)) if np.isfinite(motion) else 0)
+        S = 2*h + 1
+        off = np.arange(-h, h+1)
+
+        rows, cols, vals = [], [], []
+        nnz = np.zeros((nlam, ny, nx), dtype=int)
+        lens_idx = np.arange(ny*nx)
+        for c in range(nlam):
+            xc, yc = pos_c[c, ..., 0].ravel(), pos_c[c, ..., 1].ravel()
+            ok = np.isfinite(xc) & np.isfinite(yc) & (W.sum(1) > 0)
+            ok &= (xc > -h) & (xc < npix[1]-1+h) & (yc > -h) & (yc < npix[0]-1+h)
+            if not ok.any():
+                continue
+            li = lens_idx[ok]
+            X = np.round(xc[ok]).astype(int)[:, None, None] + off[None, None, :]
+            Y = np.round(yc[ok]).astype(int)[:, None, None] + off[None, :, None]
+            X, Y = np.broadcast_arrays(X, Y)
+            T = np.zeros(X.shape)
+            for s in range(lsub.shape[1]):
+                lam = lsub[c, s]
+                if lam <= lams_ank[0]:
+                    C = coef[0]
+                elif lam >= lams_ank[-1]:
+                    C = coef[-1]
+                else:
+                    k = np.searchsorted(lams_ank, lam) - 1
+                    a = (lams_ank[k+1]-lam)/(lams_ank[k+1]-lams_ank[k])
+                    C = a*coef[k] + (1-a)*coef[k+1]
+                xs = pos_s[c, s, ..., 0].ravel()[ok]; ys = pos_s[c, s, ..., 1].ravel()[ok]
+                good = np.isfinite(xs) & np.isfinite(ys)
+                xs = np.where(good, xs, xc[ok]); ys = np.where(good, ys, yc[ok])
+                gx = (X - xs[:, None, None])*ov + c0
+                gy = (Y - ys[:, None, None])*ov + c0
+                sub = np.zeros(X.shape)
+                for r in range(nry*nrx):
+                    w = W[li, r]
+                    m = w > 0
+                    if not m.any():
+                        continue
+                    smp = map_coordinates(C[r // nrx, r % nrx], [gy[m].ravel(), gx[m].ravel()],
+                                          order=3, prefilter=False, mode='constant', cval=0.0)
+                    sub[m] += w[m, None, None]*smp.reshape(-1, S, S)
+                T += np.clip(sub, 0, None)
+            ondet = (X >= 0) & (X < npix[1]) & (Y >= 0) & (Y < npix[0])
+            T = np.where(ondet, T, 0.0)
+            pk = T.max(axis=(1, 2), keepdims=True)
+            T = np.where(T >= min_frac*pk, T, 0.0)
+            tot = T.sum(axis=(1, 2), keepdims=True)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                T = np.where(tot > 0, T/tot, 0.0)
+            keep = T > 0
+            n_per = keep.sum(axis=(1, 2))
+            nnz[c].ravel()[li] = n_per
+            rows.append(np.repeat(li + c*ny*nx, n_per))
+            cols.append(np.ravel_multi_index((Y[keep], X[keep]), npix))
+            vals.append(T[keep])
+            self.logger.info(f"AnK rectmat channel {c+1}/{nlam} ({lams_out[c]:.4f} um): "
+                             f"{len(li)} lenslets, {n_per.sum()} nonzeros")
+        rows = np.concatenate(rows) if rows else np.zeros(0, int)
+        cols = np.concatenate(cols) if cols else np.zeros(0, int)
+        vals = np.concatenate(vals) if vals else np.zeros(0)
+        rmat = sparse.csr_matrix((vals, (rows, cols)), shape=(nlam*ny*nx, npix[0]*npix[1]))
+        return rmat, dict(positions=pos_c, nnz=nnz, box=S, nsub=lsub.shape[1])
+
     def fit_gauss_spots_2(self, calims, posarr, show_plots=False, fix_theta=False, cropsize=10):
         """
         Modified version of the original fit_gauss_spots.
@@ -2294,7 +2798,112 @@ class ProcessMonochrom(BasePrimitive):
 
 
 
-    def fit_gauss_spots(self,calims,posarr,cropsize=10,show_plots=False,cut=0.1):
+    def fit_gauss_spots_names(self,names,meanim,posarr,cropsize=10,show_plots=False,cut=0.1,full_images=True):
+        """
+        Gaussian fit of every spot. full_images=False skips the full-detector model
+        image per wavelength and the residual stack (modims, resims, returned as
+        None): they are only written as debug files, and for long scans they are
+        the largest arrays in the run (two float64 2048 x 2048 images per master).
+        The fits and the cropped spot/model/residual arrays are unchanged.
+        """
+        fitarr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],6])
+        fitarr[:,:,:,:] = np.nan
+        modims = []
+        spotim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
+        modim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
+        resim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
+        resims = []
+        for ll in range(len(names)):
+            self.logger.info("image "+str(ll)+" of "+str(len(names)))
+            fname = names[ll]
+            image = pyfits.getdata(fname,memmap=False)
+            im_cal_tmp = self.monochrom_bksub_sing(image,meanim)
+            if self.config.instrument.apply_destripe==True:
+                im_cal = self.masked_row_destripe(im_cal_tmp)[0]
+            else:
+                im_cal = im_cal_tmp
+            modim = np.zeros(im_cal.shape) if full_images else None
+            for lensx in range(posarr.shape[2]):
+                for lensy in range(posarr.shape[1]):
+                    xc,xs,xe,yc,ys,ye,intens = posarr[ll,lensy,lensx]
+                    if True not in np.isnan([xs,xe,ys,ye]):
+                        xc = int(xc)
+                        yc = int(yc)
+                        xs = int(xs)
+                        xe = int(xe)
+                        ys = int(ys)
+                        ye = int(ye)
+                        cropped = np.zeros(im_cal[ys:ye,xs:xe].shape)
+                        cropped[:] = im_cal[ys:ye,xs:xe]
+                        cropped[np.where(cropped<cut*np.max(cropped))] = 0.0
+                        spotim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = cropped
+                        initial_guess = Gaussian2D(amplitude=intens, x_mean=(xe-xs)*0.5, y_mean=(ye-ys)*0.5,
+                                  x_stddev=1., y_stddev=1.)
+
+                        fitter = fitting.LevMarLSQFitter()
+                        y, x = np.mgrid[:(ye-ys), :(xe-xs)]
+                        fitted_model = fitter(initial_guess, x, y, cropped)
+
+                        if full_images:
+                            modim[ys:ye,xs:xe]+=fitted_model(x,y)
+                        modim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = fitted_model(x,y)
+                        resim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = cropped - fitted_model(x,y)
+                        fitarr[ll,lensy,lensx] = [fitted_model.amplitude.value,
+                                                  fitted_model.x_mean.value+xs,
+                                                  fitted_model.y_mean.value+ys,
+                                                  fitted_model.x_stddev.value,
+                                                  fitted_model.y_stddev.value,
+                                                  fitted_model.theta.value]
+
+                        if True in np.isnan(fitarr[ll,lensy,lensx]):
+                            self.logger.info('nans in '+str(ll)+' '+str(lensy)+' '+str(lensx))
+                        if show_plots==True:
+                            self.logger.info("--- Fit Results ---")
+                            self.logger.info(f"Amplitude: {fitted_model.amplitude.value:.2f}")
+                            self.logger.info(f"X Center:  {fitted_model.x_mean.value:.2f}")
+                            self.logger.info(f"Y Center:  {fitted_model.y_mean.value:.2f}")
+                            self.logger.info(f"X Sigma:   {fitted_model.x_stddev.value:.2f}")
+                            self.logger.info(f"Y Sigma:   {fitted_model.y_stddev.value:.2f}")
+                            self.logger.info(f"Theta:     {fitted_model.theta.value:.2f} rad")
+
+                            plt.figure(figsize=(12, 4),clear=True)
+                            plt.subplot(1, 3, 1)
+                            plt.title("Original Noisy Data")
+                            plt.imshow(cropped, origin='lower', cmap='viridis')
+                            plt.colorbar()
+
+                            plt.subplot(1, 3, 2)
+                            plt.title("Fitted Model Image")
+                            plt.imshow(fitted_model(x, y), origin='lower', cmap='viridis')
+                            plt.colorbar()
+
+                            plt.subplot(1, 3, 3)
+                            plt.title("Residuals (Data - Model)")
+                            plt.imshow(cropped - fitted_model(x, y), origin='lower', cmap='bwr')
+                            plt.colorbar()
+                            plt.tight_layout()
+                            plt.show()
+                            stop
+            if full_images:
+                #residual per image here, since the images are not kept
+                modims.append(modim)
+                resims.append(im_cal-modim)
+
+        if full_images:
+            modims, resims = np.array(modims), np.array(resims)
+        else:
+            modims, resims = None, None
+        return fitarr,modims,resims,spotim_arr,modim_arr,resim_arr
+
+
+    def fit_gauss_spots(self,calims,posarr,cropsize=10,show_plots=False,cut=0.1,full_images=True):
+        """
+        Gaussian fit of every spot. full_images=False skips the full-detector model
+        image per wavelength and the residual stack (modims, resims, returned as
+        None): they are only written as debug files, and for long scans they are
+        the largest arrays in the run (two float64 2048 x 2048 images per master).
+        The fits and the cropped spot/model/residual arrays are unchanged.
+        """
         fitarr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],6])
         fitarr[:,:,:,:] = np.nan
         modims = []
@@ -2303,7 +2912,7 @@ class ProcessMonochrom(BasePrimitive):
         resim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
         for ll in range(len(calims)):
             self.logger.info("image "+str(ll)+" of "+str(len(calims)))
-            modim = np.zeros(calims[ll].shape)
+            modim = np.zeros(calims[ll].shape) if full_images else None
             for lensx in range(posarr.shape[2]):
                         for lensy in range(posarr.shape[1]):
                             xc,xs,xe,yc,ys,ye,intens = posarr[ll,lensy,lensx]
@@ -2325,7 +2934,8 @@ class ProcessMonochrom(BasePrimitive):
                                 y, x = np.mgrid[:(ye-ys), :(xe-xs)]
                                 fitted_model = fitter(initial_guess, x, y, cropped)
 
-                                modim[ys:ye,xs:xe]+=fitted_model(x,y)
+                                if full_images:
+                                    modim[ys:ye,xs:xe]+=fitted_model(x,y)
                                 modim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = fitted_model(x,y)
                                 resim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = cropped - fitted_model(x,y)
                                 fitarr[ll,lensy,lensx] = [fitted_model.amplitude.value,
@@ -2364,9 +2974,13 @@ class ProcessMonochrom(BasePrimitive):
                                     plt.tight_layout()
                                     plt.show()
                                     stop
-            modims.append(modim)
+            if full_images:
+                modims.append(modim)
 
-        resims = calims-modims
+        if full_images:
+            resims = calims-modims
+        else:
+            modims, resims = None, None
         return fitarr,modims,resims,spotim_arr,modim_arr,resim_arr
 
 
@@ -2624,6 +3238,253 @@ class ProcessMonochrom(BasePrimitive):
         except Exception as e:
             self.logger.info(f"resolution plot failed: {e}")
 
+    def estimate_spectral_resolution_AnK(self, ank, lams, mono_fwhm_nm=0.0,
+                                         fwhm_pix_range=(0.5, 8.0)):
+        """
+        Spectral resolution R = lambda / FWHM_lambda from the Anderson & King
+        ePSFs (AnK_lowres_psfs), one value per wavelength and field region.
+
+        The FWHM along the trace is that of the ePSF's marginal profile along
+        the region's median trace direction (the line spread function an
+        extraction summing across the trace sees), so no profile shape is
+        assumed. It is converted to wavelength with the region's median local
+        dispersion (px/um, from the same per-lenslet trace fits as the Gaussian
+        estimate):
+            FWHM_lambda = FWHM_along / (ds/dlambda),  R = lambda / FWHM_lambda.
+        mono_fwhm_nm > 0 removes the monochromator line width in quadrature
+        (otherwise R is a lower limit). R_xdisp uses the ePSF FWHM across the
+        trace instead (round-spot assumption, independent of the line width).
+        R_gauss, R_xdisp_gauss are the same quantities from the median
+        Gaussian-fit FWHMs of the spots that went into each ePSF, for a
+        like-for-like comparison.
+
+        Args:
+            ank: dict from AnK_lowres_psfs (or read_AnK_lowres_psfs)
+            lams: (nlam,) wavelengths in um
+            mono_fwhm_nm: monochromator line FWHM in nm (0 = no correction)
+            fwhm_pix_range: accepted range of ePSF FWHMs (px)
+
+        Returns:
+            dict of (nlam, nry, nrx) arrays: R, fwhm_nm, fwhm_disp_pix,
+            R_xdisp, fwhm_xdisp_nm, fwhm_xdisp_pix, disp_px_per_um, nspots,
+            R_gauss, R_xdisp_gauss; per-wavelength summaries over regions
+            R_pct, R_xdisp_pct (nlam, 3) = 16/50/84th percentiles, R_gauss_med,
+            R_xdisp_gauss_med (nlam,), nspots, nspots_xdisp (nlam,, spots in
+            the regions with a valid R) and nreg, nreg_xdisp (nlam,, regions
+            with a valid R); and region_y, region_x, xdet, ydet passed through.
+        """
+        lams = np.asarray(lams, dtype=float)
+        fa = np.array(ank['fwhm_along'], dtype=float)
+        fx = np.array(ank['fwhm_across'], dtype=float)
+        ga = np.array(ank['gauss_along'], dtype=float)
+        gx = np.array(ank['gauss_across'], dtype=float)
+        disp = np.array(ank['disp'], dtype=float)
+        nsp = np.asarray(ank['nspots'])
+        nl = fa.shape[0]
+        lam3 = lams[:, None, None]
+        lo, hi = fwhm_pix_range
+        with np.errstate(invalid='ignore', divide='ignore'):
+            base = np.isfinite(disp) & (disp > 0) & (nsp > 0)
+            ok = base & np.isfinite(fa) & (fa > lo) & (fa < hi)
+            ok_x = base & np.isfinite(fx) & (fx > lo) & (fx < hi)
+
+            def to_nm(f, mono):
+                nm = f / disp * 1e3
+                if mono and mono > 0:
+                    nm = np.sqrt(nm**2 - mono**2)
+                return nm
+
+            fwhm_nm = to_nm(fa, mono_fwhm_nm)
+            ok &= np.isfinite(fwhm_nm)
+            fwhm_nm_x = to_nm(fx, 0.0)
+            gauss_nm = to_nm(ga, mono_fwhm_nm)
+            gauss_nm_x = to_nm(gx, 0.0)
+            fa[~ok] = np.nan; fwhm_nm[~ok] = np.nan
+            fx[~ok_x] = np.nan; fwhm_nm_x[~ok_x] = np.nan
+            gauss_nm[~ok] = np.nan; gauss_nm_x[~ok_x] = np.nan
+            disp[~(ok | ok_x)] = np.nan
+            R = lam3 * 1e3 / fwhm_nm
+            R_x = lam3 * 1e3 / fwhm_nm_x
+            R_g = lam3 * 1e3 / gauss_nm
+            R_gx = lam3 * 1e3 / gauss_nm_x
+
+        def pct(arr, mask):
+            p = np.full((nl, 3), np.nan)
+            m = np.full(nl, np.nan)
+            nreg = mask.reshape(nl, -1).sum(axis=1)
+            nspots = np.where(mask, nsp, 0).reshape(nl, -1).sum(axis=1)
+            for k in range(nl):
+                if nreg[k] > 0:
+                    p[k] = np.nanpercentile(arr[k], [16, 50, 84])
+            return p, nspots, nreg
+
+        R_pct, nspots, nreg = pct(R, ok)
+        R_x_pct, nspots_x, nreg_x = pct(R_x, ok_x)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            R_g_med = np.nanmedian(R_g.reshape(nl, -1), axis=1)
+            R_gx_med = np.nanmedian(R_gx.reshape(nl, -1), axis=1)
+        out = dict(R=R, fwhm_nm=fwhm_nm, fwhm_disp_pix=fa,
+                   R_xdisp=R_x, fwhm_xdisp_nm=fwhm_nm_x, fwhm_xdisp_pix=fx,
+                   disp_px_per_um=disp, nspots_map=np.where(ok | ok_x, nsp, 0),
+                   R_gauss=R_g, R_xdisp_gauss=R_gx,
+                   R_pct=R_pct, R_xdisp_pct=R_x_pct,
+                   R_gauss_med=R_g_med, R_xdisp_gauss_med=R_gx_med,
+                   nspots=nspots, nspots_xdisp=nspots_x, nreg=nreg, nreg_xdisp=nreg_x)
+        for k in ['region_y', 'region_x', 'xdet', 'ydet']:
+            if k in ank:
+                out[k] = np.asarray(ank[k])
+        return out
+
+    def write_spectral_resolution_AnK(self, res, lams, scmode, output_dir, plot_dir,
+                                      mono_fwhm_nm=0.0, gauss_res=None):
+        """Save the estimate_spectral_resolution_AnK outputs to
+        {scmode}_AnK_resolution.fits and {scmode}_AnK_resolution.png, and log a
+        per-wavelength table. The FITS layout follows {scmode}_resolution.fits
+        (Gaussian fits, per lenslet) but the image axes are (lam, region y,
+        region x); the SUMMARY table has the same columns plus the region
+        counts and the Gaussian-fit R of the same spots. gauss_res (the
+        estimate_spectral_resolution dict) adds the all-lenslet Gaussian R to
+        the plot."""
+        lams = np.asarray(lams, dtype=float)
+        nl, nry, nrx = res['R'].shape
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            medr = float(np.nanmedian(res['R']))
+            medrx = float(np.nanmedian(res['R_xdisp']))
+            medrg = float(np.nanmedian(res['R_gauss']))
+        hdr = pyfits.Header()
+        hdr['IFSMODE'] = scmode
+        hdr['MEDR'] = (medr, 'median R (A&K ePSF along-trace FWHM)')
+        hdr['MEDRX'] = (medrx, 'median R (A&K ePSF cross-trace FWHM)')
+        hdr['MEDRG'] = (medrg, 'median R (Gaussian fits, same spots)')
+        hdr['MONOFWHM'] = (float(mono_fwhm_nm or 0.0),
+                           'mono line FWHM removed in quadrature (nm)')
+        hdr['NREGY'] = nry; hdr['NREGX'] = nrx
+        hdr['COMMENT'] = 'R = lambda / FWHM_lambda from Anderson & King ePSFs, one per'
+        hdr['COMMENT'] = 'wavelength and field region; axes (lam, region y, region x).'
+        hdr['COMMENT'] = 'FWHM = marginal ePSF profile along the median trace direction.'
+        hdr['COMMENT'] = 'R_XDISP uses the FWHM perpendicular to the trace instead'
+        hdr['COMMENT'] = '(round-spot assumption; independent of the mono line width).'
+        if not mono_fwhm_nm:
+            hdr['COMMENT'] = 'Monochromator width not removed: R is a lower limit.'
+        hdus = [pyfits.PrimaryHDU(res['R'].astype(np.float32), header=hdr)]
+        for name, key, unit in [('FWHM_NM', 'fwhm_nm', 'nm'),
+                                ('FWHM_DISP_PIX', 'fwhm_disp_pix', 'pix'),
+                                ('R_XDISP', 'R_xdisp', ''),
+                                ('FWHM_XDISP_NM', 'fwhm_xdisp_nm', 'nm'),
+                                ('FWHM_XDISP_PIX', 'fwhm_xdisp_pix', 'pix'),
+                                ('DISPERSION', 'disp_px_per_um', 'pix/um'),
+                                ('R_GAUSS', 'R_gauss', ''),
+                                ('R_XDISP_GAUSS', 'R_xdisp_gauss', ''),
+                                ('NSPOTS', 'nspots_map', '')]:
+            h = pyfits.ImageHDU(np.asarray(res[key]).astype(np.float32), name=name)
+            h.header['BUNIT'] = unit
+            hdus.append(h)
+        cols = [pyfits.Column(name='LAMBDA', format='D', unit='um', array=lams),
+                pyfits.Column(name='R_P16', format='D', array=res['R_pct'][:, 0]),
+                pyfits.Column(name='R_MED', format='D', array=res['R_pct'][:, 1]),
+                pyfits.Column(name='R_P84', format='D', array=res['R_pct'][:, 2]),
+                pyfits.Column(name='NSPOTS', format='J', array=res['nspots']),
+                pyfits.Column(name='NREG', format='J', array=res['nreg']),
+                pyfits.Column(name='RX_P16', format='D', array=res['R_xdisp_pct'][:, 0]),
+                pyfits.Column(name='RX_MED', format='D', array=res['R_xdisp_pct'][:, 1]),
+                pyfits.Column(name='RX_P84', format='D', array=res['R_xdisp_pct'][:, 2]),
+                pyfits.Column(name='NSPOTS_X', format='J', array=res['nspots_xdisp']),
+                pyfits.Column(name='NREG_X', format='J', array=res['nreg_xdisp']),
+                pyfits.Column(name='RG_MED', format='D', array=res['R_gauss_med']),
+                pyfits.Column(name='RGX_MED', format='D', array=res['R_xdisp_gauss_med'])]
+        hdus.append(pyfits.BinTableHDU.from_columns(cols, name='SUMMARY'))
+        if 'region_y' in res and 'region_x' in res:
+            ry, rx = np.asarray(res['region_y']), np.asarray(res['region_x'])
+            RY, RX = np.meshgrid(np.arange(nry), np.arange(nrx), indexing='ij')
+            rcols = [pyfits.Column(name='REG_Y', format='J', array=RY.ravel()),
+                     pyfits.Column(name='REG_X', format='J', array=RX.ravel()),
+                     pyfits.Column(name='LENS_Y0', format='J', array=ry[RY.ravel(), 0]),
+                     pyfits.Column(name='LENS_Y1', format='J', array=ry[RY.ravel(), 1]),
+                     pyfits.Column(name='LENS_X0', format='J', array=rx[RX.ravel(), 0]),
+                     pyfits.Column(name='LENS_X1', format='J', array=rx[RX.ravel(), 1])]
+            hdus.append(pyfits.BinTableHDU.from_columns(rcols, name='REGIONS'))
+        pyfits.HDUList(hdus).writeto(output_dir + '/' + scmode + '_AnK_resolution.fits',
+                                     overwrite=True)
+
+        self.logger.info(f"{scmode} spectral resolution from A&K ePSFs: median R = {medr:.1f} "
+                         f"(along trace), {medrx:.1f} (cross trace); Gaussian fits of the "
+                         f"same spots: {medrg:.1f}")
+        self.logger.info("  lambda(um) | along trace: R_p16  R_med  R_p84 | cross trace: "
+                         "R_p16  R_med  R_p84 | Gauss R_med | nreg")
+        for k in range(nl):
+            p, q = res['R_pct'][k], res['R_xdisp_pct'][k]
+            self.logger.info(f"  {lams[k]:9.4f} | {p[0]:12.1f} {p[1]:6.1f} {p[2]:6.1f} "
+                             f"| {q[0]:12.1f} {q[1]:6.1f} {q[2]:6.1f} "
+                             f"| {res['R_gauss_med'][k]:11.1f} | {res['nreg'][k]:4d}")
+
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)
+                rmap = np.nanmedian(res['R'], axis=0)
+                rmap_x = np.nanmedian(res['R_xdisp'], axis=0)
+                rat = res['R'] / res['R_gauss']
+                rat_x = res['R_xdisp'] / res['R_xdisp_gauss']
+                rat_pct = np.nanpercentile(rat.reshape(nl, -1), [16, 50, 84], axis=1)
+                ratx_pct = np.nanpercentile(rat_x.reshape(nl, -1), [16, 50, 84], axis=1)
+            fig, ax = plt.subplots(1, 4, figsize=(22, 4.8))
+            for pc, lab, col in [(res['R_pct'], 'A&K along trace', 'C0'),
+                                 (res['R_xdisp_pct'], 'A&K cross trace', 'C1')]:
+                ax[0].fill_between(lams, pc[:, 0], pc[:, 2], alpha=0.25, color=col)
+                ax[0].plot(lams, pc[:, 1], 'o-', ms=3, color=col,
+                           label=lab + ' (median, 16-84% of regions)')
+            if gauss_res is not None:
+                ax[0].plot(lams, gauss_res['R_pct'][:, 1], '--', color='C0',
+                           label='Gaussian along (all lenslets)')
+                ax[0].plot(lams, gauss_res['R_xdisp_pct'][:, 1], '--', color='C1',
+                           label='Gaussian cross (all lenslets)')
+            else:
+                ax[0].plot(lams, res['R_gauss_med'], '--', color='C0',
+                           label='Gaussian along (same spots)')
+                ax[0].plot(lams, res['R_xdisp_gauss_med'], '--', color='C1',
+                           label='Gaussian cross (same spots)')
+            ax[0].set_xlabel('wavelength (um)')
+            ax[0].set_ylabel('R = lambda / FWHM')
+            ax[0].set_title(scmode + ' A&K ePSF' +
+                            (' (mono width not removed)' if not mono_fwhm_nm else ''))
+            ax[0].legend(fontsize=8)
+            for a, m, t in [(ax[1], rmap, 'median R per region (A&K, along trace)'),
+                            (ax[2], rmap_x, 'median R per region (A&K, cross trace)')]:
+                # own robust colour range per map (along and across can differ a lot, e.g. Ls)
+                fm = m[np.isfinite(m)]
+                if fm.size:
+                    mid = np.median(fm)
+                    sc = max(1.4826 * np.median(np.abs(fm - mid)), 0.02 * mid)
+                    vmin, vmax = mid - 4 * sc, mid + 4 * sc
+                else:
+                    vmin, vmax = 0, 1
+                im = a.imshow(m, origin='lower', vmin=vmin, vmax=vmax, cmap='viridis')
+                a.set_xticks(range(nrx)); a.set_yticks(range(nry))
+                for j in range(nry):
+                    for i in range(nrx):
+                        if np.isfinite(m[j, i]):
+                            a.text(i, j, f'{m[j, i]:.0f}', ha='center', va='center',
+                                   fontsize=8, color='w')
+                a.set_title(t)
+                a.set_xlabel('region x (lenslet x bands)')
+                a.set_ylabel('region y (lenslet y bands)')
+                fig.colorbar(im, ax=a)
+            for pc, lab, col in [(rat_pct, 'along trace', 'C0'), (ratx_pct, 'cross trace', 'C1')]:
+                ax[3].fill_between(lams, pc[0], pc[2], alpha=0.25, color=col)
+                ax[3].plot(lams, pc[1], 'o-', ms=3, color=col, label=lab)
+            ax[3].axhline(1, color='k', lw=0.8)
+            ax[3].set_xlabel('wavelength (um)')
+            ax[3].set_ylabel('R(A&K) / R(Gaussian), same spots')
+            ax[3].set_title('A&K vs Gaussian (median, 16-84% of regions)')
+            ax[3].legend(fontsize=8)
+            fig.tight_layout()
+            os.makedirs(plot_dir, exist_ok=True)
+            fig.savefig(os.path.join(plot_dir, scmode + '_AnK_resolution.png'), dpi=120)
+            plt.close(fig)
+        except Exception as e:
+            self.logger.info(f"A&K resolution plot failed: {e}")
+
 
     def gen_sparse_inds(self,xs,ys,xe,ye,ypix=2048,xpix=2048):
         """
@@ -2777,7 +3638,9 @@ class ProcessMonochrom(BasePrimitive):
         Function to crop lenslet PSFs down and then only select pixels above
         a certain flux threshold
         """
-        cropped = image[ys:ye,xs:xe]
+        #a copy: cutting and normalising a view would overwrite the input image
+        #(it used to, so the stack passed on to make_lsf_lflat had unit-sum spots)
+        cropped = np.array(image[ys:ye,xs:xe], dtype=float)
 
         cropped[np.where(cropped < cut*np.max(cropped))]=0
         cropped/=np.sum(cropped)
@@ -2814,10 +3677,26 @@ class ProcessMonochrom(BasePrimitive):
         return matrowinds, matcolinds, matvals
 
 
+    def spot_box_vals(self,spots,ll,lensy,lensx,xs,xe,ys,ye,cut=0.05,method='optimal'):
+        """
+        crop_sparse_vals for one lenslet at one wavelength, from either source:
+          spots: the spot crops from make_posarr, (nlam, ny, nx, crop, crop); the box
+                 (xs:xe, ys:ye) from posarr sits at [:ye-ys, :xe-xs] of each crop
+                 (smaller than the crop where it is clipped at the detector edge), or
+          spots: full background-subtracted images, (nlam, npix_y, npix_x).
+        Both give the same values, since make_posarr cuts its crops from the same
+        posarr box and applies the same flux cut.
+        """
+        if np.ndim(spots) == 5:
+            return self.crop_sparse_vals(spots[ll,lensy,lensx],0,xe-xs,0,ye-ys,cut=cut,method=method)
+        return self.crop_sparse_vals(spots[ll],xs,xe,ys,ye,cut=cut,method=method)
+
     def gen_rectmat_inds(self,calims,posarr,cut=0.05,method='optimal'):
 
         """
-        Function to generate row and column indices for sparse matrix
+        Function to generate row and column indices for sparse matrix.
+        calims: the spot crops from make_posarr (nlam, ny, nx, crop, crop), or the
+        full images (nlam, npix_y, npix_x); see spot_box_vals
         """
 
         matrowinds = []
@@ -2836,7 +3715,7 @@ class ProcessMonochrom(BasePrimitive):
                         ys = int(ys)
                         ye = int(ye)
                         flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
-                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye,cut=cut,method=method)
+                        vals = self.spot_box_vals(calims,ll,lensy,lensx,xs,xe,ys,ye,cut=cut,method=method)
                         for i in range(len(vals)):
                             if vals[i] > 0:
                                 matvals.append(vals[i])
@@ -2845,23 +3724,32 @@ class ProcessMonochrom(BasePrimitive):
                                 matrowinds.append(lensx+lensy*posarr.shape[2]+ll*posarr.shape[1]*posarr.shape[2])
         return matrowinds, matcolinds, matvals
 
+    def rectmat_npix(self,calims,npix):
+        """Detector pixels per frame: the image size if calims are full images,
+        otherwise npix (spot crops or no images at all)."""
+        if calims is not None and np.ndim(calims) == 3:
+            return int(np.prod(np.shape(calims)[1:]))
+        return int(np.prod(npix))
 
-    def gen_QL_rectmat(self,calims,posarr,cut=0.05,method='optimal',interp=False):
+    def gen_QL_rectmat(self,calims,posarr,cut=0.05,method='optimal',interp=False,npix=(2048,2048)):
         """
-        Function to generate rectmat from cube of cal unit images.
+        Function to generate rectmat from the cal unit spots: the spot crops from
+        make_posarr (as _perform passes) or the full images (see spot_box_vals).
         """
 
         matrowinds,matcolinds,matvals = self.gen_rectmat_inds(calims,posarr,cut=cut,method=method)
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(posarr.shape[:3]),np.prod(calims[0].shape)))
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(posarr.shape[:3]),self.rectmat_npix(calims,npix)))
         return rmat
 
-    def gen_QL_rectmat_interpd(self,calims,interp_arr,cut=0.05,method='optimal',interp=False):
+    def gen_QL_rectmat_interpd(self,calims,interp_arr,cut=0.05,method='optimal',interp=False,npix=(2048,2048)):
         """
-        Function to generate rectmat from cube of cal unit images.
+        Function to generate rectmat from the interpolated Gaussian spot fits. No
+        images are needed: calims (None, or images whose size sets the detector
+        size) is kept only for older callers.
         """
 
         matrowinds,matcolinds,matvals = self.gen_rectmat_inds_interpd(interp_arr,cut=cut,method=method)
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(interp_arr.shape[:3]),np.prod(calims[0].shape)))
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(interp_arr.shape[:3]),self.rectmat_npix(calims,npix)))
         return rmat
 
 
@@ -2871,6 +3759,7 @@ class ProcessMonochrom(BasePrimitive):
         """
         Function to generate row and column indices for sparse matrix
         for all 108 x 108 lenslets and wavelengths.
+        calims: spot crops or full images, as in gen_rectmat_inds
         """
 
         matrowinds = []
@@ -2888,7 +3777,7 @@ class ProcessMonochrom(BasePrimitive):
                         ys = int(ys)
                         ye = int(ye)
                         flatinds = self.gen_sparse_inds(xs,ys,xe,ye)
-                        vals = self.crop_sparse_vals(calims[ll],xs,xe,ys,ye,cut=cut,method='optimal')
+                        vals = self.spot_box_vals(calims,ll,lensy,lensx,xs,xe,ys,ye,cut=cut,method='optimal')
                         for i in range(len(vals)):
                             if vals[i] > 0:
                                 matvals.append(vals[i])
@@ -2920,22 +3809,25 @@ class ProcessMonochrom(BasePrimitive):
 
 
 
-    def gen_C2_rectmat(self,calims,posarr,cut=0.05):
+    def gen_C2_rectmat(self,calims,posarr,cut=0.05,npix=(2048,2048)):
         """
-        Function to generate rectmat from cube of cal unit images.
+        Function to generate rectmat from the cal unit spots: the spot crops from
+        make_posarr (as _perform passes) or the full images (see spot_box_vals).
         """
 
         matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds(calims,posarr,cut=cut)
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(calims[0].shape),np.prod(posarr.shape[:3])))
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(self.rectmat_npix(calims,npix),np.prod(posarr.shape[:3])))
         return rmat
 
-    def gen_C2_rectmat_interpd(self,calims,interp_arr,cut=0.05):
+    def gen_C2_rectmat_interpd(self,calims,interp_arr,cut=0.05,npix=(2048,2048)):
         """
-        Function to generate rectmat from cube of cal unit images.
+        Function to generate rectmat from the interpolated Gaussian spot fits. No
+        images are needed: calims (None, or images whose size sets the detector
+        size) is kept only for older callers.
         """
 
         matrowinds,matcolinds,matvals = self.gen_c2_rectmat_inds_interpd(interp_arr,cut=cut)
-        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(np.prod(calims[0].shape),np.prod(interp_arr.shape[:3]),))
+        rmat = sparse.csr_matrix((matvals,(matrowinds,matcolinds)),shape=(self.rectmat_npix(calims,npix),np.prod(interp_arr.shape[:3]),))
         return rmat
 
     def medres_row_slots(self,x,nslot=17,nscol=6,xpix=2048):
@@ -3256,6 +4148,11 @@ class ProcessMonochrom(BasePrimitive):
         if scmode == 'MedRes-L':
             self.lmin = 2.9
             self.lmax = 4.15
+            #IFS L filter trace model (medres_L_20261117); interpolated rectmat grid
+            #inside the scanned 2.888-4.162 um so its ends are not extrapolated
+            self.mfilt = 'L'
+            self.lmin_i = 2.89
+            self.lmax_i = 4.16
         if scmode == 'LowRes-M':
             self.lmin = 4.5
             self.lmax = 5.2
@@ -3271,11 +4168,30 @@ class ProcessMonochrom(BasePrimitive):
 
         return
 
-    def make_lsf_lflat(self,rmat,ims_cal,lams,ny,nx):
+    def load_calim(self,fname,meanim):
+        """One background-subtracted (and optionally destriped) master, as in
+        find_all_spots_names."""
+        im_cal = self.monochrom_bksub_sing(pyfits.getdata(fname,memmap=False),meanim)
+        if self.config.instrument.apply_destripe==True:
+            im_cal = self.masked_row_destripe(im_cal)[0]
+        return im_cal
+
+    def make_lsf_lflat(self,rmat,ims_cal,lams,ny,nx,meanim=None):
+        """
+        Extract every master with rmat: lsf[ii] is the cube from master ii, and the
+        lenslet flat is the median over ii of its own wavelength slice.
+
+        ims_cal: the master filenames (with meanim, the mean master for the
+        background subtraction), loaded one at a time, or the images themselves.
+        Each template reads master ii along the whole trace, not just inside the
+        spot's own crop, so the spot crops are not enough here.
+        """
+        names = np.ndim(ims_cal) == 1
         lsfcube = []
         lensflatcube = []
         for ii in range(len(ims_cal)):
-            scube = np.array(rmat*ims_cal[ii].flatten()).reshape([len(lams),ny,nx])
+            im = self.load_calim(ims_cal[ii],meanim) if names else ims_cal[ii]
+            scube = np.array(rmat*np.ravel(im)).reshape([len(lams),ny,nx])
             scube_lsf = scube
             #lflat = np.max(scube,axis=0)
             lflat = scube[ii]
@@ -3313,6 +4229,18 @@ class ProcessMonochrom(BasePrimitive):
                              "not making rectification matrices.")
             return self.action.args
 
+        #intermediate files (background-subtracted stack, spot crops, spot model and
+        #residual images) are only written with save_debug_files = True; the
+        #calibration products (rectmats, LSFs, lflats, spot fits, wavelengths,
+        #positions, resolution and ePSF tables) are always written
+        save_debug = bool(getattr(self.config.instrument, 'save_debug_files', False) or False)
+        def write_debug(name, data):
+            if save_debug:
+                pyfits.writeto(output_dir+'/'+name, np.array(data), overwrite=True)
+        if not save_debug:
+            self.logger.info("save_debug_files = False: not writing intermediate files "
+                             "(calim_stack, spot crops, spot model/residual images)")
+
         self.logger.info("############ started Processing Monochromator Images #############")
         df = fits_headers_to_dataframe(output_dir,pattern="*mcalunit.fits")
         if not (df.empty or ("IFSMODE" in df.columns)):
@@ -3331,6 +4259,17 @@ class ProcessMonochrom(BasePrimitive):
                        'MedRes-K','MedRes-L','MedRes-M']:
             self.scmode=scmode
             self.logger.info("Parsing files for "+str(self.scmode))
+
+            imnames, lams, mean = self.get_filenames_and_mean(df,scmode,output_dir)
+            wave_range = getattr(self.config.instrument, 'mono_wave_range', None)
+            imnames, lams = self.apply_wave_range_names(imnames, lams, scmode, wave_range)
+            exclude_waves = getattr(self.config.instrument, 'mono_exclude_waves', None)
+            imnames, lams = self.apply_exclude_waves_names(imnames, lams, scmode, exclude_waves)
+
+
+
+            """
+            commenting out during wavelength restructure!!
             ims, lams = self.parse_files(df,scmode,output_dir)
             #optional: only use masters inside a wavelength range (key may be absent)
             wave_range = getattr(self.config.instrument, 'mono_wave_range', None)
@@ -3338,16 +4277,25 @@ class ProcessMonochrom(BasePrimitive):
             #optional: drop masters at single wavelengths (key may be absent)
             exclude_waves = getattr(self.config.instrument, 'mono_exclude_waves', None)
             ims, lams = self.apply_exclude_waves(ims, lams, scmode, exclude_waves)
+            """
 
-            if len(ims) > 0:
+
+            if len(imnames) > 0:
                 self.set_lamlimits(scmode)
+
+
+                """
+                commenting out during wavelength restructure!!
                 ims_cal_tmp = self.monochrom_bksub(ims)
                 if self.config.instrument.apply_destripe==True:
                     ims_cal = np.array([self.masked_row_destripe(im)[0] for im in ims_cal_tmp])
                 else:
                     ims_cal = ims_cal_tmp
-                pyfits.writeto(output_dir+'/'+scmode+'_calim_stack.fits',ims_cal,overwrite=True)
+                write_debug(scmode+'_calim_stack.fits',ims_cal)
                 self.logger.info("done loading images for "+str(self.scmode))
+                """
+
+
                 if scmode.split('-')[0] == 'LowRes':
                     csize = 8
                     self.logger.info("finding spots")
@@ -3371,12 +4319,18 @@ class ProcessMonochrom(BasePrimitive):
 
 
                     pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
-                    pyfits.writeto(output_dir+'/'+scmode+'_cropped_spotpsf_arr.fits',np.array(spots),overwrite=True)
+                    write_debug(scmode+'_cropped_spotpsf_arr.fits',spots)
 
 
                 if scmode.split('-')[0] == 'MedRes':
                     csize=16
+
+                    """
+                    commenting out during wavelength restructure
                     spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=70.0,sigma=1.2,medres=True,mfilt=self.mfilt)
+                    """
+
+                    spots = self.find_all_spots_names(imnames,lams,mean,plot_im=False,thresh=70.0,sigma=1.2,medres=True,mfilt=self.mfilt)
                     #follow each spot along its trace model (y moves ~3.6 px/nm in K), so steps
                     #of any size (3.5 nm steps, gaps left by mono_exclude_waves) track the same;
                     #6 px covers the model error (<3 px) and is well below the 19 px pitch
@@ -3385,23 +4339,33 @@ class ProcessMonochrom(BasePrimitive):
                     spot_tracks = self.track_sequentially(spots, max_match_distance=6,
                                                           lams=lams, dispersion=disp)
                     self.logger.info("removing duplicates and silos")
-                    spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,lmin=self.lmin,lmax=self.lmax,medres=True)
-                    avgs = self.find_avg_spotpos_model(spot_tracks_u,self.lmin,self.lmax,medres=True,show_plots=False)
+                    #mfilt picks the trace model (defaults are K band)
+                    spot_tracks_u = self.remove_spot_dups(spot_tracks,lams,lmin=self.lmin,lmax=self.lmax,medres=True,mfilt=self.mfilt)
+                    avgs = self.find_avg_spotpos_model(spot_tracks_u,self.lmin,self.lmax,medres=True,mfilt=self.mfilt,show_plots=False)
                     avgs_new,tracks_new = self.remove_silos(avgs,spot_tracks_u,medres=True,show_plots=False)
                     self.logger.info("registering lenslets to array")
                     final_posns = self.get_medres_lensarr_xy(avgs_new,show_plots=False)
                     fluxcut = self.config.instrument.rectmat_fluxcut
-                    posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=csize,cut=fluxcut)
+
+
+
+                    #commenting out during wavelength restructure
+                    #posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=True,cropsize=csize,cut=fluxcut)
+                    self.logger.info("making posarr")
+                    posarr, spots = self.make_posarr_names(imnames,mean,final_posns,tracks_new,show_plots=False,medres=True,cropsize=csize,cut=fluxcut)
+
                     pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
-                    pyfits.writeto(output_dir+'/'+scmode+'_cropped_spotpsf_arr.fits',np.array(spots),overwrite=True)
+                    write_debug(scmode+'_cropped_spotpsf_arr.fits',spots)
 
 
                 centroids = self.get_centroids(spots)
                 pyfits.writeto(output_dir+'/'+scmode+'_centroids.fits',np.array(centroids),overwrite=True)
                 pyfits.writeto(output_dir+'/'+scmode+'_lams.fits',lams,overwrite=True)
                 #stop
+
+                #the plot shows only the middle master (lams are sorted), so load just that one
                 diagnostic_path = mono_basic.plot_rectmat_centroid_diagnostics(
-                    ims_cal=ims_cal,
+                    ims_cal=self.load_calim(imnames[len(imnames)//2],mean),
                     posarr=posarr,
                     centroids=centroids,
                     lams=lams,
@@ -3411,36 +4375,27 @@ class ProcessMonochrom(BasePrimitive):
                     show=False)
                 #ank_mods, ank_resids, ank_modims, ank_resims = self.AnK_spot_model(spots, posarr, centroids, self.nx, self.ny, 3, npix=13)
 
-                oversamp=2
-                ank_mods, ank_resids, ank_modims, ank_resims, ank_mods_sym, ank_resids_sym, ank_modims_sym, ank_resims_sym = self.AnK_spot_model_2(spots, centroids, self.ny, self.nx, oversamp, ims_cal, posarr)
-
-                pyfits.writeto(output_dir+'/'+
-                                scmode+'_ank_modarr.fits',np.array(ank_mods),
-                                overwrite=True)
-                pyfits.writeto(output_dir+'/'+
-                                scmode+'_ank_resarr.fits',np.array(ank_resids),
-                                overwrite=True)
-                pyfits.writeto(output_dir+'/'+
-                                scmode+'_ank_modims.fits',np.array(ank_modims),
-                                overwrite=True)
-                pyfits.writeto(output_dir+'/'+
-                                scmode+'_ank_resims.fits',np.array(ank_resims),
-                                overwrite=True)
-                #stop
+                #A&K spot model: only its saved model/residual files use it, so it is
+                #only computed when they are written
+                if save_debug:
+                    oversamp=2
+                    ank_mods, ank_resids, ank_modims, ank_resims, ank_mods_sym, ank_resids_sym, ank_modims_sym, ank_resims_sym = self.AnK_spot_model_2(spots, centroids, self.ny, self.nx, oversamp, ims_cal, posarr)
+                    write_debug(scmode+'_ank_modarr.fits',ank_mods)
+                    write_debug(scmode+'_ank_resarr.fits',ank_resids)
+                    write_debug(scmode+'_ank_modims.fits',ank_modims)
+                    write_debug(scmode+'_ank_resims.fits',ank_resims)
                 self.logger.info("fitting spot PSFs for interpolated rectmats")
-                fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots(ims_cal,posarr,show_plots=False,cropsize=csize,cut=fluxcut)
+                #full-detector model/residual images per wavelength only feed the debug files
+
+
+                #fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots(ims_cal,posarr,show_plots=False,cropsize=csize,cut=fluxcut,full_images=save_debug)
+                fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots_names(imnames,mean,posarr,show_plots=False,cropsize=csize,cut=fluxcut,full_images=save_debug)
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_gauss_spotpars.fits',np.array(fitarr),overwrite=True)
-                pyfits.writeto(output_dir+'/'+
-                                scmode+'_gauss_mod_detims.fits',np.array(modims),overwrite=True)
-                pyfits.writeto(output_dir+'/'+
-                                scmode+'_gauss_res_detims.fits',np.array(resims),overwrite=True)
-                pyfits.writeto(output_dir+'/'+
-                                scmode+'_cropped_spotgauss_arr.fits',np.array(modim_arr),
-                                overwrite=True)
-                pyfits.writeto(output_dir+'/'+
-                                scmode+'_cropped_spotgaussres_arr.fits',np.array(resim_arr),
-                                overwrite=True)
+                write_debug(scmode+'_gauss_mod_detims.fits',modims)
+                write_debug(scmode+'_gauss_res_detims.fits',resims)
+                write_debug(scmode+'_cropped_spotgauss_arr.fits',modim_arr)
+                write_debug(scmode+'_cropped_spotgaussres_arr.fits',resim_arr)
 
                 self.logger.info("estimating spectral resolution from spot FWHMs")
                 mono_fwhm_nm = float(self.config.instrument.mono_fwhm_nm or 0.0)
@@ -3453,21 +4408,28 @@ class ProcessMonochrom(BasePrimitive):
                 # Anderson & King ePSFs per wavelength and field region (LowRes),
                 # for profile-independent FWHMs; on unless the config turns it off
                 ank_flag = self.config.instrument.lowres_ank_epsf
+                ank_res = None
                 if scmode.split('-')[0] == 'LowRes' and (ank_flag is None or ank_flag):
                     self.logger.info("building Anderson & King ePSFs for LowRes spots")
-                    nreg = int(self.config.instrument.lowres_ank_nregions or 3)
+                    nreg = int(self.config.instrument.lowres_ank_nregions or 5)
                     ank_res = self.AnK_lowres_psfs(ims_cal, np.array(fitarr), lams, nreg=nreg)
                     self.write_AnK_lowres_psfs(ank_res, lams, scmode, output_dir, plot_dir)
+                    self.logger.info("estimating spectral resolution from A&K ePSF FWHMs")
+                    ank_rres = self.estimate_spectral_resolution_AnK(
+                        ank_res, lams, mono_fwhm_nm=mono_fwhm_nm, fwhm_pix_range=(0.5, csize))
+                    self.write_spectral_resolution_AnK(ank_rres, lams, scmode, output_dir,
+                                                       plot_dir, mono_fwhm_nm=mono_fwhm_nm,
+                                                       gauss_res=res)
 
 
                 if scmode.split('-')[0] == 'LowRes':
                     #lams_interp = lams
                     lams_interp = np.linspace(np.min(lams),np.max(lams),27)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
-                if scmode.split('-')[0] == 'MedRes' and scmode!='MedRes-K':
+                if scmode.split('-')[0] == 'MedRes' and scmode not in ('MedRes-K','MedRes-L'):
                     lams_interp = np.linspace(self.lmin,self.lmax,600)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
-                if scmode == 'MedRes-K':
+                if scmode in ('MedRes-K','MedRes-L'):
                     lams_interp = np.linspace(self.lmin_i,self.lmax_i,600)
                     interp_arr = self.interp_gauss_spots(lams,lams_interp,fitarr)
 
@@ -3475,20 +4437,23 @@ class ProcessMonochrom(BasePrimitive):
                                 scmode+'_gauss_spotpars_interpd.fits',np.array(interp_arr),
                                 overwrite=True)
                 self.logger.info("making chi2 rectmat")
-                C2_rmat = self.gen_C2_rectmat(ims_cal,posarr,cut=fluxcut)
+                #OPT and chi2 rectmats from the spot crops (make_posarr's boxes, same values as
+                #cutting them from the full images); the interpolated ones need no images
+                C2_rmat = self.gen_C2_rectmat(spots,posarr,cut=fluxcut)
                 self.logger.info("making interpolated chi2 rectmat")
-                C2_rmat_interpd = self.gen_C2_rectmat_interpd(ims_cal,interp_arr,cut=fluxcut)
+                C2_rmat_interpd = self.gen_C2_rectmat_interpd(None,interp_arr,cut=fluxcut)
                 self.logger.info("making interpolated optimal rectmat")
-                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(ims_cal,interp_arr,cut=fluxcut,method='optimal')
+                OPT_rmat_interpd = self.gen_QL_rectmat_interpd(None,interp_arr,cut=fluxcut,method='optimal')
                 self.logger.info("making interpolated optimal lsf and lflat")
                 OPT_lsf_interpd,OPT_lflat_interpd = self.make_lsf_lflat_interpd(
                                                 OPT_rmat_interpd,interp_arr,lams_interp,
                                                 self.ny,self.nx,cut=fluxcut,cropsize=csize)
                 self.logger.info("making optimal rectmat")
-                OPT_rmat = self.gen_QL_rectmat(ims_cal,posarr,cut=fluxcut,method='optimal')
+                OPT_rmat = self.gen_QL_rectmat(spots,posarr,cut=fluxcut,method='optimal')
                 self.logger.info("making optimal lsf and lflat")
-                OPT_lsf,OPT_lflat = self.make_lsf_lflat(OPT_rmat,ims_cal,lams,
-                                                self.ny,self.nx)
+                #reads each master along the whole trace, so it loads them one at a time
+                OPT_lsf,OPT_lflat = self.make_lsf_lflat(OPT_rmat,imnames,lams,
+                                                self.ny,self.nx,meanim=mean)
 
 
                 if self.config.instrument.rectmat_xshift!=0 or self.config.instrument.rectmat_yshift!=0:
@@ -3499,9 +4464,9 @@ class ProcessMonochrom(BasePrimitive):
                     interp_shift_arr[:,:,:,2]+=self.config.instrument.rectmat_yshift
 
                     self.logger.info("making interpolated shifted optimal rectmat")
-                    OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(ims_cal,interp_shift_arr,cut=fluxcut,method='optimal')
+                    OPT_rmat_interpd_shift = self.gen_QL_rectmat_interpd(None,interp_shift_arr,cut=fluxcut,method='optimal')
                     self.logger.info("making interpolated shifted chi2 rectmat")
-                    C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(ims_cal,interp_shift_arr,cut=fluxcut)
+                    C2_rmat_interpd_shift = self.gen_C2_rectmat_interpd(None,interp_shift_arr,cut=fluxcut)
                     scbasic.save_rectmat(output_dir+'/'+
                                     scmode+'_C2_intp_rectmat_dx'+str(self.config.instrument.rectmat_xshift)+
                                     '_dy'+str(self.config.instrument.rectmat_yshift)+
@@ -3541,6 +4506,26 @@ class ProcessMonochrom(BasePrimitive):
                                 cube_shape=interp_arr.shape[:3])
                 pyfits.writeto(output_dir+'/'+scmode+'_intp_lams.fits',
                     lams_interp,overwrite=True)
+
+                #CHARIS-style optimal-extraction rectmat from the regional A&K ePSFs
+                #(LowRes; same rows/columns and wavelengths as *_OPT_intp_rectmat)
+                ank_rmat_flag = getattr(self.config.instrument, 'ank_rectmat', None)
+                if ank_res is not None and (ank_rmat_flag is None or ank_rmat_flag):
+                    nsub = int(getattr(self.config.instrument, 'ank_rectmat_nsub', None) or 10)
+                    self.logger.info(f"making A&K interpolated rectmat ({nsub} sub-wavelengths per channel)")
+                    ank_rmat, ank_info = self.AnK_rectmat(ank_res, lams, lams_interp, np.array(fitarr),
+                                                          lams, nsub=nsub)
+                    scbasic.save_rectmat(output_dir+'/'+scmode+'_AnK_intp_rectmat.npz', ank_rmat,
+                                         cube_shape=(len(lams_interp), self.ny, self.nx))
+                    xsh = self.config.instrument.rectmat_xshift
+                    ysh = self.config.instrument.rectmat_yshift
+                    if xsh != 0 or ysh != 0:
+                        self.logger.info("making shifted A&K interpolated rectmat")
+                        ank_rmat_s, _ = self.AnK_rectmat(ank_res, lams, lams_interp, np.array(fitarr),
+                                                         lams, nsub=nsub, shift=(xsh, ysh))
+                        scbasic.save_rectmat(output_dir+'/'+scmode+'_AnK_intp_rectmat_dx'+str(xsh)+
+                                             '_dy'+str(ysh)+'.npz', ank_rmat_s,
+                                             cube_shape=(len(lams_interp), self.ny, self.nx))
 
             log_string = ProcessMonochrom.__module__
             self.logger.info(log_string)
