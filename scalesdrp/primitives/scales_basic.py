@@ -172,9 +172,9 @@ def get_l1_path_from_raw(input_filename, output_dir):
     stem = _strip_fits_extension(input_filename)
     return os.path.join(output_dir,f"{stem}_L1.fits")
 
-def get_l2_path_from_raw(input_filename, output_dir):
+def get_l2_path_from_raw(input_filename, output_dir, suffix="_opt_L2"):
     stem = _strip_fits_extension(input_filename)
-    return os.path.join(output_dir,f"{stem}_opt_L2.fits")
+    return os.path.join(output_dir,f"{stem}{suffix}.fits")
 
 def find_existing_proc_file1(
     input_filename,
@@ -3492,19 +3492,21 @@ def select_ifsmode(modslnam, dsprsnam, filtername=None):
         ("LowRes", "M-Prism"):   "LowRes-M",
     }
 
-    modslnam = str(modslnam).strip()
-    dsprsnam = str(dsprsnam).strip()
+    # Header values are matched case-insensitively (e.g. 'L-grating' and
+    # 'L-Grating' are the same element).
+    modslnam = str(modslnam).strip().upper()
+    dsprsnam = str(dsprsnam).strip().upper()
 
     # Check only MODSLNAM and DSPRSNAM
-    if modslnam.upper() == "UNKNOWN" or dsprsnam.upper() == "UNKNOWN":
+    if modslnam == "UNKNOWN" or dsprsnam == "UNKNOWN":
         return None
 
     # FILTER is relevant only for polarimetric mode
-    if dsprsnam == "pol-prism":
-        if modslnam != "LowRes":
+    if dsprsnam == "POL-PRISM":
+        if modslnam != "LOWRES":
             return None
 
-        filtername = str(filtername).strip()
+        filtername = str(filtername).strip().upper()
 
         if filtername == "KL":
             return "LowRes-KL"
@@ -3514,7 +3516,39 @@ def select_ifsmode(modslnam, dsprsnam, filtername=None):
         return None
 
     # All other modes ignore FILTER
+    ifsmode_map = {(m.upper(), d.upper()): mode
+                   for (m, d), mode in ifsmode_map.items()}
     return ifsmode_map.get((modslnam, dsprsnam), None)
+
+
+KNOWN_IFSMODES = ("LowRes-K", "LowRes-KL", "LowRes-KLM", "LowRes-Ls",
+                  "LowRes-L", "LowRes-M", "MedRes-K", "MedRes-L", "MedRes-M")
+
+
+def ifsmode_from_header(hdr, logger=None, name=""):
+    """
+    IFS mode of a header (or dataframe row): the IFSMODE keyword when it is a
+    known mode, else derived from MODSLNAM / DSPRSNAM / FILTER with
+    select_ifsmode. Warns when both are available and disagree.
+    """
+    raw = hdr.get("IFSMODE")
+    raw = None if raw is None else str(raw).strip()
+    from_kw = None
+    if raw and raw.lower() not in ("nan", "none", "unknown"):
+        from_kw = {m.upper(): m for m in KNOWN_IFSMODES}.get(
+            raw.upper().replace("_", "-"))
+        if from_kw is None and logger is not None:
+            logger.warning(f"{name}: IFSMODE = {raw!r} is not a known mode; "
+                           "using MODSLNAM/DSPRSNAM instead.")
+    derived = select_ifsmode(
+        hdr.get("MODSLNAM"), hdr.get("DSPRSNAM"), hdr.get("FILTER"))
+    if from_kw is not None:
+        if derived is not None and derived != from_kw and logger is not None:
+            logger.warning(
+                f"{name}: IFSMODE = {from_kw} but MODSLNAM/DSPRSNAM give "
+                f"{derived}; using IFSMODE.")
+        return from_kw
+    return derived
 
 ############## lenslet flat may change #####################################################
 def load_and_normalize_lenslet_flat(
@@ -7196,12 +7230,19 @@ def plot_extracted_cube_diagnostic(
     box_size=5, detection_sigma=4.0, min_component_pixels=3,
     persistence_fraction=0.15, dilation_iterations=1,
     spectral_sigma=6.0, save_prefix="extracted_cube", show=False,
+    subtract_column_median=False,
 ):
     """Plot collapsed IFS image and robust aperture-median spectrum.
 
     Assumes cube shape (n_wave, ny, nx), with no spectral reordering.
     Wavelength, if supplied, must be a 1D array of length n_wave.
     Returns (fig, axes, info).  info includes source center and aperture.
+
+    subtract_column_median: if True, subtract each channel's per-column
+    (along ny) median before detection and plotting. This removes the
+    thermal background and column stripes that otherwise swamp a point
+    source in the small MedRes cubes (17x18 spaxels). The plotted image and
+    spectrum are then background-subtracted.
 
     Source finding uses robust channel-by-channel spatial contrast and
     wavelength persistence, then connected-component filtering. The
@@ -7212,6 +7253,10 @@ def plot_extracted_cube_diagnostic(
     if data.ndim != 3:
         raise ValueError("cube must have shape (n_wave, ny, nx)")
     nw, ny, nx = data.shape
+    if subtract_column_median:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN columns
+            data = data - np.nanmedian(data, axis=1, keepdims=True)
     if nw < 3 or ny < 3 or nx < 3:
         raise ValueError("cube dimensions must each be at least 3")
     if combine not in ("median", "sum"):

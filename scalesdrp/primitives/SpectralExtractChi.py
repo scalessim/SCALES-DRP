@@ -71,8 +71,9 @@ class SpectralExtractChi(BasePrimitive):
             modslnam = self.action.args.ccddata.header['MODSLNAM']
             dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
             filter = self.action.args.ccddata.header['FILTER']
-            ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam,filter)
             filename = self.action.args.ccddata.header.get("OFNAME")
+            ifsmode = scbasic.ifsmode_from_header(
+                self.action.args.ccddata.header, self.logger, filename)
 
             if det_config =='5.0 MHz':  #fast1.0
                 readnoise = fits.getdata(calib_path+self.context.sig_map_ifs_fast1)
@@ -162,6 +163,7 @@ class SpectralExtractChi(BasePrimitive):
                     os.path.basename(existing_l1_name))
             else:
                 l1_path = scbasic.get_l2_path_from_raw(
+                    suffix = "_chi_L2",
                     input_filename = filename,
                     output_dir = self.config.instrument.output_directory)
 

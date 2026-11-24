@@ -69,9 +69,9 @@ class SpectralExtractOptimal(BasePrimitive):
             modslnam = self.action.args.ccddata.header['MODSLNAM']
             dsprsnam = self.action.args.ccddata.header['DSPRSNAM']
             filter = self.action.args.ccddata.header['FILTER']
-            #ifsmode = self.action.args.ccddata.header['IFSMODE']
-            ifsmode = scbasic.select_ifsmode(modslnam,dsprsnam,filter)
             filename = self.action.args.ccddata.header.get("OFNAME")
+            ifsmode = scbasic.ifsmode_from_header(
+                self.action.args.ccddata.header, self.logger, filename)
 
             # L1 UNCERT is the total per-pixel 1-sigma (read + photon noise);
             # optimal_extract_horne uses it directly, nothing is added here.
@@ -137,10 +137,10 @@ class SpectralExtractOptimal(BasePrimitive):
                 if os.path.exists(l1_path):
                     self.logger.info(f"Found existing L2 file: {l1_path}")
                     try:
-                        l1_slope, l1_uncert, l1_header = scbasic.read_existing_l2(l1_path)
-                        self.action.args.ccddata.data = l1_slope
-                        self.action.args.ccddata.header = l1_header
-                        self.action.args.ccddata.uncertainty = StdDevUncertainty(l1_uncert)
+                        # Check the L2 is readable, but leave the L1 frame in
+                        # ccddata untouched: later steps (SpectralExtractChi)
+                        # extract from the L1 image, not this cube.
+                        scbasic.read_existing_l2(l1_path)
 
                         self.logger.info(f"Reusing existing L2 for {filename}. Skipping raw processing.")
 
@@ -175,8 +175,8 @@ class SpectralExtractOptimal(BasePrimitive):
                 cube_shape=A_opt.shape,
                 header=self.action.args.ccddata.header)
 
-            header_copy = self.action.args.ccddata.header
-            
+            header_copy = self.action.args.ccddata.header.copy()
+
             final_header = scbasic.wcs_header_update(
                 data_cube=A_opt,
                 input_header=self.action.args.ccddata.header,
@@ -189,19 +189,29 @@ class SpectralExtractOptimal(BasePrimitive):
                 meta=self.action.args.ccddata.header,
                 unit='adu')
             
-            fig, axes, info = (
-                scbasic.plot_extracted_cube_diagnostic(
-                    cube=A_opt,
-                    output_directory=plot_dir,
-                    wavelength=None,
-                    combine="median",
-                    box_size=5,
-                    detection_sigma=4.0,
-                    min_component_pixels=3,
-                    persistence_fraction=0.15,
-                    dilation_iterations=1,
-                    save_prefix=f"{self.action.args.name}_cube",
-                    show=False))
+            # The diagnostic plot is optional: if it cannot find a source
+            # (or fails otherwise), warn and still save the extracted cube.
+            try:
+                fig, axes, info = (
+                    scbasic.plot_extracted_cube_diagnostic(
+                        cube=A_opt,
+                        output_directory=plot_dir,
+                        wavelength=None,
+                        combine="median",
+                        box_size=5,
+                        detection_sigma=4.0,
+                        min_component_pixels=3,
+                        persistence_fraction=0.15,
+                        dilation_iterations=1,
+                        save_prefix=f"{self.action.args.name}_cube",
+                        show=False,
+                        # MedRes cubes are small and dominated by thermal
+                        # background / column stripes; remove them first.
+                        subtract_column_median=ifsmode.startswith("MedRes")))
+            except ValueError as err:
+                self.logger.warning(
+                    f"{filename}: cube diagnostic plot skipped (expected "
+                    f"for sky/off-source frames): {err}")
 
             self.action.args.ccddata.data = A_opt
             self.action.args.ccddata.header.update(final_header)

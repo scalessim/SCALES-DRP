@@ -46,34 +46,8 @@ import scalesdrp.primitives.scales_basic as scbasic
 AFFINE_X0 = AFFINE_Y0 = 1024.0
 
 
-KNOWN_IFSMODES = ("LowRes-K", "LowRes-KL", "LowRes-KLM", "LowRes-Ls",
-                  "LowRes-L", "LowRes-M", "MedRes-K", "MedRes-L", "MedRes-M")
-
-
-def ifsmode_of(hdr, logger=None, name=""):
-    """
-    IFS mode of a header (or dataframe row): the IFSMODE keyword when it is a
-    known mode, else derived from MODSLNAM / DSPRSNAM / FILTER with
-    select_ifsmode. Warns when both are available and disagree.
-    """
-    raw = hdr.get("IFSMODE")
-    raw = None if raw is None else str(raw).strip()
-    from_kw = None
-    if raw and raw.lower() not in ("nan", "none", "unknown"):
-        from_kw = {m.upper(): m for m in KNOWN_IFSMODES}.get(
-            raw.upper().replace("_", "-"))
-        if from_kw is None and logger is not None:
-            logger.warning(f"{name}: IFSMODE = {raw!r} is not a known mode; "
-                           "using MODSLNAM/DSPRSNAM instead.")
-    derived = scbasic.select_ifsmode(
-        hdr.get("MODSLNAM"), hdr.get("DSPRSNAM"), hdr.get("FILTER"))
-    if from_kw is not None:
-        if derived is not None and derived != from_kw and logger is not None:
-            logger.warning(
-                f"{name}: IFSMODE = {from_kw} but MODSLNAM/DSPRSNAM give "
-                f"{derived}; using IFSMODE.")
-        return from_kw
-    return derived
+KNOWN_IFSMODES = scbasic.KNOWN_IFSMODES
+ifsmode_of = scbasic.ifsmode_from_header
 
 
 def _cfg(inst, name, default):
@@ -487,25 +461,30 @@ class RmatShift(ProcessMonochrom):
     RECTMAT_KINDS = {
         "OPT_intp": "{m}_OPT_intp_rectmat_{t}.npz",   # Gaussian fits, 27 channels
         "C2_intp": "{m}_C2_intp_rectmat_{t}.npz",
-        "AnK_intp": "{m}_AnK_intp_rectmat_{t}.npz",   # A&K ePSFs (LowRes)
+        "AnK_OPT_intp": "{m}_AnK_OPT_intp_rectmat_{t}.npz",   # A&K ePSFs
+        "AnK_C2_intp": "{m}_AnK_C2_intp_rectmat_{t}.npz",     # same weights, transposed
         "OPT": "{m}_OPT_rectmat_{t}.npz",             # scan images, one channel
         "C2": "{m}_C2_rectmat_{t}.npz",               # per scan wavelength
     }
+    # older name of the A&K optimal-extraction kind, still accepted in rmat_shift_rectmats
+    RECTMAT_ALIASES = {"AnK_intp": "AnK_OPT_intp"}
 
     def requested_rectmats(self, inst, scmode):
         """Rectmat kinds to write: rmat_shift_rectmats in the config ('all',
-        or a list of RECTMAT_KINDS keys). The AnK and scan-image (OPT, C2)
-        rectmats exist for LowRes only, as in ProcessMonochrom."""
+        or a list of RECTMAT_KINDS keys; 'AnK_intp' means 'AnK_OPT_intp'). The
+        scan-image (OPT, C2) rectmats are LowRes only; the A&K ones need the scan's
+        {mode}_ank_epsf.fits (LowRes, and MedRes with medres_ank_epsf)."""
         req = _cfg(inst, "rmat_shift_rectmats", "all")
         if isinstance(req, str):
             req = (list(self.RECTMAT_KINDS) if req.strip().lower() == "all"
-                   else [s.strip() for s in req.strip("[]() ").split(",")])
+                   else [s.strip().strip("'\"") for s in req.strip("[]() ").split(",")])
+        req = list(dict.fromkeys(self.RECTMAT_ALIASES.get(k, k) for k in req))
         bad = [k for k in req if k not in self.RECTMAT_KINDS]
         if bad:
             raise RuntimeError(f"Unknown rmat_shift_rectmats {bad}; use 'all' or "
                                f"some of {list(self.RECTMAT_KINDS)}.")
         if not scmode.startswith("LowRes"):
-            req = [k for k in req if k in ("OPT_intp", "C2_intp")]
+            req = [k for k in req if k in ("OPT_intp", "C2_intp", "AnK_OPT_intp", "AnK_C2_intp")]
         return req
 
     @staticmethod
@@ -550,11 +529,12 @@ class RmatShift(ProcessMonochrom):
             if "C2_intp" in kinds:
                 save("C2_intp", opt.T.tocsr(), arr.shape[:3])
 
-        # A&K interpolated rectmat: ProcessMonochrom.AnK_rectmat with the spot
+        # A&K interpolated rectmats: ProcessMonochrom.AnK_rectmat with the spot
         # fits moved. Positions enter AnK_rectmat only through a linear
         # (cubic-in-lambda) fit, so moving the fits is the same as its own
         # `shift` argument for a constant shift, and also works for affine.
-        if "AnK_intp" in kinds:
+        # The C2 version is the transpose, as for the Gaussian ones.
+        if {"AnK_OPT_intp", "AnK_C2_intp"} & set(kinds):
             need = [scan(n) for n in ("{m}_ank_epsf.fits", "{m}_gauss_spotpars.fits",
                                       "{m}_lams.fits", "{m}_intp_lams.fits")]
             missing = [os.path.basename(p) for p in need if not os.path.isfile(p)]
@@ -569,10 +549,17 @@ class RmatShift(ProcessMonochrom):
                 ox, oy = self.shift_offsets(fit[..., 1], fit[..., 2], shift, coef)
                 fit[..., 1] += ox
                 fit[..., 2] += oy
-                self.logger.info(f"making shifted AnK interpolated rectmat ({nsub} "
+                self.logger.info(f"making shifted AnK interpolated rectmats ({nsub} "
                                  "sub-wavelengths per channel)")
-                rmat, _ = self.AnK_rectmat(ank, lams_ank, lams_out, fit, lams_fit, nsub=nsub)
-                save("AnK_intp", rmat, (len(lams_out),) + fit.shape[1:3])
+                #template box half-size as in ProcessMonochrom (MedRes spots are longer)
+                crop_half = 7 if scmode.startswith("MedRes") else 4
+                rmat, _ = self.AnK_rectmat(ank, lams_ank, lams_out, fit, lams_fit, nsub=nsub,
+                                           crop_half=crop_half)
+                cube = (len(lams_out),) + fit.shape[1:3]
+                if "AnK_OPT_intp" in kinds:
+                    save("AnK_OPT_intp", rmat, cube)
+                if "AnK_C2_intp" in kinds:
+                    save("AnK_C2_intp", rmat.T.tocsr(), cube)
 
         # rectmats built from the scan images themselves (one channel per scan
         # wavelength): shift each background-subtracted scan image and cut the
