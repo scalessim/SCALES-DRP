@@ -36,7 +36,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from scalesdrp.primitives.ProcessMonochrom import ProcessMonochrom
+from scalesdrp.primitives.ProcessMonochrom import ProcessMonochrom, MonoBackground
 from scalesdrp.primitives.scales_basic import fits_headers_to_dataframe
 import scalesdrp.primitives.scales_basic as scbasic
 
@@ -143,6 +143,26 @@ class RmatShift(ProcessMonochrom):
         """
         cal = im - meanim * np.nanmean(im) / np.nanmean(meanim)
         cal = np.nan_to_num(cal, nan=0.0)
+        if destripe:
+            cal = self.masked_row_destripe(cal)[0]
+        return cal
+
+    def calibrate_like_scan_template(self, im, template_path, destripe, setup=None):
+        """
+        Same background removal as ProcessMonochrom with mono_bkg_method =
+        'trace_fit': the scan's {scmode}_bkg_template.fits (median of its masters,
+        or of its exposure setup's masters) fitted to this image as scale *
+        template + offset on the trace pixels, using the template of the master's
+        exposure setup (setup, from MonoBackground.setup_of) when the scan has
+        one, else the best-fitting template, then (optionally) the masked row
+        destripe. Only for the scan's reference master; the single frame is
+        always cleaned with its background frame.
+        """
+        bkg = MonoBackground.read(template_path, self.logger)
+        it, s, c = bkg.coeffs(im, setup=setup)
+        self.logger.info(f"Scan reference background: {bkg.labels[it]} template, "
+                         f"scale {s:.3f}, offset {c:+.4f}")
+        cal = np.nan_to_num(im - s * bkg.templates[it] - c, nan=0.0)
         if destripe:
             cal = self.masked_row_destripe(cal)[0]
         return cal
@@ -806,10 +826,23 @@ class RmatShift(ProcessMonochrom):
         if ref_cal is None:
             self.logger.info(f"No {scmode}_calim_stack.fits in the scan; "
                              f"background-subtracting {ref_name} instead")
-            if meanim is None:
-                meanim = self.scan_mean_image(scan_dir, df_mode, scmode, out_dir)
             ref_im = pyfits.getdata(os.path.join(scan_dir, ref_name)).astype(float)
-            ref_cal = self.calibrate_like_scan(ref_im, meanim, destripe)
+            # the scan's own background model (ProcessMonochrom, mono_bkg_method =
+            # 'trace_fit': median template, scale + offset fitted on the traces), so
+            # the reference is cleaned the same way as the scan's spot fits; scans
+            # reduced before it existed use the legacy scaled mean of the scan
+            tpath = os.path.join(scan_dir, f"{scmode}_bkg_template.fits")
+            if os.path.isfile(tpath):
+                self.logger.info(f"Scan reference: using the scan's background template {tpath}")
+                ref_cal = self.calibrate_like_scan_template(
+                    ref_im, tpath, destripe,
+                    setup=MonoBackground.setup_of(os.path.join(scan_dir, ref_name)))
+            else:
+                self.logger.info(f"Scan reference: no {scmode}_bkg_template.fits in the "
+                                 "scan; using the scaled mean of the scan's masters")
+                if meanim is None:
+                    meanim = self.scan_mean_image(scan_dir, df_mode, scmode, out_dir)
+                ref_cal = self.calibrate_like_scan(ref_im, meanim, destripe)
 
         # ---- measure
         lowres = scmode.startswith("LowRes")

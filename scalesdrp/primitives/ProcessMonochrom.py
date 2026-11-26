@@ -19,6 +19,7 @@ import os
 import matplotlib.pyplot as plt
 from scipy.ndimage import median_filter, gaussian_filter, shift
 from scipy.ndimage import map_coordinates, convolve as nd_convolve
+from scipy.ndimage import uniform_filter as nd_uniform
 from skimage.feature import peak_local_max
 from scipy.ndimage import gaussian_filter
 from scipy.spatial import KDTree, cKDTree
@@ -29,6 +30,281 @@ import logging
 log = logging.getLogger("SCALES")
 from scalesdrp.core.scales_pkg_resources import get_resource_path
 
+
+class CalimStack:
+    """
+    The background-subtracted masters of one mode, read from their files when
+    indexed instead of held in memory: stack[k] is master k (loader(names[k],
+    meanim), i.e. ProcessMonochrom.load_calim), stack[k, ys:ye, xs:xe] a cut of it.
+    len() and .shape behave like the (nlam, ny, nx) array, so functions that go
+    through the masters one wavelength at a time take it in place of the full
+    stack. The last master read is kept, so repeated reads of the same wavelength
+    load it once; loops that jump between wavelengths should be ordered by
+    wavelength instead.
+    """
+
+    def __init__(self, loader, names, meanim):
+        self.loader = loader
+        self.names = list(names)
+        self.meanim = meanim
+        self.shape = (len(self.names),) + tuple(np.shape(meanim))
+        self.ndim = 3
+        self._k, self._im = None, None
+
+    def __len__(self):
+        return len(self.names)
+
+    def __getitem__(self, key):
+        if isinstance(key, tuple):
+            return self[key[0]][key[1:]]
+        k = int(key)
+        if k < 0:
+            k += len(self.names)
+        if k != self._k:
+            self._im = self.loader(self.names[k], self.meanim)
+            self._k = k
+        return self._im
+
+    def __iter__(self):
+        for k in range(len(self.names)):
+            yield self[k]
+
+
+class MonoBackground:
+    """
+    Background model for the monochromator masters of one mode, used in place of
+    the mean master (mono_bkg_method = 'trace_fit'; monochrom_bksub_sing takes
+    either).
+
+    The template is the per-pixel median of the masters: each pixel is lit by a
+    monochromator spot in only a few of them, so the median keeps the background
+    trace light and drops the spots. (The mean of the masters also holds every
+    master's spot light smeared along the traces, ~45% of the "background" on the
+    LowRes-K 20261121 traces, and subtracting it over-subtracts the traces and
+    leaves dark areas next to the spots.)
+
+    Scans taken with more than one exposure setup (EXPTIME / NREADS, e.g.
+    LowRes-KL 20261121: 10 s / 18 reads below 2.5 um, 2 s / 4 reads above) get one
+    template per setup with at least min_group masters, since the background
+    traces differ between setups (~9% with spatial structure in that KL scan).
+    Masters of smaller setups use the template of all the masters.
+
+    Each master is then fitted as scale * template + offset by robust least
+    squares on the trace pixels (the brightest trace_frac of the median-filtered
+    all-master template), leaving out the pixels lit in that master (3x3-smoothed
+    master - template more than nsig_lit sigma above the trace pixels' scatter,
+    grown by 2 px). No spot positions are needed, so this works before spot
+    finding. The fits are cached per image, so loading a master again does not
+    refit it; an image that was not fitted with fit_all (e.g. in rmat_shift) uses
+    whichever template fits it best.
+    """
+
+    def __init__(self, templates, trace_mask, labels=None, setup_index=None,
+                 logger=None, nsig_lit=3.0, nclip=3):
+        t = np.asarray(templates, dtype=float)
+        self.templates = t[None] if t.ndim == 2 else t
+        self.template = self.templates[0]          #the all-master template
+        self.labels = list(labels) if labels is not None else ['all'] * len(self.templates)
+        self.setup_index = dict(setup_index or {})
+        self.trace_mask = np.asarray(trace_mask, dtype=bool)
+        self.shape = self.template.shape
+        self.logger = logger if logger is not None else log
+        self.nsig_lit = float(nsig_lit)
+        self.nclip = int(nclip)
+        self._fits = {}
+        self.table = None
+
+    @staticmethod
+    def setup_of(name):
+        """Exposure setup of a master, e.g. '10s/18r'."""
+        h = pyfits.getheader(name)
+        return f"{float(h.get('EXPTIME', np.nan)):g}s/{h.get('NREADS', '?')}r"
+
+    @staticmethod
+    def median_template(names, rows=128, logger=None):
+        """Per-pixel nanmedian of the masters, read rows rows at a time, so a long
+        scan (e.g. 335 MedRes-L masters) is never all in memory. Each master is
+        opened only while its rows are read (section read, no memmap): keeping every
+        master open, each with a memmap, needs ~2 file descriptors per master and
+        exceeds the default macOS limit of 256 open files (ulimit -n) at ~120 masters."""
+        names = list(names)
+        with pyfits.open(names[0], memmap=False) as h:
+            ny, nx = h[0].shape
+        tmpl = np.full((ny, nx), np.nan)
+        for r0 in range(0, ny, rows):
+            r1 = min(r0 + rows, ny)
+            chunk = np.empty((len(names), r1 - r0, nx), dtype=np.float32)
+            for k, n in enumerate(names):
+                with pyfits.open(n, memmap=False) as h:
+                    chunk[k] = h[0].section[r0:r1]
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)   #all-NaN columns
+                tmpl[r0:r1] = np.nanmedian(chunk, axis=0)
+        return tmpl
+
+    @staticmethod
+    def make_trace_mask(template, frac=0.3, filt=5):
+        """Pixels on the background traces: the brightest frac of the
+        median-filtered template (a filt x filt median, so single hot pixels and
+        noise do not enter)."""
+        sm = median_filter(np.nan_to_num(template, nan=np.nanmedian(template)), filt)
+        return sm > np.percentile(sm, 100.0 * (1.0 - frac))
+
+    @classmethod
+    def from_masters(cls, names, trace_frac=0.3, min_group=7, logger=None, **kw):
+        lg = logger if logger is not None else log
+        names = list(names)
+        tmpls, labels = [cls.median_template(names, logger=logger)], ['all']
+        setups = [cls.setup_of(n) for n in names]
+        setup_index = {}
+        useful = sorted(set(setups))
+        if len(useful) > 1:
+            for s in useful:
+                members = [n for n, ss in zip(names, setups) if ss == s]
+                if len(members) >= min_group:
+                    tmpls.append(cls.median_template(members, logger=logger))
+                    labels.append(s)
+                    setup_index[s] = len(tmpls) - 1
+                    lg.info(f"Background template for the {len(members)} {s} masters")
+                else:
+                    lg.warning(f"Only {len(members)} {s} masters (< {min_group}): they use "
+                               "the template of all the masters")
+        mask = cls.make_trace_mask(tmpls[0], trace_frac)
+        return cls(tmpls, mask, labels=labels, setup_index=setup_index, logger=logger, **kw)
+
+    @staticmethod
+    def _key(im):
+        return (np.shape(im), str(np.asarray(im).dtype), hash(np.ascontiguousarray(im[::61, ::67]).tobytes()))
+
+    def fit(self, im, it=0):
+        """scale, offset, fraction of the trace pixels left out as lit, and the
+        robust scatter of the fit residuals, for one master against template it."""
+        im = np.asarray(im, dtype=float)
+        tm = self.templates[it]
+        d = im - tm
+        good = np.isfinite(d)
+        on = self.trace_mask & good
+        dm = np.median(d[on])
+        #lit-pixel threshold from the trace pixels' own scatter (the noise there is
+        #set by the bright background traces, not by the dark gaps between them);
+        #spots are a minority of the trace pixels, so the MAD ignores them
+        sig = 1.4826 * np.median(np.abs(d[on] - dm))
+        #a 3x3 mean has 1/3 the per-pixel noise
+        lit = binary_dilation(nd_uniform(np.nan_to_num(d - dm), 3) > self.nsig_lit * sig / 3.0,
+                              iterations=2)
+        m = on & ~lit
+        litfrac = float(lit[self.trace_mask].mean())
+        if m.sum() < 1000:
+            self.logger.warning(f"Background fit: only {m.sum()} unlit trace pixels; "
+                                "fitting all the trace pixels")
+            m = on
+        x, y = tm[m], im[m]
+        for _ in range(self.nclip):
+            A = np.c_[x, np.ones_like(x)]
+            c = np.linalg.lstsq(A, y, rcond=None)[0]
+            r = y - A @ c
+            s = 1.4826 * np.median(np.abs(r - np.median(r)))
+            keep = np.abs(r) < 4.0 * s
+            if keep.all() or keep.sum() < 1000:
+                break
+            x, y = x[keep], y[keep]
+        return float(c[0]), float(c[1]), litfrac, float(s)
+
+    def coeffs(self, im, setup=None):
+        """(template index, scale, offset) for an image: from fit_all if it fitted
+        this image; else its exposure setup's template (setup, e.g. from
+        setup_of(filename)) if there is one, or the best-fitting template
+        (smallest residual scatter)."""
+        k = self._key(im)
+        if k not in self._fits:
+            if setup in self.setup_index:
+                it = self.setup_index[setup]
+                s, c = self.fit(im, it)[:2]
+                self._fits[k] = (it, s, c)
+                return self._fits[k]
+            best = None
+            for it in range(len(self.templates)):
+                s, c, lf, rs = self.fit(im, it)
+                if best is None or rs < best[3]:
+                    best = (it, s, c, rs)
+            self._fits[k] = best[:3]
+        return self._fits[k]
+
+    def subtract(self, im):
+        it, s, c = self.coeffs(im)
+        return im - s * self.templates[it] - c
+
+    def fit_all(self, names, lams, scmode=''):
+        """Fit every master once against its setup's template (cached for the
+        later loads), log a summary and keep the table (written by write)."""
+        rows = []
+        for n, l in zip(names, lams):
+            im = pyfits.getdata(n, memmap=False)
+            it = self.setup_index.get(self.setup_of(n), 0) if len(self.templates) > 1 else 0
+            s, c, lf, rs = self.fit(im, it)
+            self._fits[self._key(im)] = (it, s, c)
+            rows.append((float(l), os.path.basename(n), self.labels[it], s, c, lf, rs))
+        self.table = rows
+        for it, lab in enumerate(self.labels):
+            sel = [r for r in rows if r[2] == lab]
+            if not sel:
+                continue
+            sc = np.array([r[3] for r in sel]); of = np.array([r[4] for r in sel])
+            self.logger.info(
+                f"{scmode} background ({lab} template, {len(sel)} masters, fitted on "
+                f"{self.trace_mask.mean():.0%} of the detector): scale median "
+                f"{np.median(sc):.3f} (range {sc.min():.3f}-{sc.max():.3f}), offset median "
+                f"{np.median(of):+.4f} (range {of.min():+.4f} to {of.max():+.4f})")
+            odd = np.abs(sc - np.median(sc)) > 0.2 * abs(np.median(sc))
+            if odd.any():
+                self.logger.warning(
+                    f"{scmode} background scale ({lab}) is >20% from the median at "
+                    f"{np.round(sc[odd], 3).tolist()} for "
+                    f"{np.round(np.array([r[0] for r in sel])[odd], 4).tolist()} um")
+        if len(rows) < 7:
+            self.logger.warning(
+                f"{scmode}: only {len(rows)} masters in the background median; pixels "
+                "lit in several of them keep some spot light in the template")
+        return rows
+
+    def write(self, path, scmode=''):
+        """{scmode}_bkg_template.fits: the template(s) (all masters first, then one
+        per exposure setup), the trace mask and the per-master fit (rmat_shift
+        reads the templates and mask from it)."""
+        hdr = pyfits.Header()
+        hdr['IFSMODE'] = scmode
+        hdr['BKGMETH'] = ('trace_fit', 'median template, scale+offset fit on traces')
+        hdr['TRACEFR'] = (float(self.trace_mask.mean()), 'fraction of pixels in trace mask')
+        hdr['NSIGLIT'] = (self.nsig_lit, 'lit-pixel threshold (sigma)')
+        hdr['NTMPL'] = (len(self.templates), 'templates: all masters, then per setup')
+        for i, lab in enumerate(self.labels):
+            hdr[f'TMPL{i}'] = lab
+        data = self.templates[0] if len(self.templates) == 1 else self.templates
+        hl = [pyfits.PrimaryHDU(np.asarray(data, dtype=np.float32), hdr),
+              pyfits.ImageHDU(self.trace_mask.astype(np.uint8), name='TRACEMASK')]
+        if self.table:
+            t = self.table
+            hl.append(pyfits.BinTableHDU.from_columns([
+                pyfits.Column(name='LAM', format='D', unit='um', array=[r[0] for r in t]),
+                pyfits.Column(name='FILE', format='64A', array=[r[1] for r in t]),
+                pyfits.Column(name='TEMPLATE', format='16A', array=[r[2] for r in t]),
+                pyfits.Column(name='SCALE', format='D', array=[r[3] for r in t]),
+                pyfits.Column(name='OFFSET', format='D', array=[r[4] for r in t]),
+                pyfits.Column(name='LITFRAC', format='D', array=[r[5] for r in t]),
+                pyfits.Column(name='RESIDRMS', format='D', array=[r[6] for r in t])],
+                name='BKGFIT'))
+        pyfits.HDUList(hl).writeto(path, overwrite=True)
+
+    @classmethod
+    def read(cls, path, logger=None):
+        with pyfits.open(path) as h:
+            hdr = h[0].header
+            data = h[0].data.astype(float)
+            n = 1 if data.ndim == 2 else data.shape[0]
+            labels = [hdr.get(f'TMPL{i}', 'all') for i in range(n)]
+            return cls(data, h['TRACEMASK'].data.astype(bool), labels=labels,
+                       setup_index={lab: i for i, lab in enumerate(labels) if i > 0},
+                       logger=logger, nsig_lit=hdr.get('NSIGLIT', 3.0))
 
 
 class ProcessMonochrom(BasePrimitive):
@@ -248,6 +524,10 @@ class ProcessMonochrom(BasePrimitive):
         return ims_sub
 
     def monochrom_bksub_sing(self,im,meanim):
+        #meanim: a MonoBackground (mono_bkg_method = 'trace_fit') or the mean master
+        #(legacy 'global_mean': scaled by the ratio of the image means)
+        if isinstance(meanim, MonoBackground):
+            return meanim.subtract(im)
         im_mean = np.nanmean(im)
         bkg = meanim*im_mean/np.nanmean(meanim)
         im_sub = im - bkg
@@ -834,6 +1114,20 @@ class ProcessMonochrom(BasePrimitive):
         lcent_ind = int(np.argmin(np.abs(lams - 0.5 * (lmin + lmax))))
         traces_filled = [trace for trace in spot_tracks_u.values()
                          if len(trace)==nlams]
+        if len(traces_filled) == 0:
+            #the trace shape comes from lenslets with a spot at every wavelength; with
+            #none, some masters have no real spots (e.g. the 1 s M-band masters of
+            #lowres-klm-20261121, where the spot finder picks up a fixed pattern that
+            #does not line up with the other masters' tracks)
+            ntr = np.array([sum(k in t for t in spot_tracks_u.values()) for k in range(nlams)])
+            worst = np.argsort(ntr)[:8]
+            raise ValueError(
+                f"No lenslet track has a spot at all {nlams} wavelengths "
+                f"({len(spot_tracks_u)} tracks, longest {max(len(t) for t in spot_tracks_u.values())}), "
+                "so the trace shape cannot be measured. Usually some masters have no or "
+                "only faint spots: narrow mono_wave_range or add them to "
+                "mono_exclude_waves. Fewest tracked spots at "
+                + ", ".join(f"{lams[k]:.4f} um ({ntr[k]})" for k in sorted(worst)))
         posns = np.array([[trace[k][:2] for k in range(nlams)]
                           for trace in traces_filled], dtype=float)
         offsets = posns - posns[:, lcent_ind:lcent_ind + 1]
@@ -1279,6 +1573,10 @@ class ProcessMonochrom(BasePrimitive):
         n_off = 0
         if fill_missing:
             half = cropsize / 2
+            #predicted positions of the missing spots first, then the intensities one
+            #wavelength at a time, so each master is read once (ims_cal can be a
+            #CalimStack, which reads the masters from their files)
+            todo = {}
             for j in range(len(tracks_new)):
                 t = tracks_new[j]
                 wlo, whi = min(t), max(t)
@@ -1291,9 +1589,14 @@ class ProcessMonochrom(BasePrimitive):
                     if x - half < 0 or int(x + half) > ims_cal.shape[2] or y - half < 0 or int(y + half) > ims_cal.shape[1]:
                         n_off += 1
                         continue
-                    t[w] = (x, y, smoothed_value(ims_cal[w], x, y), lams[w])
-                    filled_set[(j, w)] = 'gap' if wlo < w < whi else 'edge'
-                tracks_new[j] = dict(sorted(t.items()))
+                    todo.setdefault(w, []).append((j, x, y, 'gap' if wlo < w < whi else 'edge'))
+            for w in sorted(todo):
+                im = ims_cal[w]
+                for j, x, y, kind in todo[w]:
+                    tracks_new[j][w] = (x, y, smoothed_value(im, x, y), lams[w])
+                    filled_set[(j, w)] = kind
+            for j in range(len(tracks_new)):
+                tracks_new[j] = dict(sorted(tracks_new[j].items()))
             kinds = np.array(list(filled_set.values()))
             self.logger.info(f'filled {len(filled_set)} spots ({(kinds == "gap").sum()} gap, {(kinds == "edge").sum()} edge); '
                 f'{n_off} predicted crops off the detector were left empty')
@@ -1905,8 +2208,9 @@ class ProcessMonochrom(BasePrimitive):
 
         modims_all = np.array(modims_all)
         modims_sym_all = np.array(modims_sym_all)
-        resims_all = ims_cal - np.array(modims_all)
-        resims_sym_all = ims_cal - np.array(modims_sym_all)
+        #ims_cal may be a CalimStack (masters read from their files): subtract one at a time
+        resims_all = np.array([np.asarray(ims_cal[l]) - modims_all[l] for l in range(len(modims_all))])
+        resims_sym_all = np.array([np.asarray(ims_cal[l]) - modims_sym_all[l] for l in range(len(modims_sym_all))])
 
         return models_all, resids_all, modims_all, resims_all, models_sym_all, resids_sym_all, modims_sym_all, resims_sym_all
 
@@ -3139,6 +3443,7 @@ class ProcessMonochrom(BasePrimitive):
         modim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
         resim_arr = np.zeros([posarr.shape[0],posarr.shape[1],posarr.shape[2],cropsize,cropsize])
         resims = []
+        nfail = 0
         for ll in range(len(names)):
             self.logger.info("image "+str(ll)+" of "+str(len(names)))
             fname = names[ll]
@@ -3163,12 +3468,24 @@ class ProcessMonochrom(BasePrimitive):
                         cropped[:] = im_cal[ys:ye,xs:xe]
                         cropped[np.where(cropped<cut*np.max(cropped))] = 0.0
                         spotim_arr[ll,lensy,lensx,:ye-ys,:xe-xs] = cropped
-                        initial_guess = Gaussian2D(amplitude=intens, x_mean=(xe-xs)*0.5, y_mean=(ye-ys)*0.5,
+                        #a filled spot's intensity can be <= 0 (no light there); start
+                        #from the crop's peak instead, or the fit can run away
+                        amp0 = intens if (np.isfinite(intens) and intens > 0) else np.nanmax(cropped)
+                        initial_guess = Gaussian2D(amplitude=amp0, x_mean=(xe-xs)*0.5, y_mean=(ye-ys)*0.5,
                                   x_stddev=1., y_stddev=1.)
 
                         fitter = fitting.LevMarLSQFitter()
                         y, x = np.mgrid[:(ye-ys), :(xe-xs)]
-                        fitted_model = fitter(initial_guess, x, y, cropped)
+                        try:
+                            fitted_model = fitter(initial_guess, x, y, cropped)
+                        except Exception as e:
+                            #e.g. astropy NonFiniteValueError on a crop with bad pixels:
+                            #leave this spot's fit NaN (as for spots with no position)
+                            nfail += 1
+                            if nfail <= 10:
+                                self.logger.warning(f"Gaussian fit failed for spot {ll} {lensy} {lensx} "
+                                                    f"({type(e).__name__}); leaving it NaN")
+                            continue
 
                         if full_images:
                             modim[ys:ye,xs:xe]+=fitted_model(x,y)
@@ -3215,6 +3532,8 @@ class ProcessMonochrom(BasePrimitive):
                 modims.append(modim)
                 resims.append(im_cal-modim)
 
+        if nfail:
+            self.logger.warning(f"{nfail} Gaussian spot fits failed and were left NaN")
         if full_images:
             modims, resims = np.array(modims), np.array(resims)
         else:
@@ -3563,6 +3882,54 @@ class ProcessMonochrom(BasePrimitive):
             plt.close(fig)
         except Exception as e:
             self.logger.info(f"resolution plot failed: {e}")
+
+    def raw_median_image(self, imnames, block=None, max_masters=200):
+        """Median over the raw (not background-subtracted) masters, read in blocks of
+        rows so the full stack is never in memory. Keeps the background light (thermal
+        continuum traces) and rejects the monochromatic spots, since each pixel sees a
+        spot in only a few masters. With more than max_masters masters (MedRes), an
+        evenly spaced subset is used (each pixel then sees a spot in even fewer)."""
+        imnames = list(imnames)
+        if max_masters and len(imnames) > max_masters:
+            imnames = [imnames[k] for k in
+                       np.unique(np.linspace(0, len(imnames) - 1, max_masters).astype(int))]
+        with pyfits.open(imnames[0], memmap=True) as h:
+            shape = h[0].data.shape
+        if block is None:                     #keep each block's stack to ~200 MB
+            block = int(np.clip(2e8 / (4 * shape[1] * len(imnames)), 8, 256))
+        out = np.zeros(shape, dtype=np.float32)
+        for r0 in range(0, shape[0], block):
+            r1 = min(r0 + block, shape[0])
+            rows = []
+            for f in imnames:
+                with pyfits.open(f, memmap=True) as h:
+                    rows.append(np.array(h[0].data[r0:r1], dtype=np.float32))
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)
+                out[r0:r1] = np.nanmedian(np.array(rows), axis=0)
+        return out
+
+    def plot_dispersion_check(self, imnames_all, lams_all, fitarr, lams, scmode, plot_dir):
+        """{scmode}_dispersion_check.png (mono_basic.plot_dispersion_check): the
+        monochromator spot positions, the measured dispersion and the background light
+        along the traces (median of all the mode's raw masters, used or not), with the
+        design band edges (mono_basic.DISPERSION_CHECK_EDGES) and the unused masters'
+        predicted positions marked. Logs the measured numbers."""
+        cont = self.raw_median_image(list(imnames_all))
+        dxdl, dydl, good = self.trace_derivatives(fitarr, lams)
+        ed = mono_basic.DISPERSION_CHECK_EDGES.get(scmode, {})
+        path, info = mono_basic.plot_dispersion_check(
+            cont, fitarr, lams, dxdl, dydl, good, lams_all, plot_dir,
+            f"{scmode}_dispersion_check.png", edges=ed.get('edges'), extra=ed.get('extra'),
+            label=scmode, medres=scmode.split('-')[0] == 'MedRes')
+        self.logger.info(
+            f"{scmode} dispersion check: median {info['median_disp']:.1f} px/um over lenslets "
+            f"(centre lenslet {info['centre_lenslet']} line fit {info['line_fit_disp']:.1f} px/um); "
+            f"background light drops at the red end at {info['red_end_um']:.3f} um"
+            + (f"; trace {info['trace_len_px']:.1f} px at half max = {info['blue_end_um']:.2f}-"
+               f"{info['red_end_um']:.2f} um" if info['flat'] else '')
+            + f"; {info['n_unused']} unused masters; plot: {path}")
+        return info
 
     def estimate_spectral_resolution_AnK(self, ank, lams, mono_fwhm_nm=0.0,
                                          fwhm_pix_range=(0.5, 8.0)):
@@ -4903,8 +5270,8 @@ class ProcessMonochrom(BasePrimitive):
             if save_debug:
                 pyfits.writeto(output_dir+'/'+name, np.array(data), overwrite=True)
         if not save_debug:
-            self.logger.info("save_debug_files = False: not writing intermediate files "
-                             "(calim_stack, spot crops, spot model/residual images)")
+            self.logger.info("save_debug_files = False: not writing the background-subtracted "
+                             "masters ({scmode}_bksub_masters/)")
 
         self.logger.info("############ started Processing Monochromator Images #############")
         df = fits_headers_to_dataframe(output_dir,pattern="*mcalunit.fits")
@@ -4926,6 +5293,8 @@ class ProcessMonochrom(BasePrimitive):
             self.logger.info("Parsing files for "+str(self.scmode))
 
             imnames, lams, mean = self.get_filenames_and_mean(df,scmode,output_dir)
+            #every master of the mode, before the wavelength cuts (dispersion check plot)
+            imnames_all, lams_all = np.array(imnames), np.array(lams, dtype=float)
             wave_range = getattr(self.config.instrument, 'mono_wave_range', None)
             imnames, lams = self.apply_wave_range_names(imnames, lams, scmode, wave_range)
             exclude_waves = getattr(self.config.instrument, 'mono_exclude_waves', None)
@@ -4948,6 +5317,26 @@ class ProcessMonochrom(BasePrimitive):
             if len(imnames) > 0:
                 self.set_lamlimits(scmode)
 
+                #background model, from the masters left after the wavelength cuts
+                #('trace_fit'), or the mean of all the mode's masters ('global_mean')
+                bkg_method = str(getattr(self.config.instrument, 'mono_bkg_method',
+                                         'trace_fit') or 'trace_fit').strip().strip("'\"")
+                if bkg_method == 'trace_fit':
+                    trace_frac = float(getattr(self.config.instrument,
+                                               'mono_bkg_trace_frac', 0.3) or 0.3)
+                    self.logger.info(f"{scmode}: building the background template "
+                                     f"(median of {len(imnames)} masters)")
+                    mean = MonoBackground.from_masters(imnames, trace_frac=trace_frac,
+                                                       logger=self.logger)
+                    mean.fit_all(imnames, lams, scmode)
+                    mean.write(output_dir+'/'+scmode+'_bkg_template.fits', scmode)
+                elif bkg_method == 'global_mean':
+                    self.logger.info(f"{scmode}: background = mean of all the mode's "
+                                     "masters, scaled by the image means (global_mean)")
+                else:
+                    raise ValueError(f"mono_bkg_method must be 'trace_fit' or "
+                                     f"'global_mean', got {bkg_method!r}")
+
 
                 """
                 commenting out during wavelength restructure!!
@@ -4960,11 +5349,42 @@ class ProcessMonochrom(BasePrimitive):
                 self.logger.info("done loading images for "+str(self.scmode))
                 """
 
+                #background-subtracted masters, read from their files when a step needs
+                #one (CalimStack): for the steps that go through the masters one
+                #wavelength at a time (LowRes gap filling, S/N cut, A&K ePSFs; debug A&K
+                #model), in place of the full stack
+                ims_cal = CalimStack(self.load_calim, imnames, mean)
+                if save_debug:
+                    #TEMPORARY: debug output is only the individual background-subtracted
+                    #masters, one file each in {scmode}_bksub_masters/ (a subfolder, so the
+                    #*mcalunit.fits search never picks them up), for visual inspection.
+                    #The full stack and the other debug files are commented out below.
+                    #write_debug(scmode+'_calim_stack.fits', [ims_cal[k] for k in range(len(ims_cal))])
+                    bdir = os.path.join(output_dir, scmode+'_bksub_masters')
+                    os.makedirs(bdir, exist_ok=True)
+                    for k in range(len(imnames)):
+                        im_k = ims_cal[k]
+                        hdr = pyfits.Header()
+                        hdr['MONOWAVE'] = (float(lams[k])*1000.0, 'monochromator wavelength (nm)')
+                        hdr['SRCFILE'] = os.path.basename(imnames[k])
+                        hdr['BKGMETH'] = bkg_method
+                        if isinstance(mean, MonoBackground):
+                            it, s, c = mean.coeffs(pyfits.getdata(imnames[k], memmap=False))
+                            hdr['BKGTMPL'] = (mean.labels[it], 'background template')
+                            hdr['BKGSCALE'] = (s, 'template scale')
+                            hdr['BKGOFFS'] = (c, 'offset (DN/s)')
+                        hdr['DESTRIPE'] = bool(self.config.instrument.apply_destripe)
+                        out = os.path.basename(imnames[k]).replace('.fits', '_bksub.fits')
+                        pyfits.writeto(os.path.join(bdir, out), np.asarray(im_k, dtype=np.float32),
+                                       hdr, overwrite=True)
+                    self.logger.info(f"save_debug_files: wrote {len(imnames)} background-subtracted "
+                                     f"masters to {bdir}")
+
 
                 if scmode.split('-')[0] == 'LowRes':
                     csize = 8
                     self.logger.info("finding spots")
-                    spots = self.find_all_spots(ims_cal,lams,plot_im=False,thresh=90.0,sigma=1.2,medres=False)
+                    spots = self.find_all_spots_names(imnames,lams,mean,plot_im=False,thresh=90.0,sigma=1.2,medres=False)
                     self.logger.info("tracking spots sequentially")
                     spot_tracks = self.track_sequentially(spots,max_match_distance=3)
                     self.logger.info("removing duplicates and silos")
@@ -4979,12 +5399,13 @@ class ProcessMonochrom(BasePrimitive):
                     final_posns, tracks_new, avgs_new, sinfo = self.assign_spots_to_grid(spots, spot_tracks_u, lams, self.lmin, self.lmax, fitinfo['to_index'])
                     tracks_new, filled_set, kinds = self.fill_missing_spots(ims_cal,tracks_new,lams,self.lmin,self.lmax)
                     fluxcut = self.config.instrument.rectmat_fluxcut
-                    posarr, spots = self.make_posarr(ims_cal,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
+                    posarr, spots = self.make_posarr_names(imnames,mean,final_posns,tracks_new,show_plots=False,medres=False,cropsize=csize,cut=fluxcut)
                     posarr, spots = self.drop_lowsnr_spots(ims_cal,posarr,final_posns,filled_set,spots)
 
 
                     pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
-                    write_debug(scmode+'_cropped_spotpsf_arr.fits',spots)
+                    #TEMPORARY (debug output = bksub masters only)
+                    #write_debug(scmode+'_cropped_spotpsf_arr.fits',spots)
 
 
                 if scmode.split('-')[0] == 'MedRes':
@@ -5020,7 +5441,8 @@ class ProcessMonochrom(BasePrimitive):
                     posarr, spots = self.make_posarr_names(imnames,mean,final_posns,tracks_new,show_plots=False,medres=True,cropsize=csize,cut=fluxcut)
 
                     pyfits.writeto(output_dir+'/'+scmode+'_posarr.fits',np.array(posarr),overwrite=True)
-                    write_debug(scmode+'_cropped_spotpsf_arr.fits',spots)
+                    #TEMPORARY (debug output = bksub masters only)
+                    #write_debug(scmode+'_cropped_spotpsf_arr.fits',spots)
 
 
                 centroids = self.get_centroids(spots)
@@ -5042,25 +5464,30 @@ class ProcessMonochrom(BasePrimitive):
 
                 #A&K spot model: only its saved model/residual files use it, so it is
                 #only computed when they are written
-                if save_debug:
-                    oversamp=2
-                    ank_mods, ank_resids, ank_modims, ank_resims, ank_mods_sym, ank_resids_sym, ank_modims_sym, ank_resims_sym = self.AnK_spot_model_2(spots, centroids, self.ny, self.nx, oversamp, ims_cal, posarr)
-                    write_debug(scmode+'_ank_modarr.fits',ank_mods)
-                    write_debug(scmode+'_ank_resarr.fits',ank_resids)
-                    write_debug(scmode+'_ank_modims.fits',ank_modims)
-                    write_debug(scmode+'_ank_resims.fits',ank_resims)
+                #TEMPORARY (debug output = bksub masters only): the A&K spot model is only
+                #used by its debug files, so it is commented out with them
+                #if save_debug:
+                #    oversamp=2
+                #    ank_mods, ank_resids, ank_modims, ank_resims, ank_mods_sym, ank_resids_sym, ank_modims_sym, ank_resims_sym = self.AnK_spot_model_2(spots, centroids, self.ny, self.nx, oversamp, ims_cal, posarr)
+                #    write_debug(scmode+'_ank_modarr.fits',ank_mods)
+                #    write_debug(scmode+'_ank_resarr.fits',ank_resids)
+                #    write_debug(scmode+'_ank_modims.fits',ank_modims)
+                #    write_debug(scmode+'_ank_resims.fits',ank_resims)
                 self.logger.info("fitting spot PSFs for interpolated rectmats")
                 #full-detector model/residual images per wavelength only feed the debug files
 
 
                 #fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots(ims_cal,posarr,show_plots=False,cropsize=csize,cut=fluxcut,full_images=save_debug)
-                fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots_names(imnames,mean,posarr,show_plots=False,cropsize=csize,cut=fluxcut,full_images=save_debug)
+                #TEMPORARY (debug output = bksub masters only): full_images=False, since the
+                #full-detector model/residual images only fed the commented-out files below
+                #fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots_names(imnames,mean,posarr,show_plots=False,cropsize=csize,cut=fluxcut,full_images=save_debug)
+                fitarr,modims,resims,spotim_arr,modim_arr,resim_arr = self.fit_gauss_spots_names(imnames,mean,posarr,show_plots=False,cropsize=csize,cut=fluxcut,full_images=False)
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_gauss_spotpars.fits',np.array(fitarr),overwrite=True)
-                write_debug(scmode+'_gauss_mod_detims.fits',modims)
-                write_debug(scmode+'_gauss_res_detims.fits',resims)
-                write_debug(scmode+'_cropped_spotgauss_arr.fits',modim_arr)
-                write_debug(scmode+'_cropped_spotgaussres_arr.fits',resim_arr)
+                #write_debug(scmode+'_gauss_mod_detims.fits',modims)
+                #write_debug(scmode+'_gauss_res_detims.fits',resims)
+                #write_debug(scmode+'_cropped_spotgauss_arr.fits',modim_arr)
+                #write_debug(scmode+'_cropped_spotgaussres_arr.fits',resim_arr)
 
                 self.logger.info("estimating spectral resolution from spot FWHMs")
                 mono_fwhm_nm = float(self.config.instrument.mono_fwhm_nm or 0.0)
@@ -5069,6 +5496,17 @@ class ProcessMonochrom(BasePrimitive):
                                                         fwhm_pix_range=(0.5, csize))
                 self.write_spectral_resolution(res, lams, scmode, output_dir, plot_dir,
                                                mono_fwhm_nm=mono_fwhm_nm)
+
+                #dispersion check plot (LowRes and MedRes): spot positions, dispersion and
+                #the background light along the traces; on unless the config turns it off
+                dc_flag = getattr(self.config.instrument, 'dispersion_check_plot', None)
+                if dc_flag is None or dc_flag:
+                    try:
+                        self.logger.info("plotting dispersion check")
+                        self.plot_dispersion_check(imnames_all, lams_all, np.array(fitarr), lams,
+                                                   scmode, plot_dir)
+                    except Exception as e:
+                        self.logger.warning(f"dispersion check plot failed: {e}")
 
                 # Anderson & King ePSFs per wavelength and field region (LowRes),
                 # for profile-independent FWHMs; on unless the config turns it off
@@ -5101,8 +5539,13 @@ class ProcessMonochrom(BasePrimitive):
                     per_slice = True if per_slice is None else bool(per_slice)
                     nregx = int(getattr(self.config.instrument, 'medres_ank_nxregions', None) or 3)
                     nbin = int(getattr(self.config.instrument, 'medres_ank_nbin', None) or 16)
+                    #ePSF grid points per detector px (default 2): the MedRes traces are
+                    #vertical, so a slice ePSF only sees its ~17 lenslets' x phases, too
+                    #few for a 4x grid across the trace (cross-trace FWHMs then collapse)
+                    m_os = int(getattr(self.config.instrument, 'medres_ank_oversamp', None) or 2)
                     ank_res = self.AnK_medres_psfs(imnames, mean, np.array(fitarr), lams,
-                                                   nregx=nregx, nbin=nbin, per_slice=per_slice)
+                                                   nregx=nregx, nbin=nbin, per_slice=per_slice,
+                                                   oversamp=m_os)
                     #ePSFs are per wavelength bin; boxes cover the longer MedRes spots
                     ank_lams, ank_crop_half = ank_res['lams'], 7
                     self.write_AnK_lowres_psfs(ank_res, ank_lams, scmode, output_dir, plot_dir)

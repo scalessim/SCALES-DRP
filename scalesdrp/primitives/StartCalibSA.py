@@ -426,6 +426,16 @@ class StartCalibSA(BasePrimitive):
                 self.logger.error(msg)
                 raise ValueError(msg)
 
+        #the saturation map is in linearity-corrected units, so the saturation mask is
+        #only valid on linearity-corrected ramps
+        if (sci_im_full_original.ndim == 3 and self.config.instrument.apply_sat_mask == True
+                and self.config.instrument.do_linearity != True):
+            msg = ("apply_sat_mask=True requires non-linearity correction. "
+                   "Set do_linearity=True, or apply_sat_mask=False to ramp-fit "
+                   "without the saturation mask.")
+            self.logger.error(msg)
+            raise ValueError(msg)
+
         raw_before_linearity = None
         corrected_cube = None
         sat_mask = None
@@ -533,7 +543,8 @@ class StartCalibSA(BasePrimitive):
                     good_read_mask=good_read_mask,
                     output_dir=plot_dir,
                     save_prefix=f"{self.action.args.name}_lin_dign",
-                    skip_initial_reads=2,
+                    #0, not 2: ramps can have only 2 reads (e.g. 1 s LowRes-M/KLM frames)
+                    skip_initial_reads=0,
                     minimum_signal_dn=0.0,
                     show=False)
                 plt.close(fig)
