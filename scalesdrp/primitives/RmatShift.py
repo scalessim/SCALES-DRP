@@ -2,10 +2,14 @@
 Measure the spot shift between a single monochromator frame and an existing
 monochromator scan, and write shifted interpolated rectmats.
 
-The single frame's L1 (made by StartCalibSA), minus the L1 of a background
-frame taken with it (required; e.g. the monochromator at a wavelength
->~200 nm away), is compared with the scan's background-subtracted image at
-the same wavelength. The shift is measured in two steps:
+The single frame's L1 (made by StartCalibSA), minus the L1 of a dedicated,
+spot-free background frame taken with it (required; normally a lamp-off
+frame), is compared with the scan's background-subtracted image at the same
+wavelength. As a safeguard against a background that does contain spots
+(e.g. the monochromator lamp left on), the difference image is checked for
+negative spots next to the frame's spots; if there are any, the result is
+flagged CHECK. With a lamp-off background there are none. The shift is
+measured in two steps:
 
 1. Cross-correlation of the two high-passed images, with the peak searched
    in a box around (rmat_shift_guess_dx, rmat_shift_guess_dy) just under
@@ -167,38 +171,40 @@ class RmatShift(ProcessMonochrom):
             cal = self.masked_row_destripe(cal)[0]
         return cal
 
-    def background_spot_separation(self, scan_dir, scmode, lams, monowave,
-                                   bkg_waves):
+    def negative_spot_fraction(self, new_im, spots, radius, snr_min):
         """
-        Median distance (px) between the spots at monowave and those at the
-        nearest background-frame wavelength, from the scan's spot fits.
-        None when no background frame has a MONOWAVE (e.g. monochromator
-        off), so there are no background spots.
+        Safeguard for the dedicated background, which should be spot free
+        (normally a lamp-off frame). A background that does contain spots
+        leaves negative spots in L1(frame) - L1(background); if they sit
+        close to the frame's (positive) spots they bias the centroids.
+
+        Returns the fraction of the measured spots (rows of
+        measure_spot_shift's info['spots']) that have a negative peak below
+        -snr_min * noise within `radius` px of the spot in the high-passed
+        difference image, or None if no spots were measured. ~0 for a
+        spot-free background.
         """
-        waves = [w for w in bkg_waves if w is not None and np.isfinite(w)]
-        if not waves:
+        if spots is None or len(spots) == 0:
             return None
-        sp = pyfits.getdata(os.path.join(scan_dir, f"{scmode}_gauss_spotpars.fits"))
-        lnm = np.asarray(lams, dtype=float) * 1000.0
-        i0 = int(np.argmin(np.abs(lnm - monowave)))
-        seps = []
-        for w in waves:
-            i1 = int(np.argmin(np.abs(lnm - w)))
-            d = np.hypot(sp[i1][..., 1] - sp[i0][..., 1],
-                         sp[i1][..., 2] - sp[i0][..., 2])
-            sep = float(np.nanmedian(d))
-            if not lnm.min() <= w <= lnm.max():
-                # outside the scan: extrapolate linearly in wavelength
-                sep *= abs(w - monowave) / max(abs(lnm[i1] - monowave), 1e-6)
-            seps.append(sep)
-        return min(seps)
+        hp, noise = self.highpass(new_im)
+        ny, nx = hp.shape
+        r = int(np.ceil(radius))
+        yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+        disk = np.hypot(xx, yy) <= radius
+        n_neg = n_checked = 0
+        for xr, yr, ddx, ddy in spots:
+            xi, yi = int(round(xr + ddx)), int(round(yr + ddy))
+            if xi - r < 0 or yi - r < 0 or xi + r >= nx or yi + r >= ny:
+                continue
+            st = hp[yi - r:yi + r + 1, xi - r:xi + r + 1]
+            n_checked += 1
+            if st[disk].min() < -snr_min * noise:
+                n_neg += 1
+        return n_neg / n_checked if n_checked else None
 
     def load_background(self, bkg_frames, output_dir, hdr):
-        """
-        Mean of the background frames' L1 images, and their MONOWAVE values
-        (None where missing).
-        """
-        ims, waves = [], []
+        """Mean of the background frames' L1 images."""
+        ims = []
         for b in bkg_frames:
             path = scbasic.get_l1_path_from_raw(b, output_dir)
             if not os.path.isfile(path):
@@ -208,17 +214,12 @@ class RmatShift(ProcessMonochrom):
             with pyfits.open(path, memmap=False) as hdul:
                 ims.append(np.asarray(hdul[0].data, dtype=float))
                 bh = hdul[0].header
-            try:
-                waves.append(float(bh["MONOWAVE"]))
-            except (KeyError, TypeError, ValueError):
-                waves.append(None)
             for key in ("EXPTIME", "MCLOCK", "IFSMODE", "MODSLNAM", "DSPRSNAM"):
                 if str(bh.get(key)).strip() != str(hdr.get(key)).strip():
                     self.logger.warning(
                         f"Background {os.path.basename(path)} has {key}="
                         f"{bh.get(key)}, frame has {hdr.get(key)}.")
-        im = np.nanmean(ims, axis=0) if len(ims) > 1 else ims[0]
-        return im, waves
+        return np.nanmean(ims, axis=0) if len(ims) > 1 else ims[0]
 
     @staticmethod
     def load_scan_calim(scan_dir, scmode, ll):
@@ -785,39 +786,24 @@ class RmatShift(ProcessMonochrom):
 
         # ---- background-subtracted spot image. The raw monochromator L1s are
         # dominated by the continuum traces and the spots are only faint
-        # bumps on them. Differencing with a background frame taken at the
-        # same time removes the traces exactly, whatever the frame's shift.
-        # Template-free filters (running medians) and the scan's mean image
-        # both failed on the 20261118 scans, so a background frame is required.
+        # bumps on them. Differencing with a dedicated, spot-free background
+        # frame (normally lamp off) taken at the same time removes the traces
+        # exactly, whatever the frame's shift. Template-free filters (running
+        # medians) and the scan's mean image both failed on the 20261118
+        # scans, so a background frame is required.
         if not bkg_frames:
             raise RuntimeError(
-                "No background frame given. Pass one with -b (a frame taken "
-                "with the frame, e.g. the monochromator at a wavelength "
-                ">~200 nm away), or set rmat_background_frames in the config.")
+                "No background frame given. Pass one with -b (a spot-free "
+                "background taken with the frame, normally lamp off), or set "
+                "rmat_background_frames in the config.")
         destripe = bool(_cfg(inst, "apply_destripe", True))
-        bkg, bkg_waves = self.load_background(bkg_frames, output_dir, hdr)
+        bkg = self.load_background(bkg_frames, output_dir, hdr)
         new_cal = np.nan_to_num(new_im - bkg, nan=0.0)
         if destripe:
             new_cal = self.masked_row_destripe(new_cal)[0]
         bkg_method = "background frame: " + ", ".join(
             os.path.basename(b) for b in bkg_frames)
         self.logger.info(f"Background removal: {bkg_method}")
-
-        # a monochromator background leaves its own (negative) spots in the
-        # difference; they must sit well away from the frame's spots
-        min_sep = float(_cfg(inst, "rmat_bkg_min_sep_px", 7.0))
-        bkg_sep = self.background_spot_separation(
-            scan_dir, scmode, lams, monowave, bkg_waves)
-        bkg_too_close = bkg_sep is not None and bkg_sep < min_sep
-        if bkg_sep is not None:
-            self.logger.info(
-                f"Background spots are {bkg_sep:.1f} px from the frame's spots")
-        if bkg_too_close:
-            self.logger.warning(
-                f"Background frame spots are only {bkg_sep:.1f} px from the "
-                f"frame's spots (need >= {min_sep:.0f} px): its negative spots "
-                "can bias the centroids. Use a background frame at a wavelength "
-                "further away.")
         meanim = None
 
         # reference: the scan's own background-subtracted image at this
@@ -877,6 +863,26 @@ class RmatShift(ProcessMonochrom):
                 "rmat_shift_affine is set but there are too few spots for a "
                 "fit; applying the x/y shift only.")
 
+        # ---- background check. The dedicated background should be spot free
+        # (lamp off), in which case there are no negative spots. If it does
+        # contain spots, its negative spots near the frame's spots can bias
+        # the centroids, so flag the result.
+        neg_radius = float(_cfg(inst, "rmat_bkg_min_sep_px", 7.0))
+        neg_frac_max = float(_cfg(inst, "rmat_neg_spot_frac_max", 0.1))
+        neg_frac = self.negative_spot_fraction(
+            new_cal, info.get("spots"), neg_radius, snr_min)
+        bkg_has_spots = neg_frac is not None and neg_frac > neg_frac_max
+        if neg_frac is not None:
+            self.logger.info(
+                f"Background check: {100 * neg_frac:.1f}% of spots have a "
+                f"negative spot within {neg_radius:.0f} px")
+        if bkg_has_spots:
+            self.logger.warning(
+                f"{100 * neg_frac:.0f}% of the frame's spots have a negative "
+                f"spot within {neg_radius:.0f} px: the background frame "
+                "contains spots, which can bias the centroids. Use a "
+                "spot-free (lamp-off) background frame.")
+
         plot_path = os.path.join(plot_dir, f"{stem}_rmat_shift.png")
         title = f"{stem} vs {ref_name}: dx = {dx:.3f}, dy = {dy:.3f} px"
         if aff is not None:
@@ -919,10 +925,10 @@ class RmatShift(ProcessMonochrom):
             "quality": ("OK" if info["method"] == "spot_centroids"
                         and scatter <= 0.75
                         and not info["xcorr_on_edge"]
-                        and not bkg_too_close else "CHECK"),
+                        and not bkg_has_spots else "CHECK"),
             "background": bkg_method,
-            "background_spot_sep_px": (None if bkg_sep is None
-                                       else round(bkg_sep, 2)),
+            "background_neg_spot_frac": (None if neg_frac is None
+                                         else round(neg_frac, 3)),
             "method": info["method"],
             "model": "affine" if aff is not None else "shift",
             "dx": round(dx, 4), "dy": round(dy, 4),
