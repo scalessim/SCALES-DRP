@@ -8,12 +8,14 @@ measured. Shifted OPT and C2 interpolated rectmats are written to the current
 directory (rmat_out_directory in the config).
 
 Example:
-    start_scales_rmat_shift -f ss260615_15477.fits -b ss260615_15476.fits \
+    start_scales_rmat_shift -f ss261118_06274.fits -b ss261118_06224.fits \
         -r /path/to/monochrom_scan/redux
 
--b gives the background frame; the spot image is then the difference of the
-two L1s. Without -b the frame is background-subtracted like the scan images
-(scaled mean of the scan's mcalunits).
+-b (required) gives the dedicated background frame, which must be spot free:
+normally a lamp-off frame taken with the spot frame. The spot image is the
+difference of the two L1s, which removes the continuum traces exactly. As a
+safeguard, the result is flagged CHECK if the difference image has negative
+spots (i.e. the background contained spots) close to the frame's spots.
 """
 from keckdrpframework.core.framework import Framework
 from keckdrpframework.config.framework_config import ConfigClass
@@ -70,9 +72,9 @@ def _parse_arguments(in_args: list) -> argparse.Namespace:
     parser.add_argument('-b', '--background', dest='background', nargs='*',
                         type=str, default=None,
                         help='Background frame(s) for the monochromator '
-                             'frame(s); the spot image is L1(frame) - '
-                             'L1(background). Without this, the scan-mean '
-                             'background subtraction is used.')
+                             'frame(s) (required); the spot image is '
+                             'L1(frame) - L1(background). Must be spot '
+                             'free: normally a lamp-off frame.')
     parser.add_argument('-o', '--outdir', dest='outdir', type=str,
                         default=None,
                         help='Directory for the shifted rectmats '
@@ -85,6 +87,13 @@ def _parse_arguments(in_args: list) -> argparse.Namespace:
                         default=False,
                         help='Fit and apply an affine model (shift + scale + '
                              'rotation + shear) instead of a single x/y shift')
+    parser.add_argument('--make_noninterp_rmats', dest='make_noninterp_rmats',
+                        action='store_true', default=False,
+                        help='Make the non-interpolated (OPT, C2) rectmats by '
+                             'rebuilding the background-subtracted scan masters '
+                             'one at a time from the *_mcalunit.fits files '
+                             '(without it they are made only from '
+                             '{IFSMODE}_calim_stack.fits, if the scan has one)')
 
     # special arguments, ignore
     parser.add_argument("-I", "--ingest_data_only", dest="ingest_data_only",
@@ -202,11 +211,18 @@ def main():
         scales_config.rmat_measure_only = True
     if args.affine:
         scales_config.rmat_shift_affine = True
+    if args.make_noninterp_rmats:
+        scales_config.rmat_make_noninterp_rmats = True
     if args.background:
         scales_config.rmat_background_frames = list(args.background)
     bkg_frames = getattr(scales_config, 'rmat_background_frames', None) or []
     if isinstance(bkg_frames, str):
         bkg_frames = [bkg_frames]
+    if not bkg_frames or bkg_frames in (['None'], ['']):
+        print("\nERROR - no background frame given. Use -b/--background (or "
+              "rmat_background_frames in the config): a spot-free background "
+              "taken with the monochromator frame, normally lamp off.\n")
+        sys.exit(1)
     for b in bkg_frames:
         if not os.path.isfile(b):
             print(f"\nERROR - background frame {b} does not exist.\n")
