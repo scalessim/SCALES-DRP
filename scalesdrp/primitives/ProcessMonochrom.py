@@ -6,6 +6,7 @@ from scipy.ndimage import binary_dilation
 #from scalesdrp.primitives.scales_file_primitives import scales_fits_writer
 import scalesdrp.primitives.scales_basic as scbasic
 import scalesdrp.primitives.mono_basic as mono_basic
+import scalesdrp.primitives.qc as qc
 import pandas as pd
 import numpy as np
 import pickle
@@ -937,7 +938,7 @@ class ProcessMonochrom(BasePrimitive):
         and find spots that fall
         on common traces. Spots on the same trace are consolidated.
 
-        Each partial track's position at the band centre is predicted from its
+        Each partial track's position at the band center is predicted from its
         first spot (trace model below); tracks whose predicted positions are
         within maxdist px are merged, greedily and in track order. Neighbours
         are found with a KD-tree, which gives the same result as comparing every
@@ -974,7 +975,7 @@ class ProcessMonochrom(BasePrimitive):
                 length=1756
         lam = 0.5*(lmin+lmax)
 
-        #predicted band-centre position of each fragment, from its first spot
+        #predicted band-center position of each fragment, from its first spot
         pos = np.zeros((len(spots_d), 2))
         for i, track in enumerate(spots_d):
             first = track[list(track.keys())[0]]
@@ -2269,14 +2270,14 @@ class ProcessMonochrom(BasePrimitive):
     # wavelength *and field region* from unclipped stamps cut from ims_cal,
     # each spot normalised by its own flux, iterating as in Anderson & King:
     # stack sigma-clipped residuals from the current ePSF, smooth with a
-    # shape-preserving quartic kernel, recentre, then refit every spot's
-    # centre and flux with the new ePSF.
+    # shape-preserving quartic kernel, recenter, then refit every spot's
+    # center and flux with the new ePSF.
     # ------------------------------------------------------------------
 
     @staticmethod
     def _AnK_smoothing_kernel(size=5, degree=4):
         """2D Savitzky-Golay kernel: least-squares polynomial of total degree
-        <= degree over a size x size window, evaluated at the centre. It
+        <= degree over a size x size window, evaluated at the center. It
         smooths noise without broadening structure that the polynomial can
         follow (degree 4 is the 'quartic' kernel used for A&K ePSFs)."""
         h = size // 2
@@ -2293,7 +2294,7 @@ class ProcessMonochrom(BasePrimitive):
         from the spot) removed.
 
         Returns:
-            stamps (n, S, S), cx, cy (spot centre in stamp pixels), noise
+            stamps (n, S, S), cx, cy (spot center in stamp pixels), noise
             (robust std of the background pixels), ok (bool, len(xs): which
             spots were fully on the image; the other outputs only cover these)
         """
@@ -2318,9 +2319,9 @@ class ProcessMonochrom(BasePrimitive):
         stamps = stamps - bkg[:, None, None]
         return stamps, cx, cy, noise, ok
 
-    def _AnK_recentre(self, epsf, oversamp, radius=1.5, max_iter=5):
+    def _AnK_recenter(self, epsf, oversamp, radius=1.5, max_iter=5):
         """Shift the ePSF so its flux centroid within `radius` detector px of
-        the grid centre sits on the grid centre."""
+        the grid center sits on the grid center."""
         G = epsf.shape[0]; c0 = G // 2
         yy, xx = np.mgrid[:G, :G]
         r = np.hypot(xx - c0, yy - c0) / oversamp
@@ -2375,17 +2376,17 @@ class ProcessMonochrom(BasePrimitive):
 
         Args:
             stamps: (n, S, S) background-subtracted spot stamps (S odd)
-            cx, cy: (n,) initial spot centres in stamp pixels
+            cx, cy: (n,) initial spot centers in stamp pixels
             oversamp: ePSF grid points per detector pixel
             n_iter: build / refit iterations
             norm_radius: aperture radius (px) for the initial flux normalisation
-            fit_radius: radius (px) used when refitting spot centres and fluxes
+            fit_radius: radius (px) used when refitting spot centers and fluxes
             clip_sigma: sigma clip applied to the samples in each ePSF grid cell
             smooth: smooth each iteration with the quartic SG kernel
 
         Returns:
             epsf: (G, G) with G = (S-1)*oversamp + 1; grid point k is an offset
-                of (k - G//2)/oversamp detector px from the spot centre. Values
+                of (k - G//2)/oversamp detector px from the spot center. Values
                 are detector-pixel samples of a spot normalised to unit
                 aperture flux.
             info: dict with the final cx, cy, flux, nstars and resid_pct (median
@@ -2424,7 +2425,7 @@ class ProcessMonochrom(BasePrimitive):
             epsf = epsf + delta.reshape(G, G)
             if smooth:
                 epsf = nd_convolve(epsf, kern, mode='constant', cval=0.0)
-            epsf = self._AnK_recentre(epsf, oversamp)
+            epsf = self._AnK_recenter(epsf, oversamp)
             if it < n_iter - 1:
                 cx, cy, flux = self._AnK_refit(stamps, cx, cy, flux, epsf, oversamp, fit_radius)
                 good = np.isfinite(flux) & (flux > 0) & np.isfinite(cx) & np.isfinite(cy)
@@ -2460,7 +2461,7 @@ class ProcessMonochrom(BasePrimitive):
 
     def AnK_epsf_marginals(self, epsf, oversamp, ux=1.0, uy=0.0, step=0.02, window=3.0):
         """Marginal profiles of an ePSF along (ux, uy) and across it, as used by
-        AnK_epsf_fwhm (each summed within +/- window px of the centre across the
+        AnK_epsf_fwhm (each summed within +/- window px of the center across the
         other direction). Returns s, marg_along, marg_across."""
         s, rot, S_, T_ = self._AnK_rotated(epsf, oversamp, ux, uy, step)
         if window is None:
@@ -2507,14 +2508,14 @@ class ProcessMonochrom(BasePrimitive):
 
         Returns (marg_along, marg_across, slice_along, slice_across):
             marg_*: FWHM of the marginal profile (ePSF summed across the other
-                direction, within +/- window px of the centre). marg_along is
+                direction, within +/- window px of the center). marg_along is
                 the line spread function an extraction that sums across the
                 trace sees; it is the quantity to compare with the
                 Gaussian-fit FWHMs. Limiting the sum to +/- window px keeps it
                 from being widened by a small residual background pedestal
                 (summed over the whole stamp, a 0.4%-of-peak pedestal widened
                 LowRes-L marginals by ~1-2%). None sums the whole ePSF.
-            slice_*: FWHM of the profile on a line through the ePSF centre.
+            slice_*: FWHM of the profile on a line through the ePSF center.
         """
         s, rot, S_, T_ = self._AnK_rotated(epsf, oversamp, ux, uy, step)
         mid = len(s) // 2
@@ -2552,7 +2553,7 @@ class ProcessMonochrom(BasePrimitive):
         The lenslet grid is split into nreg x nreg regions with equal numbers
         of lenslets per row / column band (field-dependent PSF shape is then
         resolved at that scale). Spots come from the Gaussian fits (fitarr,
-        used only for the initial centres and to select spots); a spot is used
+        used only for the initial centers and to select spots); a spot is used
         if its stamp is on the detector and its aperture S/N >= snr_min.
 
         Args:
@@ -2655,7 +2656,7 @@ class ProcessMonochrom(BasePrimitive):
 
     def AnK_medres_psfs(self, names, meanim, fitarr, lams, nregx=3, nbin=16, oversamp=4,
                         half=8, bkg_rin=6.0, n_iter=5, snr_min=20.0, max_spots=1500,
-                        min_spots=50, row_gap=20.0, seed=0, per_slice=True, gauss_centre=True):
+                        min_spots=50, row_gap=20.0, seed=0, per_slice=True, gauss_center=True):
         """
         Anderson & King ePSFs for MedRes spots, per wavelength bin and detector
         region, with the same outputs as AnK_lowres_psfs (so write_AnK_lowres_psfs,
@@ -2671,15 +2672,15 @@ class ProcessMonochrom(BasePrimitive):
             assigned wholly to its own slice, with no blending between slices
             (they are different mirrors). per_slice=False: each detector row split
             into nregx equal-count bands in detector x, blended linearly in x
-            between band centres;
+            between band centers;
           - with 17 lenslets per slice there are only 17 spots per region in one
             master, so each ePSF pools nbin consecutive masters (the PSF changes
             little over nbin steps) and is assigned their mean wavelength;
-          - gauss_centre=True: each ePSF is shifted so that the centre of a 2D
-            Gaussian fitted to it is on the grid centre. The builder centres on the
+          - gauss_center=True: each ePSF is shifted so that the center of a 2D
+            Gaussian fitted to it is on the grid center. The builder centers on the
             flux centroid, which for the asymmetric MedRes spots is ~0.27 px off the
-            Gaussian centre along the dispersion; the ePSFs are placed at
-            Gaussian-fit spot centres (AnK_rectmat, spot_residuals), so without this
+            Gaussian center along the dispersion; the ePSFs are placed at
+            Gaussian-fit spot centers (AnK_rectmat, spot_residuals), so without this
             the templates sit ~0.27 px off the spots (a residual dipole);
           - masters are read one at a time from names (load_calim);
           - stamps are larger (MedRes spots are ~4.5 px FWHM along the
@@ -2701,9 +2702,9 @@ class ProcessMonochrom(BasePrimitive):
                 per_slice=False; NaN = no spots), which AnK_rectmat uses to
                 weight the region ePSFs;
             region_y, region_x: [[k, k+1]] region numbers (the regions are not
-                lenslet-index bands); xcen (nry, nrx) region centres (detector x);
-            gauss_dx, gauss_dy: (nbins, nry, nrx) Gaussian-centre offset of each
-                ePSF from its grid centre before the gauss_centre shift (px);
+                lenslet-index bands); xcen (nry, nrx) region centers (detector x);
+            gauss_dx, gauss_dy: (nbins, nry, nrx) Gaussian-center offset of each
+                ePSF from its grid center before the gauss_center shift (px);
             regspace: 'slice' or 'detector'.
         """
         lams = np.asarray(lams, dtype=float)
@@ -2817,8 +2818,8 @@ class ProcessMonochrom(BasePrimitive):
                 epsf, info = self.AnK_build_epsf(st[use], cx[use], cy[use],
                                                  oversamp=oversamp, n_iter=n_iter)
                 o = (ib, ry, rx)
-                if gauss_centre:
-                    epsf, gdx, gdy = self.AnK_gauss_recentre(epsf, oversamp)
+                if gauss_center:
+                    epsf, gdx, gdy = self.AnK_gauss_recenter(epsf, oversamp)
                     out['gauss_dx'][o], out['gauss_dy'][o] = gdx, gdy
                 idx = (L[use], J[use], I[use])
                 u = np.array([np.nanmedian(ux[idx]), np.nanmedian(uy[idx])])
@@ -2848,18 +2849,18 @@ class ProcessMonochrom(BasePrimitive):
                          f"{'slices' if per_slice else 'x bands'}, {nb} wavelength "
                          f"bins of {nbin} masters; median {np.median(out['nspots'][out['nspots'] > 0]) if (out['nspots'] > 0).any() else 0:.0f} "
                          f"spots per ePSF, {np.isfinite(out['fwhm_along']).sum()} of {out['fwhm_along'].size} built")
-        if gauss_centre:
+        if gauss_center:
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore', RuntimeWarning)
-                self.logger.info(f"MedRes A&K ePSFs shifted to their Gaussian centres: median offset "
+                self.logger.info(f"MedRes A&K ePSFs shifted to their Gaussian centers: median offset "
                                  f"dx {np.nanmedian(out['gauss_dx']):+.3f} px, dy {np.nanmedian(out['gauss_dy']):+.3f} px")
         return out
 
-    def AnK_gauss_recentre(self, epsf, oversamp):
-        """Shift an ePSF (cubic spline) so that the centre of a 2D Gaussian fitted to
-        it is on the grid centre: the convention of the Gaussian-fit spot positions
+    def AnK_gauss_recenter(self, epsf, oversamp):
+        """Shift an ePSF (cubic spline) so that the center of a 2D Gaussian fitted to
+        it is on the grid center: the convention of the Gaussian-fit spot positions
         the ePSFs are placed at. Returns (shifted ePSF, dx, dy), dx, dy = the
-        Gaussian centre's offset from the grid centre before the shift (detector px);
+        Gaussian center's offset from the grid center before the shift (detector px);
         the ePSF is returned unchanged (dx = dy = NaN) if the fit fails."""
         G = epsf.shape[0]; c0 = G // 2
         yy, xx = (np.mgrid[:G, :G] - c0) / oversamp
@@ -2887,7 +2888,7 @@ class ProcessMonochrom(BasePrimitive):
         hdr['STAMPHW'] = (int(res['half']), 'stamp half-width (px)')
         hdr['NREGY'] = nry; hdr['NREGX'] = nrx
         hdr['COMMENT'] = 'Anderson & King effective PSFs, axes (lam, region y, region x, gy, gx).'
-        hdr['COMMENT'] = 'Grid centre = spot centre; values are px samples of a unit-flux spot.'
+        hdr['COMMENT'] = 'Grid center = spot center; values are px samples of a unit-flux spot.'
         hdus = [pyfits.PrimaryHDU(res['epsf'].astype(np.float32), header=hdr)]
         L, RY, RX = np.meshgrid(np.arange(nl), np.arange(nry), np.arange(nrx), indexing='ij')
         cols = [pyfits.Column(name='LAMBDA', format='D', unit='um', array=lams[L.ravel()]),
@@ -2910,7 +2911,7 @@ class ProcessMonochrom(BasePrimitive):
                                 ('UX', 'ux', ''), ('UY', 'uy', '')]:
             cols.append(pyfits.Column(name=name, format='D', unit=unit, array=res[key].ravel()))
         for name, key in [('GAUSS_DX', 'gauss_dx'), ('GAUSS_DY', 'gauss_dy')]:
-            #MedRes: Gaussian-centre offset of each ePSF before it was shifted onto it
+            #MedRes: Gaussian-center offset of each ePSF before it was shifted onto it
             if key in res:
                 cols.append(pyfits.Column(name=name, format='D', unit='pix',
                                           array=np.asarray(res[key], float).ravel()))
@@ -2961,7 +2962,7 @@ class ProcessMonochrom(BasePrimitive):
                     ax.annotate('', xy=(3 * res['ux'][l, cy_, cx_], 3 * res['uy'][l, cy_, cx_]),
                                 xytext=(0, 0), arrowprops=dict(arrowstyle='->', color='lime'))
                 ax.set_xlim(-4, 4); ax.set_ylim(-4, 4)
-                ax.set_title(f"centre region, {lams[l]:.3f} um\nFWHM along/across "
+                ax.set_title(f"center region, {lams[l]:.3f} um\nFWHM along/across "
                              f"{res['fwhm_along'][l, cy_, cx_]:.2f}/{res['fwhm_across'][l, cy_, cx_]:.2f} px",
                              fontsize=9)
             lm = nl // 2                          # grid: every region at the middle wavelength
@@ -3050,7 +3051,7 @@ class ProcessMonochrom(BasePrimitive):
         region). The lenslet's fractional position on the grid is given for MedRes
         (lens_fy, lens_fx: detector rows x detector-x bands, AnK_medres_psfs);
         otherwise (LowRes, regions are bands of the lenslet grid) it is its lenslet
-        index, linear between the region centres. Outside the outermost centres the
+        index, linear between the region centers. Outside the outermost centers the
         edge regions are used as they are. reg_ok (nry, nrx) drops regions that
         have no ePSF at all.
         """
@@ -3094,21 +3095,21 @@ class ProcessMonochrom(BasePrimitive):
 
           - field: each lenslet's ePSF is the bilinear blend of the four nearest
             field-region ePSFs (regions are bands of the lenslet grid, so the blend
-            is done in lenslet-index space; outside the outermost region centres
+            is done in lenslet-index space; outside the outermost region centers
             the edge regions are used as they are, without extrapolation);
           - wavelength: linear blend of the ePSFs at the two monochromator
             wavelengths around lam (the nearer one weighted more; outside the
             scanned range the end ePSF is used);
-          - position: the lenslet's spot centre at lam from the cubic-in-lambda fit
-            to its Gaussian spot centres (interp_gauss_spots), and the blended
+          - position: the lenslet's spot center at lam from the cubic-in-lambda fit
+            to its Gaussian spot centers (interp_gauss_spots), and the blended
             ePSF is sampled there with cubic-spline interpolation;
           - channel: each output wavelength is a channel from halfway to the
             previous to halfway to the next one; its template is the average of
             the ePSF placed at nsub wavelengths evenly spread across it (CHARIS
-            uses 10; nsub=1 gives monochromatic templates at the channel centres,
+            uses 10; nsub=1 gives monochromatic templates at the channel centers,
             like the Gaussian OPT_intp rectmat).
 
-        Each template is cut to a (2*crop_half+1)^2 box around the channel-centre
+        Each template is cut to a (2*crop_half+1)^2 box around the channel-center
         position, widened by the spot motion across the channel, negative values
         and values below min_frac of its peak set to 0, and normalised to unit
         sum, i.e. the same profile rows as gen_QL_rectmat_interpd (rows
@@ -3119,13 +3120,13 @@ class ProcessMonochrom(BasePrimitive):
             ank: dict from AnK_lowres_psfs (or read_AnK_lowres_psfs) with epsf
                 (nla, nry, nrx, G, G), oversamp, region_y, region_x
             lams_ank: (nla,) wavelengths of the ePSFs (um)
-            lams_out: (nlam,) channel-centre wavelengths of the rectmat (um)
+            lams_out: (nlam,) channel-center wavelengths of the rectmat (um)
             fitarr: (nl, ny, nx, >=6) Gaussian spot fits at lams_fit
             lams_fit: (nl,) wavelengths of fitarr (um)
             shift: (dx, dy) px added to every spot position (disperser motion)
 
         Returns (rmat, info) with info: positions (nlam, ny, nx, 2) of the channel
-        centres, nonzeros per template (nlam, ny, nx), box size.
+        centers, nonzeros per template (nlam, ny, nx), box size.
         """
         from scipy.ndimage import spline_filter
         lams_ank = np.asarray(lams_ank, float)
@@ -3158,7 +3159,7 @@ class ProcessMonochrom(BasePrimitive):
             lsub = edges[:-1, None] + frac[None]*(edges[1:]-edges[:-1])[:, None]
         else:
             lsub = lams_out[:, None]
-        #spot centres at every sub-wavelength and at the channel centres
+        #spot centers at every sub-wavelength and at the channel centers
         allw = np.concatenate([lams_out, lsub.ravel()])
         pos = self.interp_gauss_spots(np.asarray(lams_fit, float), allw, fitarr)[..., 1:3]
         pos_c = pos[:nlam]                                   #(nlam, ny, nx, 2)
@@ -3665,7 +3666,7 @@ class ProcessMonochrom(BasePrimitive):
         """
         Local trace direction and dispersion from the Gaussian spot fits.
 
-        Fits x(lambda) and y(lambda) of each lenslet's fitted spot centres with
+        Fits x(lambda) and y(lambda) of each lenslet's fitted spot centers with
         polynomials and differentiates them. Derivatives are only evaluated
         inside the wavelength range that lenslet's good spots cover.
 
@@ -3924,7 +3925,7 @@ class ProcessMonochrom(BasePrimitive):
             label=scmode, medres=scmode.split('-')[0] == 'MedRes')
         self.logger.info(
             f"{scmode} dispersion check: median {info['median_disp']:.1f} px/um over lenslets "
-            f"(centre lenslet {info['centre_lenslet']} line fit {info['line_fit_disp']:.1f} px/um); "
+            f"(center lenslet {info['center_lenslet']} line fit {info['line_fit_disp']:.1f} px/um); "
             f"background light drops at the red end at {info['red_end_um']:.3f} um"
             + (f"; trace {info['trace_len_px']:.1f} px at half max = {info['blue_end_um']:.2f}-"
                f"{info['red_end_um']:.2f} um" if info['flat'] else '')
@@ -4134,11 +4135,11 @@ class ProcessMonochrom(BasePrimitive):
         Gaussian: data crop - Gaussian fit model crop (fit_gauss_spots[_names]).
         A&K (if ank is given): the ePSF the A&K rectmat uses for that lenslet
         (AnK_field_weights blend of the region ePSFs, linear in wavelength between
-        the ePSF wavelengths) placed at the Gaussian-fit spot centre, as the A&K
+        the ePSF wavelengths) placed at the Gaussian-fit spot center, as the A&K
         rectmat places it, with only its flux fitted (least squares within
-        fit_radius px of the centre).
+        fit_radius px of the center).
 
-        Residual RMS within fit_radius px of the centre, in % of the spot's data
+        Residual RMS within fit_radius px of the center, in % of the spot's data
         peak (the same quantity for both models; the A&K ePSF builder logs the
         same RMS relative to its model peak).
 
@@ -4245,7 +4246,7 @@ class ProcessMonochrom(BasePrimitive):
         {scmode}_spot_residuals.png (mono_basic.plot_spot_residual_diagnostics)."""
         hdr = pyfits.Header()
         hdr['IFSMODE'] = scmode
-        hdr['FITRAD'] = (float(sres['fit_radius']), 'px; RMS within this radius of the spot centre')
+        hdr['FITRAD'] = (float(sres['fit_radius']), 'px; RMS within this radius of the spot center')
         hdr['BUNIT'] = '%'
         hdr['COMMENT'] = 'Gaussian-fit residual RMS per spot, % of the spot data peak.'
         with warnings.catch_warnings():
@@ -4479,7 +4480,7 @@ class ProcessMonochrom(BasePrimitive):
                     a.set_title(t, fontsize=10)
                     a.set_xlabel('lenslet x'); a.set_ylabel('lenslet y')
                     fig.colorbar(im, ax=a)
-                #centred on its median (cross/along is ~1.7 in MedRes, ~1.1 in LowRes)
+                #centered on its median (cross/along is ~1.7 in MedRes, ~1.1 in LowRes)
                 vmin, vmax = robust_range(lratio, 0.01)
                 im = ax2[2].imshow(lratio, origin='lower', cmap='RdBu_r', vmin=vmin, vmax=vmax)
                 ax2[2].set_title('median R_cross / R_along (A&K)', fontsize=10)
@@ -5002,7 +5003,7 @@ class ProcessMonochrom(BasePrimitive):
     def get_medres_lensarr_xy(self,avgs,show_plots=True,nslot=17,nscol=6,dist=26):
         """
         Register MedRes traces to lenslets. avgs are the trace positions at the band
-        centre. They are split into the 3 detector rows (clusters in y separated by
+        center. They are split into the 3 detector rows (clusters in y separated by
         more than dist px; the 3 most populated are kept), then each row is placed on
         its 6 x 17 slot lattice by medres_row_slots, and supercolumns are mapped to
         lenslet columns with scol_map.
@@ -5588,6 +5589,23 @@ class ProcessMonochrom(BasePrimitive):
                 pyfits.writeto(output_dir+'/'+
                                 scmode+'_gauss_spotpars_interpd.fits',np.array(interp_arr),
                                 overwrite=True)
+
+                #QC: leave-one-wavelength-out test of the interpolation above (QWAVRMS)
+                try:
+                    wloo = qc.wavelength_loo_residuals(lams, np.array(fitarr), deg=3, cov_frac=0.9)
+                    qc.update_qc_file(
+                        os.path.join(output_dir, scmode+'_calib_qc.fits'), wloo['cards'],
+                        images={'QWAVMAP': wloo['rms_along_map'],
+                                'QWAVXMAP': wloo['rms_cross_map']},
+                        ifsmode=scmode)
+                    wc = wloo['cards']
+                    self.logger.info(
+                        f"QC wavelength interpolation (leave-one-out, {wc['QWAVNLN'][0]} lenslets): "
+                        f"along trace {wc['QWAVRMS'][0]:.3f} px RMS ({wc['QWAVNM'][0]:.3f} nm), "
+                        f"P90 {wc['QWAVP90'][0]:.3f} px, across trace {wc['QWAVXRM'][0]:.3f} px")
+                except Exception as e:
+                    self.logger.warning(f"QC wavelength interpolation test failed: {e}")
+
                 self.logger.info("making chi2 rectmat")
                 #OPT and chi2 rectmats from the spot crops (make_posarr's boxes, same values as
                 #cutting them from the full images); the interpolated ones need no images

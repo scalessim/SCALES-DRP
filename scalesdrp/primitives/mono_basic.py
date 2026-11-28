@@ -294,13 +294,13 @@ def plot_spot_residual_diagnostics(sres, lams, output_dir, filename, title='', d
                                    show=False):
     """Spot model residual diagnostics (ProcessMonochrom.spot_residuals).
 
-    Row 1: residual RMS (within fit_radius px of each spot centre, % of the spot's
+    Row 1: residual RMS (within fit_radius px of each spot center, % of the spot's
     data peak) versus wavelength for the Gaussian fits and the A&K ePSF (median and
     16-84% of spots); per-lenslet median maps for both; histogram of all spots.
     Rows 2-3: median over spots of data/peak (left) and of residual/peak at the
     stacked wavelengths, Gaussian (row 2) and A&K (row 3), on a common symmetric
     colour scale, so systematic shape errors (wings, asymmetry along the trace,
-    centring offsets) show up as coherent patterns.
+    centering offsets) show up as coherent patterns.
     """
     lams = np.asarray(lams, float)
     rg, ra = np.asarray(sres['rms_gauss']), np.asarray(sres['rms_ank'])
@@ -394,9 +394,9 @@ DISPERSION_CHECK_EDGES = {
 
 def _dispersion_panelA_medres(fig, gspec, cont, fit, lams, good, nwell, nolight, KEY, edges, cols,
                               predict, j0, i0, L0, nx):
-    """Panel A of plot_dispersion_check for MedRes: a strip along the whole centre
+    """Panel A of plot_dispersion_check for MedRes: a strip along the whole center
     trace (with its neighbouring traces either side) and zooms on its blue and red
-    ends, with the spot centres, the predicted positions of the unused masters and
+    ends, with the spot centers, the predicted positions of the unused masters and
     the band-edge markers. Returns (axes, title)."""
     sub = gspec.subgridspec(1, 3, wspace=0.28, width_ratios=[0.8, 1, 1])
     g0 = good[:, j0, i0]
@@ -461,7 +461,7 @@ def _dispersion_panelA_medres(fig, gspec, cont, fit, lams, good, nwell, nolight,
         a.set_title(f'{name} end of the trace', fontsize=10)
         if k == 1:
             a.scatter([], [], s=9, c='magenta',
-                      label=f'spot centres (Gaussian fits), {lams.min():.3f}-{lams.max():.3f} um')
+                      label=f'spot centers (Gaussian fits), {lams.min():.3f}-{lams.max():.3f} um')
             if len(nolight):
                 a.scatter([], [], s=14, facecolors='none', edgecolors='yellow',
                           label=f'predicted: {len(nolight)} unused masters')
@@ -481,17 +481,17 @@ def plot_dispersion_check(cont, fit, lams, dxdl, dydl, good, all_waves, output_d
     the measured dispersion and the background light along the traces agree.
 
     A. Background light (median of the raw masters) along a line of traces (the
-       centre lenslet and its neighbours on the same line), with the Gaussian-fit spot
-       centres, the predicted positions of the masters that were not used (no or faint
+       center lenslet and its neighbours on the same line), with the Gaussian-fit spot
+       centers, the predicted positions of the masters that were not used (no or faint
        monochromator light: mono_wave_range / mono_exclude_waves) and big markers at
        the design band edges (and any extra wavelengths).
-    B. Centre lenslet: distance along the track (arc length of the cubic x(lam), y(lam)
+    B. Center lenslet: distance along the track (arc length of the cubic x(lam), y(lam)
        fit) vs MONOWAVE, with a straight-line fit.
     C. All lenslets: straight-line distance between two spots / wavelength difference
        (no fit, no derivative).
     D. Local dispersion (derivative of each lenslet's cubic track fit, as used for R)
        vs wavelength.
-    E. Background light along the trace (median over lenslets near the centre
+    E. Background light along the trace (median over lenslets near the center
        lenslet), with the spot positions and the design band edges marked; the
        wavelength where the light drops at the red end and, where the light is
        roughly flat across the trace, the trace's half-max length and end wavelengths.
@@ -505,12 +505,12 @@ def plot_dispersion_check(cont, fit, lams, dxdl, dydl, good, all_waves, output_d
         edges: design band edges (um); extra: more wavelengths to mark (um)
         label: mode / dataset name for the title
         medres: MedRes layout. Each trace spans most of the detector and there is no
-            next trace on the same line, so A shows a strip along the whole centre
+            next trace on the same line, so A shows a strip along the whole center
             trace (with its neighbouring traces either side) and zooms on its two
             ends, and E runs along the whole trace.
 
     Returns (path, info): path of the saved figure and a dict with the measured
-    numbers (median_disp, line_fit_disp, centre lenslet, red-end wavelength, ...).
+    numbers (median_disp, line_fit_disp, center lenslet, red-end wavelength, ...).
     """
     import warnings
     from scipy.ndimage import map_coordinates
@@ -550,14 +550,14 @@ def plot_dispersion_check(cont, fit, lams, dxdl, dydl, good, all_waves, output_d
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        #centre lenslet: well sampled and nearest the middle of the lenslet array
+        #center lenslet: well sampled and nearest the middle of the lenslet array
         nwell = good.sum(0)
         J, I = np.nonzero(nwell >= 0.9 * nl)
         if len(J) == 0:
             J, I = np.nonzero(nwell >= max(8, 0.5 * nl))
         if medres:
             #MedRes lenslet indices are not laid out like the detector: take the trace
-            #nearest the detector centre (median spot position)
+            #nearest the detector center (median spot position)
             with np.errstate(invalid='ignore'):
                 xm_ = np.nanmedian(np.where(good, fit[..., 1], np.nan), axis=0)[J, I]
                 ym_ = np.nanmedian(np.where(good, fit[..., 2], np.nan), axis=0)[J, I]
@@ -628,7 +628,7 @@ def plot_dispersion_check(cont, fit, lams, dxdl, dydl, good, all_waves, output_d
                     a.legend(loc='lower right', fontsize=7.5, framealpha=.85)
                     continue
                 a.set_yticklabels([])
-                a.set_title('same, with spot centres and predicted\npositions of the unused masters', fontsize=10)
+                a.set_title('same, with spot centers and predicted\npositions of the unused masters', fontsize=10)
                 for (j, i) in line:
                     g_ = good[:, j, i]
                     a.scatter(fit[g_, j, i, 1], fit[g_, j, i, 2], s=6, c=cols[g_], edgecolors='none', zorder=3)
@@ -650,7 +650,7 @@ def plot_dispersion_check(cont, fit, lams, dxdl, dydl, good, all_waves, output_d
                         a.annotate(f'lenslet ({j},{i})', predict(j, i, L0)[0], xytext=(-10, 0),
                                    textcoords='offset points', color='w', fontsize=8, va='center', ha='right')
                 a.scatter([], [], s=9, c='magenta',
-                          label=f'spot centres (Gaussian fits), {lams.min():.3f}-{lams.max():.3f} um')
+                          label=f'spot centers (Gaussian fits), {lams.min():.3f}-{lams.max():.3f} um')
                 if len(nolight):
                     a.scatter([], [], s=12, facecolors='none', edgecolors='yellow',
                               label=f'predicted: {len(nolight)} unused masters\n(no or faint monochromator light)')
@@ -662,7 +662,7 @@ def plot_dispersion_check(cont, fit, lams, dxdl, dydl, good, all_waves, output_d
         # ---------------- B ----------------
         a = fig.add_subplot(gs[0, 1])
         sp = np.interp(lams[g], ld, s)
-        a.plot(lams[g], sp, 'o', ms=4, label='spot centres (Gaussian fits)')
+        a.plot(lams[g], sp, 'o', ms=4, label='spot centers (Gaussian fits)')
         c1 = np.polyfit(lams[g], sp, 1)
         a.plot(ld, np.polyval(c1, ld), 'k-', lw=1, label=f'straight-line fit: {c1[0]:.1f} px/um')
         a.set(xlabel='MONOWAVE (um)', ylabel=f'distance along track from {L0:g} um spot (px)',
@@ -719,12 +719,12 @@ def plot_dispersion_check(cont, fit, lams, dxdl, dydl, good, all_waves, output_d
                                               order=1, cval=np.nan) for t in (-0.5, 0, 0.5)], axis=0)
                 profs.append(pr)
                 sm_ = np.full(nl, np.nan); sm_[g2] = np.interp(lams[g2], ld2, s2); smark.append(sm_)
-        if not profs:                     #fall back to the centre lenslet alone
+        if not profs:                     #fall back to the center lenslet alone
             profs = [np.full(len(ext), np.nan)]; smark = [np.where(g, np.interp(lams, ld, s), np.nan)]
         profs = np.array(profs); med = np.nanmedian(profs, 0)
         sm = np.nanmedian(np.array(smark), 0)
         a.plot(ext, med, 'k-', lw=2,
-               label=f'background light along the trace (median of {len(profs)} lenslets near the centre)')
+               label=f'background light along the trace (median of {len(profs)} lenslets near the center)')
         base, top = np.nanpercentile(med, 2), np.nanmax(med)
         smok = np.isfinite(sm); sf, sl = sm[smok].min(), sm[smok].max()
 
@@ -831,7 +831,7 @@ def plot_dispersion_check(cont, fit, lams, dxdl, dydl, good, all_waves, output_d
         output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
         path = output_dir / filename
         fig.savefig(path, dpi=dpi, bbox_inches='tight'); plt.close(fig)
-        info = dict(centre_lenslet=(j0, i0), track_len_px=float(tls), line_fit_disp=float(c1[0]),
+        info = dict(center_lenslet=(j0, i0), track_len_px=float(tls), line_fit_disp=float(c1[0]),
                     median_disp=mdm, neighbour=(dj, di) if best is not None else None,
                     red_end_um=float(lam_hi), trace_len_px=float(TL), blue_end_um=float(lam_lo),
                     flat=bool(flat), n_unused=len(nolight),

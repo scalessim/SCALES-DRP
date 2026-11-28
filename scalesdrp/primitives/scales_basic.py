@@ -1135,6 +1135,41 @@ def save_rectmat(path, R_matrix, cube_shape):
     )
 
 
+def add_rectmat_header(path, header):
+    """
+    Embed a FITS header (e.g. the QC header) in an existing rectmat .npz as a
+    'header' entry holding the header card string. The file is a zip archive, so
+    this appends one small member without rewriting the matrix; an existing
+    'header' entry is replaced. sp.load_npz and load_rectmat ignore it.
+    """
+    import zipfile
+    import io
+    buf = io.BytesIO()
+    np.lib.format.write_array(buf, np.array(header.tostring()), allow_pickle=False)
+    with zipfile.ZipFile(path) as z:
+        has = 'header.npy' in z.namelist()
+    if has:
+        # zip has no in-place delete: rewrite the archive without the old member
+        tmp = path + '.tmp'
+        with zipfile.ZipFile(path) as zin, \
+                zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename != 'header.npy':
+                    zout.writestr(item, zin.read(item.filename))
+        os.replace(tmp, path)
+    with zipfile.ZipFile(path, 'a', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('header.npy', buf.getvalue())
+
+
+def read_rectmat_header(path):
+    """The FITS header embedded by add_rectmat_header, or None if there is none."""
+    from astropy.io import fits
+    with np.load(path) as z:
+        if 'header' not in z.files:
+            return None
+        return fits.Header.fromstring(str(z['header']))
+
+
 def load_rectmat(path, lenslet_grid=None):
     """
     Load a rectmat and the cube shape (nlam, ny, nx) of its flux axis.

@@ -15,15 +15,19 @@ measured in two steps:
    in a box around (rmat_shift_guess_dx, rmat_shift_guess_dy) just under
    half the lenslet pitch on each axis, so it cannot jump to a neighbouring
    lenslet.
-2. Spot-by-spot refinement: every spot in the scan's Gaussian fit at that
-   wavelength is centroided in both images with the same estimator, and the
-   sigma-clipped median of the per-spot offsets is the final shift.
+2. Spot-by-spot refinement: every spot is Gaussian-fitted in the frame the
+   same way ProcessMonochrom fitted the scan (its {scmode}_posarr.fits box,
+   moved by the whole-pixel shift; same flux cut, model and fitter), and the
+   sigma-clipped median of (frame fit - scan fit) is the final shift. The
+   rectmats place the spots at the scan's Gaussian centers, so the shift is
+   in their convention. A centroid shift (same spots, both images) is logged
+   as a cross-check.
 3. Optional (rmat_shift_affine = True): an affine fit (shift + scale +
    rotation + shear) to the per-spot offsets, for frames whose spot pattern
    also changed scale.
 
 The shift (or the affine offset at each spot position) is then added to the
-x and y centres of the scan's interpolated Gaussian spot parameters
+x and y centers of the scan's interpolated Gaussian spot parameters
 ({scmode}_gauss_spotpars_interpd.fits) and the OPT and C2 interpolated
 rectmats are rebuilt from them, the same way ProcessMonochrom builds its
 rectmat_xshift / rectmat_yshift rectmats.
@@ -31,10 +35,13 @@ rectmat_xshift / rectmat_yshift rectmats.
 import os
 import csv
 import datetime
+import warnings
 
 import numpy as np
 import astropy.io.fits as pyfits
 from astropy.stats import sigma_clipped_stats
+from astropy.modeling import fitting
+from astropy.modeling.functional_models import Gaussian2D
 from scipy.ndimage import gaussian_filter
 import matplotlib
 matplotlib.use("Agg")
@@ -43,11 +50,19 @@ import matplotlib.pyplot as plt
 from scalesdrp.primitives.ProcessMonochrom import ProcessMonochrom, MonoBackground
 from scalesdrp.primitives.scales_basic import fits_headers_to_dataframe
 import scalesdrp.primitives.scales_basic as scbasic
+import scalesdrp.primitives.qc as qc
 
 
-# origin of the affine fit: the detector centre, so its constant terms are
+# origin of the affine fit: the detector center, so its constant terms are
 # the shift there
 AFFINE_X0 = AFFINE_Y0 = 1024.0
+
+# QC: quality is CHECK when the shifted model fits the frame's spots worse than
+# the unshifted one (RSIMPRV = shifted / unshifted residual RMS above this)
+RSIMPRV_MAX = 1.05
+# warn when the shifted model's spot residual exceeds this many x the pixel noise
+# (LowRes-L 20261120 flash: 1.13 for the fitted shift, 1.65 with a 0.3 px error)
+RSRESAN_WARN = 2.0
 
 
 KNOWN_IFSMODES = scbasic.KNOWN_IFSMODES
@@ -69,10 +84,18 @@ class RmatShift(ProcessMonochrom):
     # ------------------------------------------------------------------
     # scan lookup
     # ------------------------------------------------------------------
-    def find_matching_mcalunit(self, scan_dir, scmode, monowave, tol_nm):
+    def find_matching_mcalunit(self, scan_dir, scmode, monowave, tol_nm, kept_nm):
         """
         Find the mcalunit image in scan_dir with the same IFS mode and the
-        wavelength closest to monowave (nm). Raises if none is within tol_nm.
+        wavelength closest to monowave (nm), among the masters the scan kept
+        (kept_nm: the {scmode}_lams.fits wavelengths in nm, i.e. the masters
+        left after mono_wave_range / mono_exclude_waves, which have spot
+        fits). Raises if no kept master is within tol_nm, so the reference
+        image and the spot fits are always at the same wavelength.
+
+        Returns the master's filename, its MONOWAVE, its header row, all of
+        the mode's masters (kept or not) and the index of its wavelength in
+        kept_nm.
         """
         df = fits_headers_to_dataframe(scan_dir, pattern="*mcalunit.fits")
         # warn about IFSMODE/MODSLNAM disagreements once, not per file
@@ -92,17 +115,33 @@ class RmatShift(ProcessMonochrom):
             raise RuntimeError(
                 f"No {scmode} mcalunit images found in {scan_dir}.")
 
+        kept_nm = np.asarray(kept_nm, dtype=float)
         waves = df["MONOWAVE"].astype(float)
-        dl = (waves - monowave).abs()
+        # a master is kept if its wavelength is in {scmode}_lams.fits
+        to_kept = np.array([np.min(np.abs(kept_nm - w)) for w in waves])
+        kept = df[to_kept <= 0.01]
+        if kept.empty:
+            raise RuntimeError(
+                f"None of the {scmode} mcalunit images in {scan_dir} has a "
+                f"wavelength in {scmode}_lams.fits (no spot fits for any of them).")
+
+        kwaves = kept["MONOWAVE"].astype(float)
+        dl = (kwaves - monowave).abs()
         best = dl.idxmin()
         if dl[best] > tol_nm:
-            nearest = waves.iloc[np.argsort(dl.values)[:3]].values
-            raise RuntimeError(
-                f"No {scmode} mcalunit within {tol_nm} nm of {monowave} nm in "
-                f"{scan_dir}. Nearest scan wavelengths: "
-                f"{', '.join(f'{w:.3f}' for w in nearest)} nm. "
-                "Increase wave_match_tol_nm in the config to accept one.")
-        return df.loc[best, "filename"], float(waves[best]), df.loc[best], df
+            nearest = kwaves.iloc[np.argsort(dl.values)[:3]].values
+            msg = (f"No {scmode} scan wavelength with spot fits within {tol_nm} nm "
+                   f"of {monowave} nm in {scan_dir}. Nearest kept scan "
+                   f"wavelengths: {', '.join(f'{w:.3f}' for w in nearest)} nm.")
+            dropped = waves[(to_kept > 0.01) & ((waves - monowave).abs() <= tol_nm).values]
+            if len(dropped):
+                msg += (f" The scan has a master at {dropped.iloc[0]:.3f} nm, but it "
+                        "was left out of the spot fits (mono_wave_range / "
+                        "mono_exclude_waves).")
+            raise RuntimeError(msg + " Use a frame at a kept scan wavelength, or "
+                               "increase wave_match_tol_nm to accept one of these.")
+        ll = int(np.argmin(np.abs(kept_nm - float(kwaves[best]))))
+        return (df.loc[best, "filename"], float(kwaves[best]), df.loc[best], df, ll)
 
     def scan_mean_image(self, scan_dir, df, scmode, cache_dir):
         """
@@ -162,7 +201,12 @@ class RmatShift(ProcessMonochrom):
         destripe. Only for the scan's reference master; the single frame is
         always cleaned with its background frame.
         """
-        bkg = MonoBackground.read(template_path, self.logger)
+        cache = getattr(self, "_bkg_templates", None)
+        if cache is None:
+            cache = self._bkg_templates = {}
+        if template_path not in cache:
+            cache[template_path] = MonoBackground.read(template_path, self.logger)
+        bkg = cache[template_path]
         it, s, c = bkg.coeffs(im, setup=setup)
         self.logger.info(f"Scan reference background: {bkg.labels[it]} template, "
                          f"scale {s:.3f}, offset {c:+.4f}")
@@ -171,12 +215,31 @@ class RmatShift(ProcessMonochrom):
             cal = self.masked_row_destripe(cal)[0]
         return cal
 
+    def clean_scan_master(self, scan_dir, scmode, name, df_mode, cache_dir, destripe):
+        """
+        One of the scan's masters (name, a *_mcalunit.fits in scan_dir),
+        background-subtracted the way the scan did it: with the scan's
+        {scmode}_bkg_template.fits (mono_bkg_method = 'trace_fit') when it has
+        one, else (older scans) with the scaled mean of the scan's masters.
+        """
+        path = os.path.join(scan_dir, name)
+        im = pyfits.getdata(path).astype(float)
+        tpath = os.path.join(scan_dir, f"{scmode}_bkg_template.fits")
+        if os.path.isfile(tpath):
+            return self.calibrate_like_scan_template(
+                im, tpath, destripe, setup=MonoBackground.setup_of(path))
+        if getattr(self, "_scan_meanim", None) is None:
+            self.logger.info(f"No {scmode}_bkg_template.fits in the scan; using the "
+                             "scaled mean of the scan's masters")
+            self._scan_meanim = self.scan_mean_image(scan_dir, df_mode, scmode, cache_dir)
+        return self.calibrate_like_scan(im, self._scan_meanim, destripe)
+
     def negative_spot_fraction(self, new_im, spots, radius, snr_min):
         """
         Safeguard for the dedicated background, which should be spot free
         (normally a lamp-off frame). A background that does contain spots
         leaves negative spots in L1(frame) - L1(background); if they sit
-        close to the frame's (positive) spots they bias the centroids.
+        close to the frame's (positive) spots they bias the spot fits.
 
         Returns the fraction of the measured spots (rows of
         measure_spot_shift's info['spots']) that have a negative peak below
@@ -203,8 +266,10 @@ class RmatShift(ProcessMonochrom):
         return n_neg / n_checked if n_checked else None
 
     def load_background(self, bkg_frames, output_dir, hdr):
-        """Mean of the background frames' L1 images."""
+        """Mean of the background frames' L1 images. Header keys that differ from
+        the frame's are kept in self.bkg_mismatch for the QC header."""
         ims = []
+        self.bkg_mismatch = []
         for b in bkg_frames:
             path = scbasic.get_l1_path_from_raw(b, output_dir)
             if not os.path.isfile(path):
@@ -216,6 +281,8 @@ class RmatShift(ProcessMonochrom):
                 bh = hdul[0].header
             for key in ("EXPTIME", "MCLOCK", "IFSMODE", "MODSLNAM", "DSPRSNAM"):
                 if str(bh.get(key)).strip() != str(hdr.get(key)).strip():
+                    if key not in self.bkg_mismatch:
+                        self.bkg_mismatch.append(key)
                     self.logger.warning(
                         f"Background {os.path.basename(path)} has {key}="
                         f"{bh.get(key)}, frame has {hdr.get(key)}.")
@@ -248,7 +315,7 @@ class RmatShift(ProcessMonochrom):
     @staticmethod
     def centroid(im, x, y, half, niter=3):
         """
-        Iterative centre-of-light centroid in a (2*half+1)^2 stamp, with the
+        Iterative center-of-light centroid in a (2*half+1)^2 stamp, with the
         stamp border median as background. Returns (x, y, peak).
         """
         ny, nx = im.shape
@@ -327,17 +394,63 @@ class RmatShift(ProcessMonochrom):
         on_edge = (abs(dx - guess[0]) > mx - 1) or (abs(dy - guess[1]) > my - 1)
         return float(dx), float(dy), on_edge
 
-    def measure_spot_shift(self, ref_im, new_im, spot_pars, half=4,
-                           snr_min=10.0, min_spots=20, max_shift=None,
-                           guess=(0.0, 0.0), affine=False):
+    @staticmethod
+    def fit_gauss_box(im, xs, xe, ys, ye, cut=0.0):
         """
-        Measure the shift (new - ref) of the spots in new_im relative to
-        ref_im. spot_pars is the (ny, nx, 6) Gaussian fit array of the scan
-        at this wavelength (x centre in [..., 1], y centre in [..., 2]).
+        Gaussian fit of one spot, as ProcessMonochrom.fit_gauss_spots_names
+        fits the scan: the box im[ys:ye, xs:xe], pixels below cut * max set to
+        0, an astropy Gaussian2D (no constant) started at the box center with
+        sigma 1 and the box peak as amplitude, fitted with LevMarLSQFitter.
+        Returns the (x, y) center in detector px, or None if the fit fails or
+        is not sensible (center outside the box, non-positive or very large
+        sigma).
+        """
+        cropped = np.array(im[ys:ye, xs:xe], dtype=float)
+        if cropped.size == 0 or not np.all(np.isfinite(cropped)):
+            return None
+        cropped[cropped < cut * np.max(cropped)] = 0.0
+        amp0 = np.max(cropped)
+        if not amp0 > 0:
+            return None
+        g0 = Gaussian2D(amplitude=amp0, x_mean=(xe - xs) * 0.5, y_mean=(ye - ys) * 0.5,
+                        x_stddev=1., y_stddev=1.)
+        y, x = np.mgrid[:(ye - ys), :(xe - xs)]
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                m = fitting.LevMarLSQFitter()(g0, x, y, cropped)
+        except Exception:
+            return None
+        xm, ym = m.x_mean.value, m.y_mean.value
+        sx, sy = abs(m.x_stddev.value), abs(m.y_stddev.value)
+        if not (np.isfinite(xm) and np.isfinite(ym) and 0 <= xm <= xe - xs - 1
+                and 0 <= ym <= ye - ys - 1 and 0.1 < sx < (xe - xs) and 0.1 < sy < (ye - ys)):
+            return None
+        return xm + xs, ym + ys
 
-        Returns dx, dy and a dict of diagnostics. With affine=True (and
-        enough spots) info['affine'] also holds an affine fit to the
-        per-spot offsets (see fit_affine).
+    def measure_spot_shift(self, ref_im, new_im, spot_pars, posarr, half=4,
+                           snr_min=10.0, min_spots=20, max_shift=None,
+                           guess=(0.0, 0.0), affine=False, fluxcut=0.0):
+        """
+        Measure the shift (new - scan) of the spots in new_im relative to the
+        scan. spot_pars is the (ny, nx, 6) Gaussian fit array of the scan at
+        this wavelength (x center in [..., 1], y center in [..., 2]) and
+        posarr the scan's (ny, nx, 7) spot boxes at that wavelength (from
+        {scmode}_posarr.fits), which the scan's Gaussian fits used. ref_im,
+        the scan's background-subtracted image, is used for the coarse
+        cross-correlation, the S/N cut and the centroid cross-check.
+
+        1. Cross-correlation of the high-passed images (whole-pixel shift and
+           start for the fits).
+        2. Every spot Gaussian-fitted in new_im the way the scan was fitted
+           (fit_gauss_box), in its scan box moved by the whole-pixel shift;
+           the shift is the sigma-clipped median of (new fit - scan fit).
+        3. Cross-check: the same spots centroided in both high-passed images.
+
+        Returns dx, dy and a dict of diagnostics; info['spots'] rows are
+        (x_scan, y_scan, dx, dy). With affine=True (and enough spots)
+        info['affine'] also holds an affine fit to the per-spot offsets (see
+        fit_affine).
         """
         ref_hp, ref_noise = self.highpass(ref_im)
         new_hp, new_noise = self.highpass(new_im)
@@ -361,27 +474,52 @@ class RmatShift(ProcessMonochrom):
                 f"(+-{max_shift[0]:.1f} x +-{max_shift[1]:.1f} px): the shift "
                 "may be one lenslet off. Set rmat_shift_guess_dx/dy and rerun.")
 
-        # 2. spot-by-spot refinement
-        xs = spot_pars[..., 1].ravel()
-        ys = spot_pars[..., 2].ravel()
-        good = np.isfinite(xs) & np.isfinite(ys)
-        xs, ys = xs[good], ys[good]
-
-        rows = []
-        for x0, y0 in zip(xs, ys):
-            xr, yr, pr = self.centroid(ref_hp, x0, y0, half)
-            if not np.isfinite(xr) or pr < snr_min * ref_noise:
-                continue
-            xn, yn, pn = self.centroid(new_hp, xr + dx_pc, yr + dy_pc, half)
-            if not np.isfinite(xn) or pn < snr_min * new_noise:
-                continue
-            rows.append((xr, yr, xn - xr, yn - yr))
+        # 2. spot-by-spot refinement: Gaussian-fit every spot in the new frame
+        # exactly as ProcessMonochrom fitted the scan (fit_gauss_spots_names: the
+        # scan's posarr box, here moved by the whole-pixel cross-correlation
+        # shift; same flux cut, model and fitter), and compare with the scan's
+        # Gaussian centers. The rectmats place the spots at those Gaussian
+        # centers, so the shift is in the same convention by construction.
+        ny_, nx_ = new_im.shape
+        ix, iy = int(round(dx_pc)), int(round(dy_pc))
+        n_model = 0
+        rows, cen_rows = [], []
+        for j in range(spot_pars.shape[0]):
+            for i in range(spot_pars.shape[1]):
+                x0, y0 = spot_pars[j, i, 1], spot_pars[j, i, 2]
+                box = posarr[j, i, :6]
+                if not (np.isfinite(x0) and np.isfinite(y0) and np.all(np.isfinite(box))):
+                    continue
+                n_model += 1
+                _, bxs, bxe, _, bys, bye = (int(v) for v in box)
+                nxs, nxe, nys, nye = bxs + ix, bxe + ix, bys + iy, bye + iy
+                if nxs < 0 or nys < 0 or nxe > nx_ or nye > ny_:
+                    continue
+                # S/N: the spot's peak in the high-passed images, in both
+                if (np.max(ref_hp[bys:bye, bxs:bxe]) < snr_min * ref_noise or
+                        np.max(new_hp[nys:nye, nxs:nxe]) < snr_min * new_noise):
+                    continue
+                fit = self.fit_gauss_box(new_im, nxs, nxe, nys, nye, fluxcut)
+                if fit is None:
+                    continue
+                rows.append((x0, y0, fit[0] - x0, fit[1] - y0))
+                # cross-check: the same spot centroided in both images
+                xr, yr, _ = self.centroid(ref_hp, x0, y0, half)
+                if np.isfinite(xr):
+                    xn, yn, _ = self.centroid(new_hp, xr + dx_pc, yr + dy_pc, half)
+                    if np.isfinite(xn):
+                        cen_rows.append((xn - xr, yn - yr))
         rows = np.array(rows).reshape(-1, 4)
+        cen_rows = np.array(cen_rows).reshape(-1, 2)
         n_spots = len(rows)
 
         info = dict(dx_pc=dx_pc, dy_pc=dy_pc, xcorr_on_edge=on_edge,
-                    n_spots_model=int(good.sum()), n_spots=n_spots,
-                    spots=rows, ref_noise=ref_noise, new_noise=new_noise)
+                    n_spots_model=n_model, n_spots=n_spots,
+                    spots=rows, ref_noise=ref_noise, new_noise=new_noise,
+                    dx_centroid=np.nan, dy_centroid=np.nan)
+        if len(cen_rows) >= min_spots:
+            info["dx_centroid"] = float(sigma_clipped_stats(cen_rows[:, 0], sigma=3.0, maxiters=5)[1])
+            info["dy_centroid"] = float(sigma_clipped_stats(cen_rows[:, 1], sigma=3.0, maxiters=5)[1])
 
         if n_spots < min_spots:
             self.logger.warning(
@@ -410,15 +548,25 @@ class RmatShift(ProcessMonochrom):
                 f"Per-spot shift scatter is large ({dx_std:.2f}, {dy_std:.2f} "
                 "px; well-matched frames give ~0.2 px): the spots are not "
                 "well matched and the shift is unreliable.")
-        info.update(method="spot_centroids", dx_err=dx_err, dy_err=dy_err,
+        info.update(method="gauss_fit", dx_err=dx_err, dy_err=dy_err,
                     dx_std=dx_std, dy_std=dy_std,
+                    outlier_frac=float(1.0 - clip.mean()),
                     dx_grad=(gx[1], gx[2]), dy_grad=(gy[1], gy[2]))
 
         if abs(dx - dx_pc) > 0.25 or abs(dy - dy_pc) > 0.25:
             self.logger.warning(
-                f"Spot-centroid shift ({dx:.3f}, {dy:.3f}) differs from the "
+                f"Gaussian-fit shift ({dx:.3f}, {dy:.3f}) differs from the "
                 f"cross-correlation shift ({dx_pc:.3f}, {dy_pc:.3f}) by more "
                 "than 0.25 px; check the diagnostic plot.")
+        if np.isfinite(info["dx_centroid"]):
+            self.logger.info(
+                f"Cross-check, centroid shift (new - scan image): "
+                f"dx = {info['dx_centroid']:.3f}, dy = {info['dy_centroid']:.3f} px")
+            if (abs(dx - info["dx_centroid"]) > 0.1
+                    or abs(dy - info["dy_centroid"]) > 0.1):
+                self.logger.warning(
+                    "Gaussian-fit and centroid shifts differ by more than 0.1 px "
+                    "(~0.02 px is typical); check the frames and the diagnostic plot.")
 
         if affine:
             aff = self.fit_affine(rows)
@@ -442,7 +590,7 @@ class RmatShift(ProcessMonochrom):
         rows: (N, 4) array of (x_ref, y_ref, dx, dy). The model is
             dx = a0 + a1 (x - X0) + a2 (y - Y0)
             dy = b0 + b1 (x - X0) + b2 (y - Y0)
-        with (X0, Y0) the detector centre, so a0, b0 are the shift there.
+        with (X0, Y0) the detector center, so a0, b0 are the shift there.
         Returns a dict with coef = [[a0, a1, a2], [b0, b1, b2]], the
         residual scatter, and scale / rotation / shear terms for the log.
         """
@@ -517,13 +665,21 @@ class RmatShift(ProcessMonochrom):
         return np.full_like(x, shift[0], dtype=float), np.full_like(y, shift[1], dtype=float)
 
     def write_shifted_rectmats(self, scan_dir, scmode, out_dir, tag, shift, coef,
-                               kinds, fluxcut, nsub=10):
+                               kinds, fluxcut, nsub=10, rebuild_masters=False,
+                               df_mode=None, destripe=False):
         """
         Write shifted versions of the scan's rectmats. Spot shapes come from
         the scan; only positions move (by `shift`, or by the affine model
         `coef` evaluated at each spot). Returns {kind: path} of what was
         written; kinds whose scan inputs are missing are skipped with a
         warning.
+
+        The scan-image rectmats (OPT, C2) need the scan's background-subtracted
+        masters: from {scmode}_calim_stack.fits by default, or, with
+        rebuild_masters=True, rebuilt one at a time from the *_mcalunit.fits
+        files (df_mode: the mode's masters, from find_matching_mcalunit) and
+        the scan's background model (clean_scan_master), for scans saved
+        without a calim_stack.
         """
         path = lambda k: os.path.join(out_dir, self.RECTMAT_KINDS[k].format(m=scmode, t=tag))
         scan = lambda name: os.path.join(scan_dir, name.format(m=scmode))
@@ -534,7 +690,7 @@ class RmatShift(ProcessMonochrom):
             self.logger.info(f"wrote {path(kind)}")
             written[kind] = path(kind)
 
-        # Gaussian interpolated rectmats: move the interpolated spot centres
+        # Gaussian interpolated rectmats: move the interpolated spot centers
         if {"OPT_intp", "C2_intp"} & set(kinds):
             arr = np.array(pyfits.getdata(scan("{m}_gauss_spotpars_interpd.fits")), dtype=float)
             ox, oy = self.shift_offsets(arr[..., 1], arr[..., 2], shift, coef)
@@ -587,14 +743,27 @@ class RmatShift(ProcessMonochrom):
         # spots from it at their moved boxes, as gen_QL_rectmat does
         if {"OPT", "C2"} & set(kinds):
             pos_p, cal_p = scan("{m}_posarr.fits"), scan("{m}_calim_stack.fits")
-            missing = [os.path.basename(p) for p in (pos_p, cal_p) if not os.path.isfile(p)]
-            if missing:
-                self.logger.warning(f"Not making the shifted OPT/C2 (scan image) rectmats: "
-                                    f"{missing} not in the scan directory.")
+            get_image = None
+            if not os.path.isfile(pos_p):
+                self.logger.warning("Not making the shifted OPT/C2 (scan image) rectmats: "
+                                    f"{os.path.basename(pos_p)} not in the scan directory.")
+            elif rebuild_masters:
+                get_image = self.master_rebuilder(scan_dir, scmode, df_mode, out_dir, destripe)
+            elif os.path.isfile(cal_p):
+                def get_image(ll, _p=cal_p):
+                    with pyfits.open(_p, memmap=True) as hdul:
+                        return np.array(hdul[0].section[ll], dtype=float)
             else:
+                self.logger.warning(
+                    "Not making the shifted OPT/C2 (scan image) rectmats: "
+                    f"{os.path.basename(cal_p)} not in the scan directory. Set "
+                    "rmat_make_noninterp_rmats = True (or --make_noninterp_rmats) to make "
+                    "them from masters rebuilt from the *_mcalunit.fits files.")
+            if get_image is not None:
                 posarr = np.array(pyfits.getdata(pos_p), dtype=float)
-                self.logger.info("making shifted OPT/C2 rectmats from the scan images")
-                opt = self.shifted_posarr_rectmat(cal_p, posarr, shift, coef, fluxcut)
+                self.logger.info("making shifted OPT/C2 rectmats from the scan images"
+                                 + (" (masters rebuilt one at a time)" if rebuild_masters else ""))
+                opt = self.shifted_posarr_rectmat(get_image, posarr, shift, coef, fluxcut)
                 if "OPT" in kinds:
                     save("OPT", opt, posarr.shape[:3])
                 if "C2" in kinds:
@@ -602,10 +771,39 @@ class RmatShift(ProcessMonochrom):
                     save("C2", opt.T.tocsr(), posarr.shape[:3])
         return written
 
-    def shifted_posarr_rectmat(self, calim_path, posarr, shift, coef, cut):
+    def master_rebuilder(self, scan_dir, scmode, df_mode, cache_dir, destripe):
+        """
+        get_image(ll) for shifted_posarr_rectmat: the background-subtracted
+        master at the scan's ll-th kept wavelength ({scmode}_lams.fits, the
+        order of posarr), rebuilt from its *_mcalunit.fits with
+        clean_scan_master, as the scan made it.
+        """
+        if df_mode is None:
+            raise RuntimeError("rebuild_masters needs the scan's master list (df_mode).")
+        lams_nm = np.asarray(pyfits.getdata(os.path.join(
+            scan_dir, f"{scmode}_lams.fits")), dtype=float) * 1000.0
+        waves = df_mode["MONOWAVE"].astype(float).values
+        names = df_mode["filename"].values
+        order = []
+        for lnm in lams_nm:
+            k = int(np.argmin(np.abs(waves - lnm)))
+            if abs(waves[k] - lnm) > 0.01:
+                raise RuntimeError(f"No {scmode} mcalunit at the scan wavelength "
+                                   f"{lnm:.3f} nm; cannot rebuild its master.")
+            order.append(names[k])
+        self.logger.info(f"Rebuilding {len(order)} background-subtracted masters "
+                         "from the *_mcalunit.fits files")
+
+        def get_image(ll):
+            return self.clean_scan_master(scan_dir, scmode, order[ll], df_mode,
+                                          cache_dir, destripe)
+        return get_image
+
+    def shifted_posarr_rectmat(self, get_image, posarr, shift, coef, cut):
         """
         OPT rectmat as ProcessMonochrom.gen_QL_rectmat(ims_cal, posarr),
-        with every spot moved by the shift (or affine model).
+        with every spot moved by the shift (or affine model). get_image(ll)
+        returns the scan's background-subtracted image at wavelength ll.
 
         Each scan image is resampled (cubic spline) so its content moves by
         the shift; each spot's box from posarr moves by the shift rounded to
@@ -622,48 +820,47 @@ class RmatShift(ProcessMonochrom):
             fox, foy = self.apply_affine(xx, yy, coef)
             src = [yy - foy, xx - fox]          # output pixel <- source position
             del yy, xx
-        with pyfits.open(calim_path, memmap=True) as hdul:
-            for ll in range(nl):
-                img = np.array(hdul[0].section[ll], dtype=float)
-                bad = ~np.isfinite(img)
-                img[bad] = 0.0
-                if coef is None:
-                    w = nd_shift(img, (shift[1], shift[0]), order=3, mode='constant', cval=0.0)
-                    wbad = nd_shift(bad.astype(float), (shift[1], shift[0]), order=1,
-                                    mode='constant', cval=0.0) > 1e-3
-                else:
-                    w = map_coordinates(img, src, order=3, mode='constant', cval=0.0)
-                    wbad = map_coordinates(bad.astype(float), src, order=1,
-                                           mode='constant', cval=0.0) > 1e-3
-                w[wbad] = np.nan
+        for ll in range(nl):
+            img = np.array(get_image(ll), dtype=float)
+            bad = ~np.isfinite(img)
+            img[bad] = 0.0
+            if coef is None:
+                w = nd_shift(img, (shift[1], shift[0]), order=3, mode='constant', cval=0.0)
+                wbad = nd_shift(bad.astype(float), (shift[1], shift[0]), order=1,
+                                mode='constant', cval=0.0) > 1e-3
+            else:
+                w = map_coordinates(img, src, order=3, mode='constant', cval=0.0)
+                wbad = map_coordinates(bad.astype(float), src, order=1,
+                                       mode='constant', cval=0.0) > 1e-3
+            w[wbad] = np.nan
 
-                p = posarr[ll].reshape(ny * nx, -1)
-                lens = np.nonzero(np.isfinite(p[:, 0]))[0]
-                if not len(lens):
-                    continue
-                xc, xs, xe, yc, ys, ye = (p[lens, i] for i in range(6))
-                ox, oy = self.shift_offsets(xc, yc, shift, coef)
-                ix, iy = np.round(ox).astype(int), np.round(oy).astype(int)
-                xs = np.clip(xs.astype(int) + ix, 0, 2048)
-                xe = np.clip(xe.astype(int) + ix, 0, 2048)
-                ys = np.clip(ys.astype(int) + iy, 0, 2048)
-                ye = np.clip(ye.astype(int) + iy, 0, 2048)
-                hw = np.stack([ye - ys, xe - xs], 1)
-                for h, wd in {tuple(s) for s in hw if s[0] > 0 and s[1] > 0}:
-                    sel = (hw[:, 0] == h) & (hw[:, 1] == wd)
-                    jy, jx = np.mgrid[0:h, 0:wd]
-                    Y = ys[sel][:, None, None] + jy
-                    X = xs[sel][:, None, None] + jx
-                    st = w[Y, X]
-                    mx = st.max(axis=(1, 2), keepdims=True)
-                    st = np.where(st < cut * mx, 0.0, st)
-                    with np.errstate(invalid='ignore', divide='ignore'):
-                        st = st / st.sum(axis=(1, 2), keepdims=True)
-                    keep = st > 0
-                    n = keep.sum(axis=(1, 2))
-                    rows.append(np.repeat(lens[sel] + ll * ny * nx, n))
-                    cols.append((Y * 2048 + X)[keep])
-                    vals.append(st[keep])
+            p = posarr[ll].reshape(ny * nx, -1)
+            lens = np.nonzero(np.isfinite(p[:, 0]))[0]
+            if not len(lens):
+                continue
+            xc, xs, xe, yc, ys, ye = (p[lens, i] for i in range(6))
+            ox, oy = self.shift_offsets(xc, yc, shift, coef)
+            ix, iy = np.round(ox).astype(int), np.round(oy).astype(int)
+            xs = np.clip(xs.astype(int) + ix, 0, 2048)
+            xe = np.clip(xe.astype(int) + ix, 0, 2048)
+            ys = np.clip(ys.astype(int) + iy, 0, 2048)
+            ye = np.clip(ye.astype(int) + iy, 0, 2048)
+            hw = np.stack([ye - ys, xe - xs], 1)
+            for h, wd in {tuple(s) for s in hw if s[0] > 0 and s[1] > 0}:
+                sel = (hw[:, 0] == h) & (hw[:, 1] == wd)
+                jy, jx = np.mgrid[0:h, 0:wd]
+                Y = ys[sel][:, None, None] + jy
+                X = xs[sel][:, None, None] + jx
+                st = w[Y, X]
+                mx = st.max(axis=(1, 2), keepdims=True)
+                st = np.where(st < cut * mx, 0.0, st)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    st = st / st.sum(axis=(1, 2), keepdims=True)
+                keep = st > 0
+                n = keep.sum(axis=(1, 2))
+                rows.append(np.repeat(lens[sel] + ll * ny * nx, n))
+                cols.append((Y * 2048 + X)[keep])
+                vals.append(st[keep])
         rows = np.concatenate(rows) if rows else np.zeros(0, int)
         cols = np.concatenate(cols) if cols else np.zeros(0, int)
         vals = np.concatenate(vals) if vals else np.zeros(0)
@@ -678,9 +875,12 @@ class RmatShift(ProcessMonochrom):
                 d = rows[:, col]
                 lo, hi = np.percentile(d, [0.5, 99.5])
                 ax.hist(d, bins=60, range=(lo - 0.1, hi + 0.1), color="0.5")
-                ax.axvline(val, color="C0", label=f"spots: {val:.3f}")
+                ax.axvline(val, color="C0", label=f"Gaussian fits: {val:.3f}")
                 ax.axvline(info["dx_pc" if col == 2 else "dy_pc"], color="C1",
                            ls="--", label="cross-corr.")
+                cen = info.get("dx_centroid" if col == 2 else "dy_centroid", np.nan)
+                if np.isfinite(cen):
+                    ax.axvline(cen, color="C2", ls=":", label=f"centroids: {cen:.3f}")
                 ax.set_xlabel(f"{lab} (px, new - scan)")
                 ax.legend()
             # binned map of the offsets left after the applied model
@@ -730,6 +930,11 @@ class RmatShift(ProcessMonochrom):
         snr_min = float(_cfg(inst, "rmat_shift_snr_min", 10.0))
         min_spots = int(_cfg(inst, "rmat_shift_min_spots", 20))
         measure_only = bool(_cfg(inst, "rmat_measure_only", False))
+        # non-interpolated (OPT, C2) rectmats from masters rebuilt on the fly
+        make_noninterp = _cfg(inst, "rmat_make_noninterp_rmats", False)
+        if isinstance(make_noninterp, str):
+            make_noninterp = make_noninterp.strip().lower() in ("true", "1", "yes")
+        make_noninterp = bool(make_noninterp)
         fluxcut = float(_cfg(inst, "rectmat_fluxcut", 0.0))
 
         bkg_frames = _cfg(inst, "rmat_background_frames", None) or []
@@ -765,24 +970,28 @@ class RmatShift(ProcessMonochrom):
         self.logger.info(
             f"{stem}: {scmode}, MONOWAVE = {monowave} nm, L1 = {l1_path}")
 
-        # ---- matching scan products
-        ref_name, ref_wave, ref_row, df_mode = self.find_matching_mcalunit(
-            scan_dir, scmode, monowave, tol_nm)
+        # ---- matching scan products: only wavelengths the scan kept (those in
+        # {scmode}_lams.fits, which have spot fits) can be matched
+        lams = np.asarray(pyfits.getdata(
+            os.path.join(scan_dir, f"{scmode}_lams.fits")), dtype=float)
+        ref_name, ref_wave, ref_row, df_mode, ll = self.find_matching_mcalunit(
+            scan_dir, scmode, monowave, tol_nm, lams * 1000.0)
         self.logger.info(
             f"Matched scan mcalunit {ref_name} ({ref_wave:.3f} nm)")
         if str(ref_row.get("MCLOCK")).strip() != str(hdr.get("MCLOCK")).strip():
             self.logger.warning(
                 f"Detector clock differs: frame {hdr.get('MCLOCK')}, "
                 f"scan {ref_row.get('MCLOCK')}.")
-        lams = np.asarray(pyfits.getdata(
-            os.path.join(scan_dir, f"{scmode}_lams.fits")), dtype=float)
-        ll = int(np.argmin(np.abs(lams * 1000.0 - ref_wave)))
-        if abs(lams[ll] * 1000.0 - ref_wave) > 0.01:
-            self.logger.warning(
-                f"{scmode}_lams.fits has no entry for {ref_wave:.3f} nm; "
-                f"using the spot fits at {lams[ll] * 1000:.3f} nm.")
         spot_pars = pyfits.getdata(
             os.path.join(scan_dir, f"{scmode}_gauss_spotpars.fits"))[ll]
+        # the scan's spot boxes, which its Gaussian fits used
+        posarr_path = os.path.join(scan_dir, f"{scmode}_posarr.fits")
+        if not os.path.isfile(posarr_path):
+            raise RuntimeError(
+                f"{posarr_path} not found: the scan's spot boxes are needed to "
+                "Gaussian-fit the frame the same way as the scan.")
+        with pyfits.open(posarr_path, memmap=True) as hdul:
+            posarr = np.array(hdul[0].section[ll], dtype=float)
 
         # ---- background-subtracted spot image. The raw monochromator L1s are
         # dominated by the continuum traces and the spots are only faint
@@ -796,7 +1005,7 @@ class RmatShift(ProcessMonochrom):
                 "No background frame given. Pass one with -b (a spot-free "
                 "background taken with the frame, normally lamp off), or set "
                 "rmat_background_frames in the config.")
-        destripe = bool(_cfg(inst, "apply_destripe", True))
+        destripe = bool(_cfg(inst, "apply_destripe", False))
         bkg = self.load_background(bkg_frames, output_dir, hdr)
         new_cal = np.nan_to_num(new_im - bkg, nan=0.0)
         if destripe:
@@ -812,23 +1021,12 @@ class RmatShift(ProcessMonochrom):
         if ref_cal is None:
             self.logger.info(f"No {scmode}_calim_stack.fits in the scan; "
                              f"background-subtracting {ref_name} instead")
-            ref_im = pyfits.getdata(os.path.join(scan_dir, ref_name)).astype(float)
             # the scan's own background model (ProcessMonochrom, mono_bkg_method =
             # 'trace_fit': median template, scale + offset fitted on the traces), so
             # the reference is cleaned the same way as the scan's spot fits; scans
             # reduced before it existed use the legacy scaled mean of the scan
-            tpath = os.path.join(scan_dir, f"{scmode}_bkg_template.fits")
-            if os.path.isfile(tpath):
-                self.logger.info(f"Scan reference: using the scan's background template {tpath}")
-                ref_cal = self.calibrate_like_scan_template(
-                    ref_im, tpath, destripe,
-                    setup=MonoBackground.setup_of(os.path.join(scan_dir, ref_name)))
-            else:
-                self.logger.info(f"Scan reference: no {scmode}_bkg_template.fits in the "
-                                 "scan; using the scaled mean of the scan's masters")
-                if meanim is None:
-                    meanim = self.scan_mean_image(scan_dir, df_mode, scmode, out_dir)
-                ref_cal = self.calibrate_like_scan(ref_im, meanim, destripe)
+            ref_cal = self.clean_scan_master(scan_dir, scmode, ref_name, df_mode,
+                                             out_dir, destripe)
 
         # ---- measure
         lowres = scmode.startswith("LowRes")
@@ -850,9 +1048,10 @@ class RmatShift(ProcessMonochrom):
         if isinstance(use_affine, str):
             use_affine = use_affine.strip().lower() in ("true", "1", "yes")
         dx, dy, info = self.measure_spot_shift(
-            ref_cal, new_cal, spot_pars, half=half,
+            ref_cal, new_cal, spot_pars, posarr, half=half,
             snr_min=snr_min, min_spots=min_spots,
-            max_shift=max_shift, guess=guess, affine=bool(use_affine))
+            max_shift=max_shift, guess=guess, affine=bool(use_affine),
+            fluxcut=fluxcut)
         self.logger.info(
             f"Measured shift ({info['method']}, {info['n_spots']} spots): "
             f"dx = {dx:.3f} +/- {info['dx_err']:.3f}, "
@@ -880,7 +1079,7 @@ class RmatShift(ProcessMonochrom):
             self.logger.warning(
                 f"{100 * neg_frac:.0f}% of the frame's spots have a negative "
                 f"spot within {neg_radius:.0f} px: the background frame "
-                "contains spots, which can bias the centroids. Use a "
+                "contains spots, which can bias the spot fits. Use a "
                 "spot-free (lamp-off) background frame.")
 
         plot_path = os.path.join(plot_dir, f"{stem}_rmat_shift.png")
@@ -891,9 +1090,40 @@ class RmatShift(ProcessMonochrom):
                       f"{aff['rotation_deg'] * 3600:.0f}\"")
         self.plot_shift(info, dx, dy, title, plot_path)
 
+        # ---- QC (RSIMPRV): does the fitted model line the scan's spots up with
+        # the frame's pixels better than no shift? Independent of the spot fits.
+        rs_cards = {}
+        spots_rows = info.get("spots")
+        if spots_rows is not None and len(spots_rows):
+            try:
+                ox, oy = self.shift_offsets(spots_rows[:, 0], spots_rows[:, 1], (dx, dy),
+                                            None if aff is None else aff["coef"])
+                rs_cards = qc.shift_residual_improvement(
+                    ref_cal, new_cal, spots_rows[:, :2], np.column_stack([ox, oy]),
+                    half=half + 1, ref_noise=info.get("ref_noise"),
+                    new_noise=info.get("new_noise"))["cards"]
+                self.logger.info(
+                    f"QC shift test ({rs_cards['RSNIMPR'][0]} spots): residual RMS "
+                    f"shifted / unshifted = {rs_cards['RSIMPRV'][0]:.3f}; shifted "
+                    f"residual = {rs_cards['RSRESAN'][0]:.2f} x pixel noise; "
+                    f"{100 * rs_cards['RSWORSE'][0]:.0f}% of spots worse after the shift")
+                if rs_cards["RSIMPRV"][0] > RSIMPRV_MAX:
+                    self.logger.warning(
+                        f"The shifted model fits the frame worse than the unshifted "
+                        f"one (RSIMPRV = {rs_cards['RSIMPRV'][0]:.3f} > {RSIMPRV_MAX}): "
+                        "the shift is probably wrong.")
+                elif rs_cards["RSRESAN"][0] > RSRESAN_WARN:
+                    self.logger.warning(
+                        f"Shifted-model residual is {rs_cards['RSRESAN'][0]:.2f} x the "
+                        f"pixel noise (> {RSRESAN_WARN}): the shift may be off by a few "
+                        "tenths of a pixel, or the spot shapes differ from the scan.")
+            except Exception as e:
+                self.logger.warning(f"QC shift test failed: {e}")
+        rs_improve = rs_cards.get("RSIMPRV", (np.nan,))[0]
+
         # ---- shifted rectmats
         if aff is not None:
-            # name by the shift at the detector centre
+            # name by the shift at the detector center
             tag = (f"affine_dx{aff['coef'][0, 0]:.2f}"
                    f"_dy{aff['coef'][1, 0]:.2f}")
         else:
@@ -906,9 +1136,54 @@ class RmatShift(ProcessMonochrom):
             written = self.write_shifted_rectmats(
                 scan_dir, scmode, out_dir, tag, (dx, dy),
                 None if aff is None else aff["coef"], kinds, fluxcut,
-                nsub=int(_cfg(inst, "ank_rectmat_nsub", 10)))
+                nsub=int(_cfg(inst, "ank_rectmat_nsub", 10)),
+                rebuild_masters=make_noninterp, df_mode=df_mode, destripe=destripe)
         opt_path = written.get("OPT_intp", "")
         c2_path = written.get("C2_intp", "")
+
+        # ---- QC header: written to {stem}_rmat_shift_qc.fits and embedded in
+        # every shifted rectmat (read it back with scbasic.read_rectmat_header)
+        parent_flag = None
+        parent_qc = os.path.join(scan_dir, f"{scmode}_calib_qc.fits")
+        if os.path.isfile(parent_qc):
+            parent_flag = pyfits.getheader(parent_qc).get("QCFLAG")
+        half_pitch = self.lattice_half_pitch(spot_pars, margin=0.0)
+        qc_cards, qc_failed, qc_warned = qc.rmat_shift_qc(dict(
+            method=info["method"], xcorr_on_edge=info["xcorr_on_edge"],
+            scatter=(max(aff["dx_std"], aff["dy_std"]) if aff is not None
+                     else max(info["dx_std"], info["dy_std"])),
+            n_spots=info["n_spots"], min_spots=min_spots,
+            neg_frac=neg_frac, neg_frac_max=neg_frac_max,
+            ref_wave=ref_wave, monowave=monowave, tol_nm=tol_nm,
+            mclock_frame=hdr.get("MCLOCK"), mclock_scan=ref_row.get("MCLOCK"),
+            bkg_mismatch=getattr(self, "bkg_mismatch", []),
+            n_written=len(written), n_requested=None if measure_only else len(kinds),
+            dx=dx, dy=dy, dx_err=info["dx_err"], dy_err=info["dy_err"],
+            dx_pc=info["dx_pc"], dy_pc=info["dy_pc"],
+            dx_centroid=info["dx_centroid"], dy_centroid=info["dy_centroid"],
+            outlier_frac=info.get("outlier_frac"),
+            dx_grad=info.get("dx_grad"), dy_grad=info.get("dy_grad"),
+            affine=aff,
+            pitch=None if half_pitch is None else (2 * half_pitch[0], 2 * half_pitch[1]),
+            rs_cards=rs_cards, parent_flag=parent_flag))
+        qc_hdr = pyfits.Header()
+        qc_hdr["IFSMODE"] = (scmode, "IFS mode")
+        qc_hdr["FRAME"] = (stem, "Monochromator frame the shift was measured on")
+        qc_hdr["MONOWAVE"] = (monowave, "Frame MONOWAVE [nm]")
+        qc_hdr["SCANREF"] = (str(ref_name)[-68:], "Scan mcalunit matched")
+        qc_hdr["SCANWAVE"] = (float(ref_wave), "Scan MONOWAVE matched [nm]")
+        qc_hdr["SCANDIR"] = (os.path.abspath(scan_dir)[-68:], "Monochromator scan")
+        qc_hdr["RMTAG"] = (tag, "Shifted rectmat tag")
+        qc.set_cards(qc_hdr, qc_cards)
+        qc_path = os.path.join(out_dir, f"{stem}_rmat_shift_qc.fits")
+        pyfits.PrimaryHDU(header=qc_hdr).writeto(qc_path, overwrite=True)
+        for p in written.values():
+            scbasic.add_rectmat_header(p, qc_hdr)
+        msg = (f"QC: {qc_cards['QCFLAG'][0]}"
+               + (f"; failed {', '.join(qc_failed)}" if qc_failed else "")
+               + (f"; warnings {', '.join(qc_warned)}" if qc_warned else "")
+               + f" ({qc_path})")
+        (self.logger.warning if qc_failed else self.logger.info)(msg)
 
         # ---- record
         scatter = (max(aff["dx_std"], aff["dy_std"]) if aff is not None
@@ -922,10 +1197,11 @@ class RmatShift(ProcessMonochrom):
             "scan_dir": os.path.abspath(scan_dir),
             "scan_mcalunit": ref_name,
             "scan_monowave_nm": ref_wave,
-            "quality": ("OK" if info["method"] == "spot_centroids"
+            "quality": ("OK" if info["method"] == "gauss_fit"
                         and scatter <= 0.75
                         and not info["xcorr_on_edge"]
-                        and not bkg_has_spots else "CHECK"),
+                        and not bkg_has_spots
+                        and not rs_improve > RSIMPRV_MAX else "CHECK"),
             "background": bkg_method,
             "background_neg_spot_frac": (None if neg_frac is None
                                          else round(neg_frac, 3)),
@@ -938,13 +1214,24 @@ class RmatShift(ProcessMonochrom):
             "dy_std": round(float(info["dy_std"]), 4),
             "dx_xcorr": round(info["dx_pc"], 4),
             "dy_xcorr": round(info["dy_pc"], 4),
+            "dx_centroid": round(info["dx_centroid"], 4),
+            "dy_centroid": round(info["dy_centroid"], 4),
             "n_spots": info["n_spots"],
             "opt_rectmat": opt_path,
             "c2_rectmat": c2_path,
             "plot": plot_path,
+            "QCFLAG": qc_cards["QCFLAG"][0],
+            "QCBITS": qc_cards["QCBITS"][0],
+            "QCWBITS": qc_cards["QCWBITS"][0],
+            "qc_failed": ",".join(qc_failed),
+            "qc_warnings": ",".join(qc_warned),
+            "qc_file": qc_path,
         }
         for kind, path in written.items():
             summary[f"rectmat_{kind}"] = path
+        for key, (val, _) in rs_cards.items():
+            summary[key] = (round(float(val), 4) if isinstance(val, float) and np.isfinite(val)
+                            else val)
         if "dx_grad" in info:
             summary["dx_grad_per1000px_x_y"] = tuple(round(float(g), 4) for g in info["dx_grad"])
             summary["dy_grad_per1000px_x_y"] = tuple(round(float(g), 4) for g in info["dy_grad"])
@@ -977,7 +1264,9 @@ class RmatShift(ProcessMonochrom):
                 "affine_a0", "affine_a1", "affine_a2",
                 "affine_b0", "affine_b1", "affine_b2",
                 "affine_dx_std", "affine_dy_std",
-                "n_spots", "opt_rectmat", "c2_rectmat"]
+                "n_spots", "RSIMPRV", "RSRESAN", "RSWORSE",
+                "QCFLAG", "QCBITS", "QCWBITS", "qc_failed", "qc_warnings",
+                "opt_rectmat", "c2_rectmat"]
         if os.path.isfile(log_path):
             # keep the columns of an existing log (older ones lack the
             # affine columns; the .txt summary always has everything)
